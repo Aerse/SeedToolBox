@@ -24,7 +24,7 @@ public partial class MainWindow
         public Func<FrameworkElement>? Create { get; } = create;
     }
 
-    static readonly Page[] Pages =
+    readonly List<Page> _pages = new()
     {
         new("launcher", "", "\uE80F", "启动器", null),
         new("tools", "", "\uE7A8", "屏幕工具", null),
@@ -55,12 +55,25 @@ public partial class MainWindow
 
     string CurrentPage => NavList.SelectedItem is ListBoxItem { Tag: Page p } ? p.Id : "launcher";
 
+    bool _buildingNav;
+
+    /// <summary>Adds a top-level page (below the launcher and screen tools) for a feature owned by the app.</summary>
+    public void AddPage(string id, string glyph, string name, Func<FrameworkElement> create)
+    {
+        _pages.Insert(_pages.FindLastIndex(p => p.Group == "") + 1, new Page(id, "", glyph, name, create));
+        BuildNav();
+    }
+
     void BuildNav()
     {
+        _buildingNav = true;
+        NavList.Items.Clear();
+        _navTexts.Clear();
+        _navCaptions.Clear();
         var hint = (Brush)FindResource("HintTextBrush");
         var iconFont = (FontFamily)FindResource("IconFont");
         string group = "";
-        foreach (var p in Pages)
+        foreach (var p in _pages)
         {
             if (p.Group != group)
             {
@@ -96,8 +109,9 @@ public partial class MainWindow
             });
         }
         ApplyNavCollapsed();
+        // Pages added later may include the saved one, so don't overwrite it while building
         ShowPage(_data.Window.LastPage);
-        Loaded += (_, _) => { if (NavList.SelectedItem != null) NavList.ScrollIntoView(NavList.SelectedItem); };
+        _buildingNav = false;
     }
 
     /// <summary>Switches to a page by id; unknown ids fall back to the launcher.</summary>
@@ -120,7 +134,7 @@ public partial class MainWindow
             PageHost.Content = content;
         }
         else PageHost.Content = null;
-        if (_data.Window.LastPage != page.Id)
+        if (!_buildingNav && _data.Window.LastPage != page.Id)
         {
             _data.Window.LastPage = page.Id;
             RequestSave();

@@ -117,7 +117,7 @@ public partial class App : Application
         var clipboard = _clipboard = new Clips.ClipboardHistory(settings);
         Action showClipboard = () => (_clipboardWindow ??= new Clips.ClipboardWindow(clipboard)).ShowAtCursor();
         _tray.AddCommand("clipboard", "剪贴板历史", showClipboard);
-        _main.AddTool("clipboard", "", "剪贴板", showClipboard);
+        _main.AddPage("clipboard", "\uE77F", "剪贴板", () => new Clips.ClipboardPage(clipboard));
 
         var main = _main;
         _hotkeys.Add(new HotkeyBinding(TrayIcon.ShowWindowCommand, "呼出主窗口", () => data.Hotkey, v => data.Hotkey = v, main.ToggleFromHotkey));

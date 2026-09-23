@@ -71,6 +71,7 @@ public partial class MainWindow : Window
         SourceInitialized += (_, _) => WindowEffects.RoundCorners(this);
         GroupList.SelectedIndex = 0;
         BuildNav();
+        Loaded += (_, _) => { if (NavList.SelectedItem != null) NavList.ScrollIntoView(NavList.SelectedItem); };
 
         LocationChanged += (_, _) => RequestSave();
         SizeChanged += (_, _) => RequestSave();

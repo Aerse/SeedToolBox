@@ -222,7 +222,7 @@ sealed class ClipboardWindow : Window
         return item;
     }
 
-    static string FormatTime(DateTime time)
+    internal static string FormatTime(DateTime time)
     {
         var span = DateTime.Now - time;
         if (span.TotalMinutes < 1) return "刚刚";
