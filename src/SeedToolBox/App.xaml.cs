@@ -24,6 +24,8 @@ public partial class App : Application
     MainWindow? _main;
     LauncherData? _data;
     ScreenToolService? _screenTools;
+    Clips.ClipboardHistory? _clipboard;
+    Clips.ClipboardWindow? _clipboardWindow;
     ModuleManager? _modules;
     readonly List<HotkeyBinding> _hotkeys = new();
 
@@ -113,6 +115,10 @@ public partial class App : Application
         _main.AddTool("ruler", "\uED5E", "标尺", screen.Ruler);
         _main.AddTool("record", "\uE7C8", "录屏", screen.Record);
         _main.AddTool("devtools", "\uE943", "开发", () => DevTools.DevToolsWindow.ShowSingle(_main), hide: false);
+        var clipboard = _clipboard = new Clips.ClipboardHistory(settings);
+        Action showClipboard = () => (_clipboardWindow ??= new Clips.ClipboardWindow(clipboard)).ShowAtCursor();
+        _tray.AddCommand("clipboard", "剪贴板历史", showClipboard);
+        _main.AddTool("clipboard", "", "剪贴板", showClipboard);
 
         var main = _main;
         _hotkeys.Add(new HotkeyBinding(TrayIcon.ShowWindowCommand, "呼出主窗口", () => data.Hotkey, v => data.Hotkey = v, main.ToggleFromHotkey));
@@ -122,6 +128,7 @@ public partial class App : Application
         _hotkeys.Add(new HotkeyBinding("record", "录屏", () => screen.Settings.RecordHotkey, v => screen.Settings.RecordHotkey = v, screen.Record));
         _hotkeys.Add(new HotkeyBinding("ocr", "识别文字", () => screen.Settings.OcrHotkey, v => screen.Settings.OcrHotkey = v, screen.RecognizeText));
         _hotkeys.Add(new HotkeyBinding("qr", "识别二维码", () => screen.Settings.QrHotkey, v => screen.Settings.QrHotkey = v, screen.RecognizeQrCodes));
+        _hotkeys.Add(new HotkeyBinding("clipboard", "剪贴板历史", () => clipboard.Settings.Hotkey, v => clipboard.Settings.Hotkey = v, showClipboard));
 
         var taken = new List<string>();
         foreach (var binding in _hotkeys)
@@ -176,6 +183,7 @@ public partial class App : Application
         }
         _main!.RequestSave();
         _screenTools!.SaveSettings();
+        _clipboard?.SaveSettings();
 
         if (failed.Count > 0)
             MessageBox.Show($"以下热键已被其他程序占用，未更改：\n{string.Join("\n", failed)}", "SeedToolBox", MessageBoxButton.OK, MessageBoxImage.Warning);
@@ -279,6 +287,7 @@ public partial class App : Application
     {
         _modules?.ShutdownAll();
         foreach (var binding in _hotkeys) binding.Hotkey.Dispose();
+        _clipboard?.Dispose();
         _tray?.Dispose();
         _mutex?.Dispose();
         Log.Info("Exited");

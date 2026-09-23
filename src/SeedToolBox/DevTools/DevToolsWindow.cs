@@ -49,6 +49,15 @@ sealed class DevToolsWindow : Window
             ("\uE9D5", "数据格式互转", () => new DataConvertPage()),
             ("\uE8B9", "图片格式转换", () => new ImageConvertPage()),
             ("\uE823", "时间戳/进制", () => new TimePage()),
+            ("\uE73E", "哈希校验", () => new HashPage()),
+            ("\uE8D7", "UUID/密码", () => new GeneratorPage()),
+            ("\uE8EC", "JWT 解码", () => new JwtPage()),
+            ("\uE721", "正则测试", () => new RegexPage()),
+            ("\uE7C3", "文本对比", () => new DiffPage()),
+            ("\uE701", "端口/网络", () => new NetworkPage()),
+            ("\uE8AC", "批量重命名", () => new RenamePage()),
+            ("\uE7C4", "重复文件", () => new DuplicatePage()),
+            ("\uEDA2", "空间占用", () => new DiskUsagePage()),
         };
         var created = new FrameworkElement?[pages.Length];
 

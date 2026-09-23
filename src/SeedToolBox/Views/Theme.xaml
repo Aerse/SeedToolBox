@@ -511,4 +511,31 @@
             </Setter.Value>
         </Setter>
     </Style>
+    <!-- Variable-height rows, e.g. clipboard history entries -->
+    <Style x:Key="ListCard" TargetType="ListBoxItem">
+        <Setter Property="FocusVisualStyle" Value="{x:Null}" />
+        <Setter Property="HorizontalContentAlignment" Value="Stretch" />
+        <Setter Property="Template">
+            <Setter.Value>
+                <ControlTemplate TargetType="ListBoxItem">
+                    <Border x:Name="Bd" Margin="0,1" Padding="10,7" CornerRadius="4" Background="Transparent">
+                        <Grid>
+                            <Border x:Name="Pill" Width="3" Height="16" Margin="-10,0,0,0" CornerRadius="1.5" HorizontalAlignment="Left"
+                                    Background="{StaticResource AccentBrush}" Visibility="Collapsed" />
+                            <ContentPresenter />
+                        </Grid>
+                    </Border>
+                    <ControlTemplate.Triggers>
+                        <Trigger Property="IsMouseOver" Value="True">
+                            <Setter TargetName="Bd" Property="Background" Value="{StaticResource PressedBrush}" />
+                        </Trigger>
+                        <Trigger Property="IsSelected" Value="True">
+                            <Setter TargetName="Bd" Property="Background" Value="{StaticResource HoverBrush}" />
+                            <Setter TargetName="Pill" Property="Visibility" Value="Visible" />
+                        </Trigger>
+                    </ControlTemplate.Triggers>
+                </ControlTemplate>
+            </Setter.Value>
+        </Setter>
+    </Style>
 </ResourceDictionary>

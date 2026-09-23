@@ -71,7 +71,7 @@ public static class DataBackup
     static string[] Files()
     {
         if (!Directory.Exists(AppPaths.Data)) return new string[0];
-        var skipped = new[] { AppPaths.Logs, Folder }.Select(d => Path.GetFullPath(d) + Path.DirectorySeparatorChar).ToArray();
+        var skipped = new[] { AppPaths.Logs, Folder, Path.Combine(AppPaths.Data, "Clipboard") }.Select(d => Path.GetFullPath(d) + Path.DirectorySeparatorChar).ToArray();
         return Directory.GetFiles(AppPaths.Data, "*", SearchOption.AllDirectories)
             .Where(f => !skipped.Any(s => Path.GetFullPath(f).StartsWith(s, StringComparison.OrdinalIgnoreCase)))
             .Where(f => !f.EndsWith(".tmp", StringComparison.OrdinalIgnoreCase))
