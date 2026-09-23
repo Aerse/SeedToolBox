@@ -70,6 +70,7 @@ public partial class MainWindow : Window
         Tools.ItemsSource = _tools;
         SourceInitialized += (_, _) => WindowEffects.RoundCorners(this);
         GroupList.SelectedIndex = 0;
+        BuildNav();
 
         LocationChanged += (_, _) => RequestSave();
         SizeChanged += (_, _) => RequestSave();
@@ -91,6 +92,14 @@ public partial class MainWindow : Window
     void ApplyWindowSettings()
     {
         var w = _data.Window;
+        if (w.Layout < LayoutVersion)
+        {
+            // The window gained a sidebar; the old launcher-only size is too small
+            w.Layout = LayoutVersion;
+            w.Width = Math.Max(w.Width, 1000);
+            w.Height = Math.Max(w.Height, 680);
+            w.Left = w.Top = null;
+        }
         Width = w.Width;
         Height = w.Height;
         if (w.Left is double left && w.Top is double top && IsOnScreen(left, top))
@@ -124,6 +133,7 @@ public partial class MainWindow : Window
         Show();
         if (WindowState == WindowState.Minimized) WindowState = WindowState.Normal;
         Activate();
+        if (CurrentPage != "launcher") return;
         SearchBox.Focus();
         SearchBox.SelectAll();
     }
@@ -673,7 +683,7 @@ public partial class MainWindow : Window
     /// <summary>Typing anywhere in the window goes to the search box.</summary>
     void OnPreviewTextInput(object sender, TextCompositionEventArgs e)
     {
-        if (SearchBox.IsKeyboardFocused || string.IsNullOrEmpty(e.Text) || char.IsControl(e.Text[0])) return;
+        if (!LauncherView.IsVisible || Keyboard.FocusedElement is TextBox || string.IsNullOrEmpty(e.Text) || char.IsControl(e.Text[0])) return;
         SearchBox.Focus();
         SearchBox.AppendText(e.Text);
         SearchBox.CaretIndex = SearchBox.Text.Length;

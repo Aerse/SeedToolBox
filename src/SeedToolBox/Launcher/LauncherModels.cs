@@ -100,9 +100,15 @@ public class WindowSettings
 {
     public double? Left { get; set; }
     public double? Top { get; set; }
-    public double Width { get; set; } = 420;
-    public double Height { get; set; } = 600;
+    public double Width { get; set; } = 1000;
+    public double Height { get; set; } = 680;
     public bool SizeLocked { get; set; }
+    /// <summary>Sidebar shows icons only.</summary>
+    public bool NavCollapsed { get; set; }
+    /// <summary>Page shown when the window opens.</summary>
+    public string LastPage { get; set; } = "launcher";
+    /// <summary>Bumped when the window layout changes enough that saved sizes no longer fit.</summary>
+    public int Layout { get; set; }
 }
 
 public class LauncherData

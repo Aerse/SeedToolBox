@@ -107,14 +107,13 @@ public partial class App : Application
         _tray.AddCommand("qr", "识别二维码", AfterTrayMenu(screen.RecognizeQrCodes));
         _tray.AddCommand("qrscreen", "识别全屏二维码", AfterTrayMenu(screen.ScanQrCodes));
         _tray.AddCommand("qrgen", "生成二维码…", screen.GenerateQrCode);
-        _tray.AddCommand("devtools", "开发工具…", () => DevTools.DevToolsWindow.ShowSingle(_main));
+        _tray.AddCommand("devtools", "开发工具…", () => { _main.ShowPage("format"); _main.ShowAndActivate(); });
         _main.AddTool("screenshot", "\uE7A8", "截图", screen.Screenshot);
         _main.AddTool("ocr", "\uE8D2", "识字", screen.RecognizeText);
         _main.AddTool("qr", "\uED14", "扫码", screen.RecognizeQrCodes);
         _main.AddTool("color", "\uEF3C", "取色", screen.PickColor);
         _main.AddTool("ruler", "\uED5E", "标尺", screen.Ruler);
         _main.AddTool("record", "\uE7C8", "录屏", screen.Record);
-        _main.AddTool("devtools", "\uE943", "开发", () => DevTools.DevToolsWindow.ShowSingle(_main), hide: false);
         var clipboard = _clipboard = new Clips.ClipboardHistory(settings);
         Action showClipboard = () => (_clipboardWindow ??= new Clips.ClipboardWindow(clipboard)).ShowAtCursor();
         _tray.AddCommand("clipboard", "剪贴板历史", showClipboard);

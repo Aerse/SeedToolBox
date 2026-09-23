@@ -6,10 +6,11 @@ using SeedToolBox.Launcher;
 
 namespace SeedToolBox.Views;
 
-/// <summary>A button on the main window's tool bar (screenshot, OCR...).</summary>
+/// <summary>A button on the main window's screen tools page (screenshot, OCR...).</summary>
 public sealed class ToolCommand : ObservableObject
 {
     string _toolTip;
+    string _hotkey = "";
 
     public ToolCommand(string id, string glyph, string label, Action action)
     {
@@ -27,7 +28,13 @@ public sealed class ToolCommand : ObservableObject
     public Action Action { get; }
     public string ToolTip { get => _toolTip; private set => Set(ref _toolTip, value); }
 
-    public void SetHotkey(string hotkey) => ToolTip = hotkey.Length > 0 ? $"{Label}（{hotkey}）" : Label;
+    public string Hotkey { get => _hotkey; private set => Set(ref _hotkey, value); }
+
+    public void SetHotkey(string hotkey)
+    {
+        Hotkey = hotkey;
+        ToolTip = hotkey.Length > 0 ? $"{Label}（{hotkey}）" : Label;
+    }
 }
 
 static class WindowEffects

@@ -1,0 +1,149 @@
+using System;
+using System.Collections.Generic;
+using System.Linq;
+using System.Windows;
+using System.Windows.Controls;
+using System.Windows.Media;
+using SeedToolBox.DevTools;
+
+namespace SeedToolBox;
+
+/// <summary>The sidebar and page switching; the launcher itself lives in MainWindow.xaml.cs.</summary>
+public partial class MainWindow
+{
+    /// <summary>Current layout version, see <see cref="Launcher.WindowSettings.Layout"/>.</summary>
+    const int LayoutVersion = 2;
+    const double NavWidth = 200, NavCollapsedWidth = 56;
+
+    sealed class Page(string id, string group, string glyph, string name, Func<FrameworkElement>? create)
+    {
+        public string Id { get; } = id;
+        public string Group { get; } = group;
+        public string Glyph { get; } = glyph;
+        public string Name { get; } = name;
+        public Func<FrameworkElement>? Create { get; } = create;
+    }
+
+    static readonly Page[] Pages =
+    {
+        new("launcher", "", "\uE80F", "启动器", null),
+        new("tools", "", "\uE7A8", "屏幕工具", null),
+        new("format", "格式与编码", "\uE943", "代码格式化", () => new FormatPage()),
+        new("convert", "格式与编码", "\uE9D5", "数据格式互转", () => new DataConvertPage()),
+        new("encode", "格式与编码", "\uE8AB", "编码转换", () => new EncodePage()),
+        new("base64", "格式与编码", "\uE8C8", "Base64 编解码", () => new Base64TextPage()),
+        new("time", "格式与编码", "\uE823", "时间戳/进制", () => new TimePage()),
+        new("regex", "开发调试", "\uE721", "正则测试", () => new RegexPage()),
+        new("diff", "开发调试", "\uE7C3", "文本对比", () => new DiffPage()),
+        new("jwt", "开发调试", "\uE8EC", "JWT 解码", () => new JwtPage()),
+        new("hash", "开发调试", "\uE73E", "哈希校验", () => new HashPage()),
+        new("generator", "开发调试", "\uE8D7", "UUID/密码", () => new GeneratorPage()),
+        new("image", "图片", "\uE8B9", "图片格式转换", () => new ImageConvertPage()),
+        new("imagebase64", "图片", "\uEB9F", "图片 Base64", () => new ImageBase64Page()),
+        new("rename", "文件", "\uE8AC", "批量重命名", () => new RenamePage()),
+        new("duplicates", "文件", "\uE7C4", "重复文件", () => new DuplicatePage()),
+        new("diskusage", "文件", "\uEDA2", "空间占用", () => new DiskUsagePage()),
+        new("compress", "文件", "\uE7B8", "文件压缩", () => new CompressPage()),
+        new("network", "系统与网络", "\uE701", "端口/网络", () => new NetworkPage()),
+        new("hosts", "系统与网络", "\uE968", "Hosts 管理", () => new HostsPage()),
+    };
+
+    /// <summary>Pages are kept once created so their input survives switching.</summary>
+    readonly Dictionary<string, FrameworkElement> _created = new();
+    readonly List<TextBlock> _navTexts = new();
+    readonly List<FrameworkElement> _navCaptions = new();
+
+    string CurrentPage => NavList.SelectedItem is ListBoxItem { Tag: Page p } ? p.Id : "launcher";
+
+    void BuildNav()
+    {
+        var hint = (Brush)FindResource("HintTextBrush");
+        var iconFont = (FontFamily)FindResource("IconFont");
+        string group = "";
+        foreach (var p in Pages)
+        {
+            if (p.Group != group)
+            {
+                group = p.Group;
+                var caption = new TextBlock { Text = p.Group, FontSize = 12, Foreground = hint, Margin = new Thickness(12, 14, 0, 4) };
+                // A thin line stands in for the caption when the sidebar is collapsed
+                var line = new Border { Height = 1, Background = (Brush)FindResource("CardBorderBrush"), Margin = new Thickness(8, 10, 8, 6) };
+                _navCaptions.Add(caption);
+                _navCaptions.Add(line);
+                // Captions are disabled items with a bare template, so they can't be selected or reached by keyboard
+                NavList.Items.Add(new ListBoxItem
+                {
+                    IsEnabled = false,
+                    Template = new ControlTemplate(typeof(ListBoxItem)) { VisualTree = new FrameworkElementFactory(typeof(ContentPresenter)) },
+                    Content = new Grid { Children = { caption, line } },
+                });
+            }
+            var text = new TextBlock { Text = p.Name, VerticalAlignment = VerticalAlignment.Center, TextTrimming = TextTrimming.CharacterEllipsis };
+            _navTexts.Add(text);
+            NavList.Items.Add(new ListBoxItem
+            {
+                Tag = p,
+                ToolTip = p.Name,
+                Content = new StackPanel
+                {
+                    Orientation = Orientation.Horizontal,
+                    Children =
+                    {
+                        new TextBlock { Text = p.Glyph, FontFamily = iconFont, FontSize = 16, VerticalAlignment = VerticalAlignment.Center, Margin = new Thickness(0, 0, 12, 0) },
+                        text,
+                    },
+                },
+            });
+        }
+        ApplyNavCollapsed();
+        ShowPage(_data.Window.LastPage);
+        Loaded += (_, _) => { if (NavList.SelectedItem != null) NavList.ScrollIntoView(NavList.SelectedItem); };
+    }
+
+    /// <summary>Switches to a page by id; unknown ids fall back to the launcher.</summary>
+    public void ShowPage(string id)
+    {
+        var item = NavList.Items.OfType<ListBoxItem>().FirstOrDefault(i => i.Tag is Page p && p.Id == id)
+            ?? NavList.Items.OfType<ListBoxItem>().First(i => i.Tag is Page);
+        NavList.SelectedItem = item;
+    }
+
+    void OnNavSelectionChanged(object sender, SelectionChangedEventArgs e)
+    {
+        if (NavList.SelectedItem is not ListBoxItem { Tag: Page page }) return;
+        LauncherView.Visibility = page.Id == "launcher" ? Visibility.Visible : Visibility.Collapsed;
+        ToolsView.Visibility = page.Id == "tools" ? Visibility.Visible : Visibility.Collapsed;
+        PageHost.Visibility = page.Create != null ? Visibility.Visible : Visibility.Collapsed;
+        if (page.Create != null)
+        {
+            if (!_created.TryGetValue(page.Id, out var content)) _created[page.Id] = content = page.Create();
+            PageHost.Content = content;
+        }
+        else PageHost.Content = null;
+        if (_data.Window.LastPage != page.Id)
+        {
+            _data.Window.LastPage = page.Id;
+            RequestSave();
+        }
+    }
+
+    void OnCollapseClick(object sender, RoutedEventArgs e)
+    {
+        _data.Window.NavCollapsed = !_data.Window.NavCollapsed;
+        ApplyNavCollapsed();
+        RequestSave();
+    }
+
+    void ApplyNavCollapsed()
+    {
+        bool collapsed = _data.Window.NavCollapsed;
+        NavPanel.Width = collapsed ? NavCollapsedWidth : NavWidth;
+        foreach (var t in _navTexts) t.Visibility = collapsed ? Visibility.Collapsed : Visibility.Visible;
+        // Captions and lines alternate in the list: show one of each pair
+        for (int i = 0; i < _navCaptions.Count; i++)
+            _navCaptions[i].Visibility = (i % 2 == 0) != collapsed ? Visibility.Visible : Visibility.Collapsed;
+        CollapseButton.Content = collapsed ? "\uE76C" : "\uE76B";
+        CollapseButton.ToolTip = collapsed ? "展开侧边栏" : "收起侧边栏";
+        System.Windows.Automation.AutomationProperties.SetName(CollapseButton, (string)CollapseButton.ToolTip);
+    }
+}
