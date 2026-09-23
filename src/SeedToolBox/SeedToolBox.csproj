@@ -10,6 +10,10 @@
   </PropertyGroup>
 
   <ItemGroup>
+    <Reference Include="System.Numerics" />
+  </ItemGroup>
+
+  <ItemGroup>
     <ProjectReference Include="..\SeedToolBox.Core\SeedToolBox.Core.csproj" />
   </ItemGroup>
 
@@ -36,6 +40,7 @@
     <PackageReference Include="Microsoft.ML.OnnxRuntime" Version="1.20.1" ExcludeAssets="native;build;buildTransitive" GeneratePathProperty="true" />
     <PackageReference Include="nQuant" Version="1.0.3" />
     <PackageReference Include="NUglify" Version="1.23.1" />
+    <PackageReference Include="YamlDotNet" Version="18.1.0" />
     <PackageReference Include="ZXing.Net" Version="0.16.11" />
   </ItemGroup>
 

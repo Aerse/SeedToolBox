@@ -45,6 +45,10 @@ sealed class DevToolsWindow : Window
             ("\uEB9F", "图片 Base64", () => new ImageBase64Page()),
             ("\uE968", "Hosts 管理", () => new HostsPage()),
             ("\uE7B8", "文件压缩", () => new CompressPage()),
+            ("\uE8AB", "编码转换", () => new EncodePage()),
+            ("\uE9D5", "数据格式互转", () => new DataConvertPage()),
+            ("\uE8B9", "图片格式转换", () => new ImageConvertPage()),
+            ("\uE823", "时间戳/进制", () => new TimePage()),
         };
         var created = new FrameworkElement?[pages.Length];
 
