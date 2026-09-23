@@ -92,6 +92,9 @@ public sealed class ScreenToolService
         }
     }
 
+    /// <summary>Selects a region and reads the QR codes and barcodes in it.</summary>
+    public void RecognizeQrCodes() => Open(shot => new CaptureWindow(shot, WindowFinder.Snapshot(shot), this, CaptureMode.QrCode));
+
     /// <summary>Finds QR codes and barcodes anywhere on the screen.</summary>
     public void ScanQrCodes()
     {

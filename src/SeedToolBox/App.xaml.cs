@@ -94,7 +94,8 @@ public partial class App : Application
         _tray.AddCommand("record", "录屏", AfterTrayMenu(screen.Record));
         _tray.AddCommand("recordsettings", "录屏设置…", () => screen.RecordSettings());
         _tray.AddCommand("ocr", "识别文字", AfterTrayMenu(screen.RecognizeText));
-        _tray.AddCommand("qr", "识别屏幕二维码", AfterTrayMenu(screen.ScanQrCodes));
+        _tray.AddCommand("qr", "识别二维码", AfterTrayMenu(screen.RecognizeQrCodes));
+        _tray.AddCommand("qrscreen", "识别全屏二维码", AfterTrayMenu(screen.ScanQrCodes));
         _tray.AddCommand("qrgen", "生成二维码…", screen.GenerateQrCode);
 
         var main = _main;
@@ -104,7 +105,7 @@ public partial class App : Application
         _hotkeys.Add(new HotkeyBinding("ruler", "屏幕标尺", () => screen.Settings.RulerHotkey, v => screen.Settings.RulerHotkey = v, screen.Ruler));
         _hotkeys.Add(new HotkeyBinding("record", "录屏", () => screen.Settings.RecordHotkey, v => screen.Settings.RecordHotkey = v, screen.Record));
         _hotkeys.Add(new HotkeyBinding("ocr", "识别文字", () => screen.Settings.OcrHotkey, v => screen.Settings.OcrHotkey = v, screen.RecognizeText));
-        _hotkeys.Add(new HotkeyBinding("qr", "识别屏幕二维码", () => screen.Settings.QrHotkey, v => screen.Settings.QrHotkey = v, screen.ScanQrCodes));
+        _hotkeys.Add(new HotkeyBinding("qr", "识别二维码", () => screen.Settings.QrHotkey, v => screen.Settings.QrHotkey = v, screen.RecognizeQrCodes));
 
         var taken = new List<string>();
         foreach (var binding in _hotkeys)

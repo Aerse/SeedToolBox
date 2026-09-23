@@ -15,9 +15,9 @@ namespace SeedToolBox.ScreenTools;
 /// Region screenshot: hover picks a window/control, dragging selects a rectangle,
 /// then the selection can be adjusted, annotated, copied, saved or pinned.
 /// In record mode the selection is only adjusted, then handed to the screen recorder;
-/// in text mode it goes straight to text recognition.
+/// in text and QR code modes it goes straight to recognition.
 /// </summary>
-enum CaptureMode { Screenshot, Record, Text }
+enum CaptureMode { Screenshot, Record, Text, QrCode }
 
 sealed class CaptureWindow : OverlayWindow
 {
@@ -484,8 +484,9 @@ sealed class CaptureWindow : OverlayWindow
         ShowSelection(selection);
         _magnifier.Visibility = Visibility.Collapsed;
         SetTool(Tool.None);
-        // Text mode acts on the first selection; deferred so the mouse-up finishes first
+        // Recognition modes act on the first selection; deferred so the mouse-up finishes first
         if (_mode == CaptureMode.Text) Dispatcher.BeginInvoke(new Action(RecognizeText));
+        else if (_mode == CaptureMode.QrCode) Dispatcher.BeginInvoke(new Action(DecodeQrCodes));
     }
 
     void CancelEditing()
