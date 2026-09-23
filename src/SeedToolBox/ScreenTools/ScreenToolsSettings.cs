@@ -8,6 +8,8 @@ public class ScreenToolsSettings
     public string ColorPickerHotkey { get; set; } = "Ctrl+Alt+C";
     public string RulerHotkey { get; set; } = "Ctrl+Alt+R";
     public string RecordHotkey { get; set; } = "Ctrl+Alt+V";
+    public string OcrHotkey { get; set; } = "Ctrl+Alt+O";
+    public string QrHotkey { get; set; } = "Ctrl+Alt+Q";
 
     public ColorFormat ColorFormat { get; set; } = ColorFormat.Hex;
     /// <summary>Last folder screenshots were saved to.</summary>

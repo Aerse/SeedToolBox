@@ -72,6 +72,8 @@ sealed class PinWindow : Window
         menu.Items.Add(Item("复制", "Ctrl+C", () => ScreenToolService.CopyImage(_image)));
         menu.Items.Add(Item("保存...", "Ctrl+S", () => _service.SaveImage(_image, this)));
         menu.Items.Add(Item("原始大小", "1", () => SetZoom(1)));
+        menu.Items.Add(Item("识别文字", null, () => _service.RecognizeText(_image)));
+        menu.Items.Add(Item("识别二维码", null, () => _service.DecodeQrCodes(_image)));
 
         var opacity = new MenuItem { Header = "透明度" };
         foreach (var percent in new[] { 100, 80, 60, 40 })

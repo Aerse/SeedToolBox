@@ -14,8 +14,11 @@ namespace SeedToolBox.ScreenTools;
 /// <summary>
 /// Region screenshot: hover picks a window/control, dragging selects a rectangle,
 /// then the selection can be adjusted, annotated, copied, saved or pinned.
-/// In record mode the selection is only adjusted, then handed to the screen recorder.
+/// In record mode the selection is only adjusted, then handed to the screen recorder;
+/// in text mode it goes straight to text recognition.
 /// </summary>
+enum CaptureMode { Screenshot, Record, Text }
+
 sealed class CaptureWindow : OverlayWindow
 {
     enum Tool { None, Rectangle, Ellipse, Arrow, Pen, Text, Mosaic }
@@ -40,7 +43,8 @@ sealed class CaptureWindow : OverlayWindow
 
     readonly ScreenToolService _service;
     readonly WindowFinder _finder;
-    readonly bool _record;
+    readonly CaptureMode _mode;
+    bool RecordMode => _mode == CaptureMode.Record;
 
     // Surface (pixel) layer
     readonly RectangleGeometry _selectionGeometry = new();
@@ -70,11 +74,11 @@ sealed class CaptureWindow : OverlayWindow
     Shape? _drawing;
     TextBox? _text;
 
-    public CaptureWindow(ScreenShot shot, WindowFinder finder, ScreenToolService service, bool record = false) : base(shot)
+    public CaptureWindow(ScreenShot shot, WindowFinder finder, ScreenToolService service, CaptureMode mode = CaptureMode.Screenshot) : base(shot)
     {
         _service = service;
         _finder = finder;
-        _record = record;
+        _mode = mode;
 
         _annotations = new Canvas { Width = shot.Width, Height = shot.Height, Clip = _clipGeometry };
         var mask = new Path
@@ -125,7 +129,7 @@ sealed class CaptureWindow : OverlayWindow
 
     void BuildToolbar()
     {
-        if (_record)
+        if (RecordMode)
         {
             BuildRecordToolbar();
             return;
@@ -139,6 +143,9 @@ sealed class CaptureWindow : OverlayWindow
         AddTool(main, Tool.Mosaic, "▦", "马赛克");
         main.Children.Add(Divider());
         main.Children.Add(Button("↶", "撤销 (Ctrl+Z)", Undo));
+        main.Children.Add(Divider());
+        main.Children.Add(Button("文", "识别文字", RecognizeText));
+        main.Children.Add(Button("码", "识别二维码", DecodeQrCodes));
         main.Children.Add(Divider());
         main.Children.Add(Button("📌", "贴到屏幕", Pin));
         main.Children.Add(Button("💾", "保存 (Ctrl+S)", Save));
@@ -281,7 +288,7 @@ sealed class CaptureWindow : OverlayWindow
     {
         CommitText();
         _tool = tool;
-        if (_record)
+        if (RecordMode)
         {
             UpdateHandles();
             PlaceToolbar();
@@ -477,6 +484,8 @@ sealed class CaptureWindow : OverlayWindow
         ShowSelection(selection);
         _magnifier.Visibility = Visibility.Collapsed;
         SetTool(Tool.None);
+        // Text mode acts on the first selection; deferred so the mouse-up finishes first
+        if (_mode == CaptureMode.Text) Dispatcher.BeginInvoke(new Action(RecognizeText));
     }
 
     void CancelEditing()
@@ -851,7 +860,7 @@ sealed class CaptureWindow : OverlayWindow
     void CopyAndClose()
     {
         if (!_editing) return;
-        if (_record)
+        if (RecordMode)
         {
             StartRecording();
             return;
@@ -864,6 +873,22 @@ sealed class CaptureWindow : OverlayWindow
     void Save()
     {
         if (_service.SaveImage(Render(), this)) Close();
+    }
+
+    void RecognizeText()
+    {
+        if (!_editing) return;
+        var image = Render();
+        Close();
+        _service.RecognizeText(image);
+    }
+
+    void DecodeQrCodes()
+    {
+        if (!_editing) return;
+        var image = Render();
+        Close();
+        _service.DecodeQrCodes(image);
     }
 
     void Pin()
@@ -909,8 +934,8 @@ sealed class CaptureWindow : OverlayWindow
             }
         }
         else if (e.Key == Key.Enter || (ctrl && e.Key == Key.C)) CopyAndClose();
-        else if (ctrl && e.Key == Key.S && !_record) Save();
-        else if (ctrl && e.Key == Key.Z && !_record) Undo();
+        else if (ctrl && e.Key == Key.S && !RecordMode) Save();
+        else if (ctrl && e.Key == Key.Z && !RecordMode) Undo();
         else if (e.Key is Key.Left or Key.Right or Key.Up or Key.Down && _drag == DragMode.None)
         {
             // Arrow keys nudge the selection by one pixel
