@@ -486,12 +486,84 @@
     </Style>
 
     <!-- Side navigation: grey highlight with an accent pill on the selected item -->
+    <!-- Underlined tabs without the classic 3D frame -->
+    <Style TargetType="TabControl">
+        <Setter Property="Padding" Value="0,10,0,0" />
+        <Setter Property="Template">
+            <Setter.Value>
+                <ControlTemplate TargetType="TabControl">
+                    <DockPanel>
+                        <Border DockPanel.Dock="Top" BorderBrush="{StaticResource CardBorderBrush}" BorderThickness="0,0,0,1">
+                            <TabPanel IsItemsHost="True" />
+                        </Border>
+                        <ContentPresenter ContentSource="SelectedContent" Margin="{TemplateBinding Padding}" />
+                    </DockPanel>
+                </ControlTemplate>
+            </Setter.Value>
+        </Setter>
+    </Style>
+    <Style TargetType="TabItem">
+        <Setter Property="FocusVisualStyle" Value="{x:Null}" />
+        <Setter Property="Template">
+            <Setter.Value>
+                <ControlTemplate TargetType="TabItem">
+                    <Grid Background="Transparent" Margin="0,0,20,0">
+                        <ContentPresenter x:Name="Header" ContentSource="Header" TextElement.Foreground="{StaticResource SecondaryTextBrush}" Margin="0,4,0,8" HorizontalAlignment="Center" />
+                        <Border x:Name="Line" Height="2" CornerRadius="1" VerticalAlignment="Bottom" Background="{StaticResource AccentBrush}" Visibility="Hidden" />
+                    </Grid>
+                    <ControlTemplate.Triggers>
+                        <Trigger Property="IsMouseOver" Value="True">
+                            <Setter TargetName="Header" Property="TextElement.Foreground" Value="{StaticResource TextBrush}" />
+                        </Trigger>
+                        <Trigger Property="IsSelected" Value="True">
+                            <Setter TargetName="Header" Property="TextElement.Foreground" Value="{StaticResource TextBrush}" />
+                            <Setter TargetName="Header" Property="TextElement.FontWeight" Value="SemiBold" />
+                            <Setter TargetName="Line" Property="Visibility" Value="Visible" />
+                        </Trigger>
+                    </ControlTemplate.Triggers>
+                </ControlTemplate>
+            </Setter.Value>
+        </Setter>
+    </Style>
+    <!-- Flat list headers -->
+    <Style TargetType="GridViewColumnHeader">
+        <Setter Property="HorizontalContentAlignment" Value="Left" />
+        <Setter Property="Foreground" Value="{StaticResource SecondaryTextBrush}" />
+        <Setter Property="Template">
+            <Setter.Value>
+                <ControlTemplate TargetType="GridViewColumnHeader">
+                    <Grid>
+                        <Border x:Name="Bd" Background="Transparent" BorderBrush="{StaticResource CardBorderBrush}" BorderThickness="0,0,0,1" Padding="8,6">
+                            <ContentPresenter HorizontalAlignment="{TemplateBinding HorizontalContentAlignment}" />
+                        </Border>
+                        <Thumb x:Name="PART_HeaderGripper" HorizontalAlignment="Right" Width="8" Margin="0,0,-4,0" Cursor="SizeWE">
+                            <Thumb.Template>
+                                <ControlTemplate TargetType="Thumb">
+                                    <Border Background="Transparent">
+                                        <Rectangle Width="1" Margin="0,7" Fill="{StaticResource CardBorderBrush}" />
+                                    </Border>
+                                </ControlTemplate>
+                            </Thumb.Template>
+                        </Thumb>
+                    </Grid>
+                    <ControlTemplate.Triggers>
+                        <Trigger Property="IsMouseOver" Value="True">
+                            <Setter TargetName="Bd" Property="Background" Value="{StaticResource PressedBrush}" />
+                        </Trigger>
+                        <Trigger Property="Role" Value="Padding">
+                            <Setter TargetName="PART_HeaderGripper" Property="Visibility" Value="Collapsed" />
+                        </Trigger>
+                    </ControlTemplate.Triggers>
+                </ControlTemplate>
+            </Setter.Value>
+        </Setter>
+    </Style>
     <Style x:Key="NavItem" TargetType="ListBoxItem">
         <Setter Property="FocusVisualStyle" Value="{x:Null}" />
         <Setter Property="Template">
             <Setter.Value>
                 <ControlTemplate TargetType="ListBoxItem">
-                    <Border x:Name="Bd" Height="36" Margin="0,1" CornerRadius="4" Background="Transparent">
+                    <Border x:Name="Bd" Height="32" Margin="0,1" CornerRadius="4" Background="Transparent">
                         <Grid>
                             <Border x:Name="Pill" Width="3" Height="16" CornerRadius="1.5" HorizontalAlignment="Left"
                                     Background="{StaticResource AccentBrush}" Visibility="Collapsed" />

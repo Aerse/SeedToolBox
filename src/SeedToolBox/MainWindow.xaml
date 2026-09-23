@@ -217,6 +217,7 @@
                     Margin="12,4,0,10" Click="OnCollapseClick" />
             <ListBox x:Name="FooterList" DockPanel.Dock="Bottom" ItemContainerStyle="{StaticResource NavItem}" Background="Transparent" BorderThickness="0"
                      Margin="8,4,8,0" ScrollViewer.HorizontalScrollBarVisibility="Disabled" SelectionChanged="OnNavSelectionChanged" />
+            <Border DockPanel.Dock="Bottom" Height="1" Margin="12,2,12,2" Background="{StaticResource CardBorderBrush}" />
             <ListBox x:Name="NavList" ItemContainerStyle="{StaticResource NavItem}" Background="Transparent" BorderThickness="0"
                      Margin="8,0,8,4" ScrollViewer.HorizontalScrollBarVisibility="Disabled" SelectionChanged="OnNavSelectionChanged" />
         </DockPanel>

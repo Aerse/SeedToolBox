@@ -89,9 +89,9 @@ public partial class MainWindow
             if (list == NavList && p.Group != group)
             {
                 group = p.Group;
-                var caption = new TextBlock { Text = p.Group, FontSize = 12, Foreground = hint, Margin = new Thickness(12, 14, 0, 4) };
+                var caption = new TextBlock { Text = p.Group, FontSize = 12, Foreground = hint, Margin = new Thickness(12, 10, 0, 2) };
                 // A thin line stands in for the caption when the sidebar is collapsed
-                var line = new Border { Height = 1, Background = (Brush)FindResource("CardBorderBrush"), Margin = new Thickness(8, 10, 8, 6) };
+                var line = new Border { Height = 1, Background = (Brush)FindResource("CardBorderBrush"), Margin = new Thickness(8, 7, 8, 5) };
                 _navCaptions.Add(caption);
                 _navCaptions.Add(line);
                 // Captions are disabled items with a bare template, so they can't be selected or reached by keyboard
@@ -165,6 +165,8 @@ public partial class MainWindow
     {
         bool collapsed = _data.Window.NavCollapsed;
         NavPanel.Width = collapsed ? NavCollapsedWidth : NavWidth;
+        // The scroll bar would cover the icons in the narrow bar; the wheel still scrolls
+        ScrollViewer.SetVerticalScrollBarVisibility(NavList, collapsed ? ScrollBarVisibility.Hidden : ScrollBarVisibility.Auto);
         foreach (var t in _navTexts) t.Visibility = collapsed ? Visibility.Collapsed : Visibility.Visible;
         // Captions and lines alternate in the list: show one of each pair
         for (int i = 0; i < _navCaptions.Count; i++)
