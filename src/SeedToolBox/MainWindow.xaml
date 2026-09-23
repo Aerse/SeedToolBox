@@ -5,6 +5,7 @@
         WindowStyle="None" Background="#F3F3F3" FontSize="13"
         AllowDrop="True" DragOver="OnDragOver" Drop="OnDrop"
         PreviewDragOver="OnPreviewDragOver" DragLeave="OnWindowDragLeave"
+        PreviewTextInput="OnPreviewTextInput"
         Closing="OnClosing" KeyDown="OnKeyDown">
 
     <WindowChrome.WindowChrome>
@@ -19,6 +20,9 @@
                 <Trigger Property="IsMouseOver" Value="True">
                     <Setter Property="Background" Value="#E3EEF9" />
                 </Trigger>
+                <DataTrigger Binding="{Binding IsHighlighted}" Value="True">
+                    <Setter Property="Background" Value="#CCE4F7" />
+                </DataTrigger>
                 <DataTrigger Binding="{Binding IsDragging}" Value="True">
                     <Setter Property="Background" Value="#E3EEF9" />
                     <Setter Property="Opacity" Value="0.35" />
@@ -79,6 +83,43 @@
                 </Setter.Value>
             </Setter>
         </Style>
+                <DataTemplate x:Key="TileTemplate">
+                    <Border Style="{StaticResource TileStyle}" Width="80" Height="86" Margin="2"
+                            ToolTip="{Binding ToolTip}" AllowDrop="True"
+                            PreviewMouseLeftButtonDown="OnTileMouseDown" MouseMove="OnTileMouseMove"
+                            MouseLeftButtonUp="OnItemClick" DragOver="OnTileDragOver" Drop="OnTileDrop">
+                        <Border.ContextMenu>
+                            <ContextMenu>
+                                <MenuItem Header="打开" FontWeight="Bold" Click="OnItemOpen" />
+                                <MenuItem Header="以管理员身份运行" Click="OnItemRunAsAdmin" />
+                                <MenuItem Header="打开文件位置" Click="OnItemOpenLocation" />
+                                <Separator />
+                                <MenuItem Header="重命名" Click="OnItemRename" />
+                                <MenuItem Header="删除" Click="OnItemDelete" />
+                                <Separator />
+                                <MenuItem Header="属性..." Click="OnItemProperties" />
+                            </ContextMenu>
+                        </Border.ContextMenu>
+                        <StackPanel Margin="2,8,2,0">
+                            <Image Source="{Binding Icon}" Width="32" Height="32" RenderOptions.BitmapScalingMode="HighQuality" />
+                            <TextBlock Text="{Binding Name}" TextAlignment="Center" TextWrapping="Wrap"
+                                       TextTrimming="CharacterEllipsis" Margin="0,5,0,0"
+                                       LineHeight="17" LineStackingStrategy="BlockLineHeight" MaxHeight="34" />
+                        </StackPanel>
+                    </Border>
+                </DataTemplate>
+
+        <Style x:Key="SearchBoxStyle" TargetType="TextBox">
+            <Setter Property="Padding" Value="6,0" />
+            <Setter Property="VerticalContentAlignment" Value="Center" />
+            <Setter Property="BorderBrush" Value="#D0D0D0" />
+            <Setter Property="Background" Value="White" />
+            <Style.Triggers>
+                <Trigger Property="IsKeyboardFocused" Value="True">
+                    <Setter Property="BorderBrush" Value="#5B9BD5" />
+                </Trigger>
+            </Style.Triggers>
+        </Style>
     </Window.Resources>
 
     <Border x:Name="Root" BorderBrush="#C8C8C8" BorderThickness="1">
@@ -89,11 +130,25 @@
             </Grid.RowDefinitions>
 
             <!-- Title bar -->
-            <TextBlock Text="SeedToolBox" FontSize="20" FontWeight="Bold" Foreground="#7A8699"
-                       VerticalAlignment="Center" Margin="16,0,0,0" />
-            <Button Content="✕" Style="{StaticResource CloseButtonStyle}" Click="OnCloseClick"
-                    HorizontalAlignment="Right" VerticalAlignment="Top" ToolTip="隐藏到托盘"
-                    WindowChrome.IsHitTestVisibleInChrome="True" />
+            <Grid>
+                <Grid.ColumnDefinitions>
+                    <ColumnDefinition Width="Auto" />
+                    <ColumnDefinition Width="*" />
+                    <ColumnDefinition Width="Auto" />
+                </Grid.ColumnDefinitions>
+                <TextBlock Text="SeedToolBox" FontSize="20" FontWeight="Bold" Foreground="#7A8699"
+                           VerticalAlignment="Center" Margin="16,0,12,0" />
+                <Grid Grid.Column="1" Height="28" VerticalAlignment="Center" MaxWidth="260" HorizontalAlignment="Stretch"
+                      WindowChrome.IsHitTestVisibleInChrome="True">
+                    <TextBox x:Name="SearchBox" Style="{StaticResource SearchBoxStyle}"
+                             TextChanged="OnSearchTextChanged" PreviewKeyDown="OnSearchKeyDown" />
+                    <TextBlock x:Name="SearchPlaceholder" Text="搜索（支持拼音首字母）" Foreground="#AAA"
+                               VerticalAlignment="Center" Margin="9,0,0,0" IsHitTestVisible="False" />
+                </Grid>
+                <Button Grid.Column="2" Content="✕" Style="{StaticResource CloseButtonStyle}" Click="OnCloseClick"
+                        Margin="8,0,0,0" VerticalAlignment="Top" ToolTip="隐藏到托盘"
+                        WindowChrome.IsHitTestVisibleInChrome="True" />
+            </Grid>
 
             <Grid Grid.Row="1">
                 <Grid.ColumnDefinitions>
@@ -126,39 +181,21 @@
                         </ContextMenu>
                     </ScrollViewer.ContextMenu>
                     <Grid>
-                        <ItemsControl ItemsSource="{Binding SelectedItem.Items, ElementName=GroupList}" Margin="6">
+                        <ItemsControl x:Name="GroupItems" ItemsSource="{Binding SelectedItem.Items, ElementName=GroupList}"
+                                      ItemTemplate="{StaticResource TileTemplate}" Margin="6">
                             <ItemsControl.ItemsPanel>
                                 <ItemsPanelTemplate>
                                     <WrapPanel />
                                 </ItemsPanelTemplate>
                             </ItemsControl.ItemsPanel>
-                            <ItemsControl.ItemTemplate>
-                                <DataTemplate>
-                                    <Border Style="{StaticResource TileStyle}" Width="80" Height="86" Margin="2"
-                                            ToolTip="{Binding ToolTip}" AllowDrop="True"
-                                            PreviewMouseLeftButtonDown="OnTileMouseDown" MouseMove="OnTileMouseMove"
-                                            MouseLeftButtonUp="OnItemClick" DragOver="OnTileDragOver" Drop="OnTileDrop">
-                                        <Border.ContextMenu>
-                                            <ContextMenu>
-                                                <MenuItem Header="打开" FontWeight="Bold" Click="OnItemOpen" />
-                                                <MenuItem Header="以管理员身份运行" Click="OnItemRunAsAdmin" />
-                                                <MenuItem Header="打开文件位置" Click="OnItemOpenLocation" />
-                                                <Separator />
-                                                <MenuItem Header="重命名" Click="OnItemRename" />
-                                                <MenuItem Header="删除" Click="OnItemDelete" />
-                                                <Separator />
-                                                <MenuItem Header="属性..." Click="OnItemProperties" />
-                                            </ContextMenu>
-                                        </Border.ContextMenu>
-                                        <StackPanel Margin="2,8,2,0">
-                                            <Image Source="{Binding Icon}" Width="32" Height="32" RenderOptions.BitmapScalingMode="HighQuality" />
-                                            <TextBlock Text="{Binding Name}" TextAlignment="Center" TextWrapping="Wrap"
-                                                       TextTrimming="CharacterEllipsis" Margin="0,5,0,0"
-                                                       LineHeight="17" LineStackingStrategy="BlockLineHeight" MaxHeight="34" />
-                                        </StackPanel>
-                                    </Border>
-                                </DataTemplate>
-                            </ItemsControl.ItemTemplate>
+                        </ItemsControl>
+                        <ItemsControl x:Name="SearchResults" ItemTemplate="{StaticResource TileTemplate}" Margin="6"
+                                      Visibility="Collapsed">
+                            <ItemsControl.ItemsPanel>
+                                <ItemsPanelTemplate>
+                                    <WrapPanel />
+                                </ItemsPanelTemplate>
+                            </ItemsControl.ItemsPanel>
                         </ItemsControl>
                         <TextBlock x:Name="EmptyHint" Text="把程序、快捷方式、文件夹或网址&#x0a;拖到这里即可添加"
                                    Foreground="#AAA" TextAlignment="Center"

@@ -40,6 +40,8 @@ public class LaunchItem : ObservableObject
     /// <summary>Custom icon: image/.ico file, or an exe/dll whose icon is used. Empty means the target's icon.</summary>
     public string IconPath { get => _iconPath; set { if (Set(ref _iconPath, value)) ResetDisplay(); } }
     public string Remarks { get => _remarks; set { if (Set(ref _remarks, value)) Raise(nameof(ToolTip)); } }
+    /// <summary>Launch count, used to rank search results.</summary>
+    public int RunCount { get; set; }
 
     [JsonIgnore]
     public ImageSource? Icon => _icon ??= IconHelper.GetIcon(Path, IconPath);
@@ -52,6 +54,12 @@ public class LaunchItem : ObservableObject
     /// <summary>True while this entry is being dragged (shown faded in place).</summary>
     [JsonIgnore]
     public bool IsDragging { get => _isDragging; set => Set(ref _isDragging, value); }
+
+    bool _isHighlighted;
+
+    /// <summary>Keyboard selection in search results.</summary>
+    [JsonIgnore]
+    public bool IsHighlighted { get => _isHighlighted; set => Set(ref _isHighlighted, value); }
 
     void ResetDisplay()
     {

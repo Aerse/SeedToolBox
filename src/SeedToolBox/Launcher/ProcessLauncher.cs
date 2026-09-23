@@ -13,11 +13,11 @@ public static class ProcessLauncher
 
     public static string ExePath { get; } = Process.GetCurrentProcess().MainModule!.FileName;
 
-    public static void Launch(LaunchItem item, bool asAdmin = false) =>
+    public static bool Launch(LaunchItem item, bool asAdmin = false) =>
         Start(item.Path, item.Arguments, item.Name, asAdmin || item.RunAsAdmin, item.WorkingDirectory);
 
-    /// <summary>Starts a program/file/URL through the shell, reporting failures to the user.</summary>
-    public static void Start(string path, string arguments = "", string? displayName = null, bool asAdmin = false, string? workingDirectory = null)
+    /// <summary>Starts a program/file/URL through the shell, reporting failures to the user. Returns true if started.</summary>
+    public static bool Start(string path, string arguments = "", string? displayName = null, bool asAdmin = false, string? workingDirectory = null)
     {
         path = Environment.ExpandEnvironmentVariables(path);
         var psi = new ProcessStartInfo(path)
@@ -35,15 +35,18 @@ public static class ProcessLauncher
         try
         {
             Process.Start(psi);
+            return true;
         }
         catch (Win32Exception ex) when (ex.NativeErrorCode == ERROR_CANCELLED)
         {
             // User declined the UAC prompt
+            return false;
         }
         catch (Exception ex)
         {
             Log.Error($"Failed to start {path}", ex);
             MessageBox.Show($"启动失败：{displayName ?? path}\n{ex.Message}", "SeedToolBox", MessageBoxButton.OK, MessageBoxImage.Warning);
+            return false;
         }
     }
 

@@ -1,9 +1,11 @@
 using System;
+using System.Collections.Generic;
 using System.ComponentModel;
 using System.IO;
 using System.Linq;
 using System.Windows;
 using System.Windows.Documents;
+using System.Windows.Controls;
 using System.Windows.Input;
 using System.Windows.Threading;
 using Microsoft.Win32;
@@ -31,6 +33,11 @@ public partial class MainWindow : Window
     FrameworkElement? _pressedGroupElement;
     DragAdorner? _dragAdorner;
 
+    // Search state
+    const double TileSlotWidth = 84; // tile width + margins
+    List<LaunchItem> _results = new();
+    int _highlight = -1;
+
     public MainWindow(LauncherData data, ISettingsStore settings)
     {
         InitializeComponent();
@@ -55,7 +62,7 @@ public partial class MainWindow : Window
         IsVisibleChanged += (_, _) =>
         {
             if (IsVisible) _trimTimer.Stop();
-            else _trimTimer.Start();
+            else { _trimTimer.Start(); SearchBox.Clear(); }
         };
     }
 
@@ -99,6 +106,8 @@ public partial class MainWindow : Window
         Show();
         if (WindowState == WindowState.Minimized) WindowState = WindowState.Normal;
         Activate();
+        SearchBox.Focus();
+        SearchBox.SelectAll();
     }
 
     public void ToggleVisibility()
@@ -233,8 +242,19 @@ public partial class MainWindow : Window
         return Path.GetFileNameWithoutExtension(path);
     }
 
-    void UpdateEmptyHint() =>
-        EmptyHint.Visibility = CurrentGroup is { Items.Count: > 0 } ? Visibility.Collapsed : Visibility.Visible;
+    void UpdateEmptyHint()
+    {
+        if (IsSearching)
+        {
+            EmptyHint.Text = "没有找到匹配的项目";
+            EmptyHint.Visibility = _results.Count > 0 ? Visibility.Collapsed : Visibility.Visible;
+        }
+        else
+        {
+            EmptyHint.Text = "把程序、快捷方式、文件夹或网址\n拖到这里即可添加";
+            EmptyHint.Visibility = CurrentGroup is { Items.Count: > 0 } ? Visibility.Collapsed : Visibility.Visible;
+        }
+    }
 
     #endregion
 
@@ -248,12 +268,23 @@ public partial class MainWindow : Window
         var item = ItemOf(sender);
         if (_pressedItem != item) return;
         _pressedItem = null;
-        ProcessLauncher.Launch(item);
+        Launch(item);
     }
 
-    void OnItemOpen(object sender, RoutedEventArgs e) => ProcessLauncher.Launch(ItemOf(sender));
+    void Launch(LaunchItem item, bool asAdmin = false)
+    {
+        if (!ProcessLauncher.Launch(item, asAdmin)) return;
+        item.RunCount++;
+        RequestSave();
+        // A search is a one-shot: get out of the way once something is launched
+        if (IsSearching) Hide();
+    }
 
-    void OnItemRunAsAdmin(object sender, RoutedEventArgs e) => ProcessLauncher.Launch(ItemOf(sender), asAdmin: true);
+    ItemGroup? GroupOf(LaunchItem item) => _data.Groups.FirstOrDefault(g => g.Items.Contains(item));
+
+    void OnItemOpen(object sender, RoutedEventArgs e) => Launch(ItemOf(sender));
+
+    void OnItemRunAsAdmin(object sender, RoutedEventArgs e) => Launch(ItemOf(sender), asAdmin: true);
 
     void OnItemOpenLocation(object sender, RoutedEventArgs e)
     {
@@ -283,7 +314,8 @@ public partial class MainWindow : Window
         if (MessageBox.Show($"确定删除「{item.Name}」吗？\n（只删除快捷项，不会删除原文件）", "SeedToolBox",
                 MessageBoxButton.OKCancel, MessageBoxImage.Question) != MessageBoxResult.OK) return;
 
-        CurrentGroup?.Items.Remove(item);
+        GroupOf(item)?.Items.Remove(item);
+        if (IsSearching) UpdateSearch();
         UpdateEmptyHint();
         RequestSave();
     }
@@ -348,7 +380,8 @@ public partial class MainWindow : Window
 
     void OnTileMouseMove(object sender, MouseEventArgs e)
     {
-        if (e.LeftButton != MouseButtonState.Pressed || _pressedItem is not { } item || !IsDragGesture(e)) return;
+        // Results mix groups, so reordering there has no meaning
+        if (IsSearching || e.LeftButton != MouseButtonState.Pressed || _pressedItem is not { } item || !IsDragGesture(e)) return;
         _pressedItem = null;
         var tile = (FrameworkElement)sender;
         RunDrag(tile, tile, new DataObject(ItemFormat, item), dragging => item.IsDragging = dragging);
@@ -467,6 +500,86 @@ public partial class MainWindow : Window
             // Files dropped on a group: select it, then let the window handler add them there
             GroupList.SelectedItem = target;
         }
+    }
+
+    #endregion
+
+    #region Search
+
+    bool IsSearching => ItemSearch.Normalize(SearchBox.Text).Length > 0;
+
+    void OnSearchTextChanged(object sender, TextChangedEventArgs e)
+    {
+        SearchPlaceholder.Visibility = SearchBox.Text.Length == 0 ? Visibility.Visible : Visibility.Collapsed;
+        UpdateSearch();
+    }
+
+    void UpdateSearch()
+    {
+        SetHighlight(-1);
+        var query = ItemSearch.Normalize(SearchBox.Text);
+        _results = ItemSearch.Find(_data.Groups, query);
+
+        bool searching = query.Length > 0;
+        SearchResults.ItemsSource = searching ? _results : null;
+        SearchResults.Visibility = searching ? Visibility.Visible : Visibility.Collapsed;
+        GroupItems.Visibility = searching ? Visibility.Collapsed : Visibility.Visible;
+        if (_results.Count > 0) SetHighlight(0);
+        UpdateEmptyHint();
+    }
+
+    void SetHighlight(int index)
+    {
+        if (_highlight >= 0 && _highlight < _results.Count) _results[_highlight].IsHighlighted = false;
+        _highlight = index;
+        if (index < 0 || index >= _results.Count) return;
+
+        _results[index].IsHighlighted = true;
+        (SearchResults.ItemContainerGenerator.ContainerFromIndex(index) as FrameworkElement)?.BringIntoView();
+    }
+
+    void OnSearchKeyDown(object sender, KeyEventArgs e)
+    {
+        if (e.Key == Key.Escape)
+        {
+            // First Esc clears the search, second hides the window
+            if (SearchBox.Text.Length > 0) SearchBox.Clear();
+            else Hide();
+            e.Handled = true;
+            return;
+        }
+        if (!IsSearching || _results.Count == 0) return;
+
+        int columns = Math.Max(1, (int)((SearchResults.ActualWidth) / TileSlotWidth));
+        int next = e.Key switch
+        {
+            Key.Left => _highlight - 1,
+            Key.Right => _highlight + 1,
+            Key.Up => _highlight - columns,
+            Key.Down => _highlight + columns,
+            _ => int.MinValue,
+        };
+
+        if (e.Key == Key.Enter)
+        {
+            if (_highlight >= 0) Launch(_results[_highlight]);
+            e.Handled = true;
+        }
+        else if (next != int.MinValue)
+        {
+            SetHighlight(Math.Max(0, Math.Min(_results.Count - 1, next)));
+            e.Handled = true;
+        }
+    }
+
+    /// <summary>Typing anywhere in the window goes to the search box.</summary>
+    void OnPreviewTextInput(object sender, TextCompositionEventArgs e)
+    {
+        if (SearchBox.IsKeyboardFocused || string.IsNullOrEmpty(e.Text) || char.IsControl(e.Text[0])) return;
+        SearchBox.Focus();
+        SearchBox.AppendText(e.Text);
+        SearchBox.CaretIndex = SearchBox.Text.Length;
+        e.Handled = true;
     }
 
     #endregion

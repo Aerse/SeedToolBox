@@ -15,6 +15,7 @@
 
   <ItemGroup>
     <Resource Include="Assets\app.ico" />
+    <Resource Include="Assets\pinyin.bin" />
   </ItemGroup>
 
   <!-- Native DLLs built from /native are copied to the Native folder next to the exe -->
