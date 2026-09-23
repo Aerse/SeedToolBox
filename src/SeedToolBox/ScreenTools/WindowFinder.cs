@@ -77,7 +77,7 @@ public sealed class WindowFinder
         if (!IsWindowVisible(hwnd) || IsIconic(hwnd)) return false;
         // UWP apps keep invisible "cloaked" windows around
         if (DwmGetWindowAttribute(hwnd, DWMWA_CLOAKED, out int cloaked, sizeof(int)) == 0 && cloaked != 0) return false;
-        long exStyle = GetWindowLongPtr(hwnd, GWL_EXSTYLE).ToInt64();
+        long exStyle = GetExStyle(hwnd);
         return (exStyle & WS_EX_TRANSPARENT) == 0;
     }
 
@@ -122,7 +122,10 @@ public sealed class WindowFinder
     [DllImport("user32.dll")] static extern bool IsWindowVisible(IntPtr hwnd);
     [DllImport("user32.dll")] static extern bool IsIconic(IntPtr hwnd);
     [DllImport("user32.dll")] static extern bool GetWindowRect(IntPtr hwnd, out RECT rect);
+    // 32-bit user32 has no GetWindowLongPtr export
+    static long GetExStyle(IntPtr hwnd) => IntPtr.Size == 8 ? GetWindowLongPtr(hwnd, GWL_EXSTYLE).ToInt64() : GetWindowLong(hwnd, GWL_EXSTYLE);
     [DllImport("user32.dll")] static extern IntPtr GetWindowLongPtr(IntPtr hwnd, int index);
+    [DllImport("user32.dll")] static extern int GetWindowLong(IntPtr hwnd, int index);
     [DllImport("dwmapi.dll")] static extern int DwmGetWindowAttribute(IntPtr hwnd, int attribute, out RECT value, int size);
     [DllImport("dwmapi.dll")] static extern int DwmGetWindowAttribute(IntPtr hwnd, int attribute, out int value, int size);
 }

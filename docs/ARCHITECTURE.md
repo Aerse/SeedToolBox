@@ -13,7 +13,7 @@ SeedToolBox.sln
 │   ├─ Launcher/                快捷启动：模型、图标提取、进程启动
 │   ├─ Modules/                 内置模块
 │   └─ Views/                   通用对话框
-└─ native/                      C++ / Rust 高性能组件源码，产物放 native/bin/*.dll
+└─ native/                      C++ / Rust 高性能组件源码，产物放 native/bin/{x64,x86}/*.dll
 ```
 
 ## 运行目录
@@ -21,7 +21,7 @@ SeedToolBox.sln
 ```
 SeedToolBox.exe
 Data/            配置（<模块Id>.json）与日志（Logs/app.log）
-Native/          原生 DLL（由 native/bin 自动复制）
+Native/          原生 DLL，x64/ 与 x86/ 两个子目录（由 native/bin 自动复制）
 Plugins/<名字>/<名字>.dll   外部插件及其依赖
 ```
 
@@ -38,13 +38,13 @@ Plugins/<名字>/<名字>.dll   外部插件及其依赖
 
 | 方式 | 适合 | 做法 |
 |---|---|---|
-| **进程内 DLL** | 调用频繁、要低延迟（搜索索引、图像处理） | 导出 C ABI 函数，DLL 放 `native/bin/`，C# 用 `[DllImport("xxx.dll")]` 调用 |
+| **进程内 DLL** | 调用频繁、要低延迟（搜索索引、图像处理） | 导出 C ABI 函数，DLL 放 `native/bin/x64/` 与 `native/bin/x86/`，C# 用 `[DllImport("xxx.dll")]` 调用 |
 | **独立子进程** | 可能崩溃、要常驻后台、要管理员权限 | 编译成独立 exe，通过命名管道 / 标准输入输出通信 |
 
 约定：
 - 只出 **x64** 版本（主程序固定 x64）。
 - 接口只用 C ABI（`extern "C"` / Rust `#[no_mangle] extern "C"`），字符串统一 UTF-16（`wchar_t*`），内存谁分配谁释放。
-- 启动时 `NativeLibraries.Init()` 已把 `Native/` 加入 DLL 搜索路径，`DllImport` 直接写文件名即可。
+- 启动时 `NativeLibraries.Init()` 已把 `Native/x64` 或 `Native/x86`（按进程位数）加入 DLL 搜索路径，`DllImport` 直接写文件名即可。
 
 ## 内存
 

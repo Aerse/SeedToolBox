@@ -185,6 +185,8 @@ sealed class CaptureWindow : OverlayWindow
         panel.Children.Add(button);
     }
 
+    static readonly FontFamily ToolbarFont = new("Segoe UI Symbol, Segoe UI Emoji, Segoe UI");
+
     /// <summary>Flat button made from a Border, so it never takes keyboard focus from the overlay.</summary>
     Border Button(string glyph, string tip, Action onClick, Brush? foreground = null)
     {
@@ -199,6 +201,8 @@ sealed class CaptureWindow : OverlayWindow
             Child = new TextBlock
             {
                 Text = glyph,
+                // Segoe UI Symbol ships with Win7 (with updates) through Win11, so the glyphs render everywhere
+                FontFamily = ToolbarFont,
                 FontSize = 16,
                 Foreground = foreground ?? new SolidColorBrush(Color.FromRgb(51, 51, 51)),
                 HorizontalAlignment = HorizontalAlignment.Center,

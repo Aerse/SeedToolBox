@@ -18,9 +18,10 @@
     <Resource Include="Assets\pinyin.bin" />
   </ItemGroup>
 
-  <!-- Native DLLs built from /native are copied to the Native folder next to the exe -->
+  <!-- Native DLLs built from /native are copied to Native\x64 and Native\x86 next to the exe -->
   <ItemGroup>
-    <None Include="..\..\native\bin\*.dll" Link="Native\%(Filename)%(Extension)" CopyToOutputDirectory="PreserveNewest" Visible="false" />
+    <None Include="..\..\native\bin\x64\*.dll" Link="Native\x64\%(Filename)%(Extension)" CopyToOutputDirectory="PreserveNewest" Visible="false" />
+    <None Include="..\..\native\bin\x86\*.dll" Link="Native\x86\%(Filename)%(Extension)" CopyToOutputDirectory="PreserveNewest" Visible="false" />
   </ItemGroup>
 
 </Project>
