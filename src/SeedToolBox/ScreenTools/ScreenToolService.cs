@@ -71,7 +71,7 @@ public sealed class ScreenToolService
     static bool CheckOcr()
     {
         if (TextRecognizer.IsAvailable) return true;
-        MessageBox.Show("文字识别需要 Windows 10 或更高版本，并安装至少一种支持 OCR 的语言（设置 → 时间和语言 → 语言）", "SeedToolBox", MessageBoxButton.OK, MessageBoxImage.Warning);
+        MessageBox.Show("文字识别组件加载失败（详见日志）；在 Windows 10 及以上版本可改用系统自带识别，需安装至少一种支持 OCR 的语言（设置 → 时间和语言 → 语言）", "SeedToolBox", MessageBoxButton.OK, MessageBoxImage.Warning);
         return false;
     }
 

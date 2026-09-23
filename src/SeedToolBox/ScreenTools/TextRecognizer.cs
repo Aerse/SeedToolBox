@@ -5,6 +5,7 @@ using System.Runtime.CompilerServices;
 using System.Runtime.InteropServices.WindowsRuntime;
 using System.Text;
 using System.Threading.Tasks;
+using System.Windows;
 using System.Windows.Media;
 using System.Windows.Media.Imaging;
 using SeedToolBox.Core.Services;
@@ -13,26 +14,31 @@ using Windows.Media.Ocr;
 
 namespace SeedToolBox.ScreenTools;
 
-/// <summary>Text recognition with the OCR engine built into Windows 10/11.</summary>
+/// <summary>
+/// Text recognition: PaddleOCR when its runtime loads, otherwise the OCR engine built into Windows 10/11.
+/// Either way the pieces found are laid out again as lines of text.
+/// </summary>
 static class TextRecognizer
 {
-    static bool? _available;
+    static bool? _windowsAvailable;
 
-    /// <summary>False on Windows 7/8 or when no OCR language is installed.</summary>
-    public static bool IsAvailable
+    /// <summary>False only when neither engine works (Windows 7/8 without PaddleOCR, or no OCR language).</summary>
+    public static bool IsAvailable => PaddleOcr.IsAvailable || WindowsAvailable;
+
+    static bool WindowsAvailable
     {
         get
         {
-            if (_available == null)
+            if (_windowsAvailable == null)
             {
-                try { _available = Environment.OSVersion.Version.Major >= 10 && HasLanguages(); }
+                try { _windowsAvailable = Environment.OSVersion.Version.Major >= 10 && HasLanguages(); }
                 catch (Exception ex)
                 {
-                    Log.Error("OCR unavailable", ex);
-                    _available = false;
+                    Log.Error("Windows OCR unavailable", ex);
+                    _windowsAvailable = false;
                 }
             }
-            return _available.Value;
+            return _windowsAvailable.Value;
         }
     }
 
@@ -41,10 +47,17 @@ static class TextRecognizer
     static bool HasLanguages() => OcrEngine.AvailableRecognizerLanguages.Count > 0;
 
     /// <summary>Recognized text, lines separated by CRLF; empty if nothing was found.</summary>
-    public static Task<string> RecognizeAsync(BitmapSource image) => Recognize(image);
+    public static async Task<string> RecognizeAsync(BitmapSource image)
+    {
+        if (!image.IsFrozen && image.CanFreeze) image.Freeze();
+        var pieces = await Task.Run(() => PaddleOcr.IsAvailable ? PaddleOcr.Recognize(image) : null)
+            ?? await RecognizeWithWindows(image);
+        return Layout(pieces);
+    }
 
+    /// <summary>Words, in image pixels.</summary>
     [MethodImpl(MethodImplOptions.NoInlining)]
-    static async Task<string> Recognize(BitmapSource image)
+    static async Task<List<(Rect Box, string Text)>> RecognizeWithWindows(BitmapSource image)
     {
         var engine = OcrEngine.TryCreateFromUserProfileLanguages()
             ?? OcrEngine.TryCreateFromLanguage(OcrEngine.AvailableRecognizerLanguages.First());
@@ -62,33 +75,39 @@ static class TextRecognizer
         source.CopyPixels(pixels, width * 4, 0);
         using var bitmap = SoftwareBitmap.CreateCopyFromBuffer(pixels.AsBuffer(), BitmapPixelFormat.Bgra8, width, height, BitmapAlphaMode.Premultiplied);
         var result = await engine.RecognizeAsync(bitmap);
+        return result.Lines
+            .SelectMany(l => l.Words)
+            .Select(w => (new Rect(w.BoundingRect.X / scale, w.BoundingRect.Y / scale, w.BoundingRect.Width / scale, w.BoundingRect.Height / scale), w.Text))
+            .ToList();
+    }
 
-        var lines = MergeLines(result.Lines);
+    static string Layout(List<(Rect Box, string Text)> pieces)
+    {
+        var lines = MergeLines(pieces);
         // Indentation is measured from the leftmost line, in average character widths
-        double left = lines.Count > 0 ? lines.Min(l => l[0].BoundingRect.X) : 0;
-        double charWidth = lines.Count > 0 ? lines.Average(l => l.Sum(w => w.BoundingRect.Width) / l.Sum(w => w.Text.Length)) : 1;
+        double left = lines.Count > 0 ? lines.Min(l => l[0].Box.X) : 0;
+        double charWidth = lines.Count > 0 ? lines.Average(l => l.Sum(w => w.Box.Width) / l.Sum(w => w.Text.Length)) : 1;
 
         var text = new StringBuilder();
         foreach (var line in lines)
         {
             if (text.Length > 0) text.Append("\r\n");
             // Word boxes are tight and their heights vary with the letters, so measure gaps against the tallest
-            double lineHeight = line.Max(w => w.BoundingRect.Height);
+            double lineHeight = line.Max(w => w.Box.Height);
             var builder = new StringBuilder();
-            int indent = (int)Math.Round((line[0].BoundingRect.X - left) / charWidth);
+            int indent = (int)Math.Round((line[0].Box.X - left) / charWidth);
             if (indent >= 2) builder.Append(' ', indent);
-            OcrWord? previous = null;
+            (Rect Box, string Text)? previous = null;
             foreach (var word in line)
             {
-                // The engine also splits at punctuation ("Math" ".min") and between Chinese characters,
+                // Windows splits at punctuation ("Math" ".min") and between Chinese characters,
                 // so a space goes in only where there is a visible gap
-                if (previous != null)
+                if (previous is { } p)
                 {
-                    var a = previous.BoundingRect;
-                    bool cjk = IsCjk(previous.Text[previous.Text.Length - 1]) || IsCjk(word.Text[0]);
-                    if (word.BoundingRect.X - (a.X + a.Width) > lineHeight * (cjk ? 0.6 : 0.2)) builder.Append(' ');
+                    bool cjk = IsCjk(p.Text[p.Text.Length - 1]) || IsCjk(word.Text[0]);
+                    if (word.Box.X - p.Box.Right > lineHeight * (cjk ? 0.6 : 0.2)) builder.Append(' ');
                 }
-                builder.Append(word.Text);
+                builder.Append(word.Text.Trim());
                 previous = word;
             }
             text.Append(ToHalfWidth(builder.ToString()));
@@ -97,30 +116,28 @@ static class TextRecognizer
     }
 
     /// <summary>
-    /// The engine breaks a line at wide gaps (indentation, spaced-out code) into separate lines;
-    /// lines that share most of their height are put back together, left to right.
+    /// Engines break a line at wide gaps (indentation, spaced-out code) into separate pieces;
+    /// pieces that share most of their height are put back together, left to right.
     /// </summary>
-    static List<List<OcrWord>> MergeLines(IReadOnlyList<OcrLine> lines)
+    static List<List<(Rect Box, string Text)>> MergeLines(List<(Rect Box, string Text)> pieces)
     {
-        var rows = new List<(double Top, double Bottom, List<OcrWord> Words)>();
-        foreach (var line in lines)
+        var rows = new List<(double Top, double Bottom, List<(Rect Box, string Text)> Words)>();
+        foreach (var piece in pieces.Where(p => p.Text.Trim().Length > 0).OrderBy(p => p.Box.Y))
         {
-            if (line.Words.Count == 0) continue;
-            double top = line.Words.Min(w => w.BoundingRect.Y);
-            double bottom = line.Words.Max(w => w.BoundingRect.Y + w.BoundingRect.Height);
+            double top = piece.Box.Top, bottom = piece.Box.Bottom;
             int match = rows.FindIndex(r => Math.Min(r.Bottom, bottom) - Math.Max(r.Top, top) > 0.5 * Math.Min(r.Bottom - r.Top, bottom - top));
             if (match < 0)
             {
-                rows.Add((top, bottom, line.Words.ToList()));
+                rows.Add((top, bottom, new List<(Rect, string)> { piece }));
                 continue;
             }
             var row = rows[match];
-            row.Words.AddRange(line.Words);
+            row.Words.Add(piece);
             rows[match] = (Math.Min(row.Top, top), Math.Max(row.Bottom, bottom), row.Words);
         }
         return rows
             .OrderBy(r => r.Top)
-            .Select(r => r.Words.OrderBy(w => w.BoundingRect.X).ToList())
+            .Select(r => r.Words.OrderBy(w => w.Box.X).ToList())
             .ToList();
     }
 
