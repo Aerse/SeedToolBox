@@ -3,6 +3,7 @@ using System.Windows;
 using System.Windows.Controls;
 using System.Windows.Media;
 using System.Windows.Media.Imaging;
+using SeedToolBox.Views;
 using WinForms = System.Windows.Forms;
 
 namespace SeedToolBox.ScreenTools;
@@ -19,15 +20,14 @@ sealed class QrGeneratorWindow : Window
         TextWrapping = TextWrapping.Wrap,
         VerticalScrollBarVisibility = ScrollBarVisibility.Auto,
         FontSize = 14,
-        Padding = new Thickness(4),
     };
     readonly Image _preview = new() { Stretch = Stretch.Uniform };
-    readonly TextBlock _placeholder = new() { Foreground = Brushes.Gray, HorizontalAlignment = HorizontalAlignment.Center, VerticalAlignment = VerticalAlignment.Center, TextWrapping = TextWrapping.Wrap, TextAlignment = TextAlignment.Center };
+    readonly TextBlock _placeholder = new() { Foreground = DialogWindow.HintBrush, HorizontalAlignment = HorizontalAlignment.Center, VerticalAlignment = VerticalAlignment.Center, TextWrapping = TextWrapping.Wrap, TextAlignment = TextAlignment.Center };
     readonly ComboBox _size = new() { Width = 140, Items = { "小（每格 4 像素）", "中（每格 8 像素）", "大（每格 16 像素）" }, SelectedIndex = 1 };
-    readonly TextBlock _info = new() { Foreground = Brushes.Gray, VerticalAlignment = VerticalAlignment.Center, Margin = new Thickness(8, 0, 0, 0) };
-    readonly Button _copy = new() { Content = "复制图片", Width = 80, IsDefault = true };
-    readonly Button _save = new() { Content = "保存…", Width = 80, Margin = new Thickness(8, 0, 0, 0) };
-    readonly Button _pin = new() { Content = "贴到屏幕", Width = 80, Margin = new Thickness(8, 0, 0, 0) };
+    readonly TextBlock _info = new() { Foreground = DialogWindow.HintBrush, VerticalAlignment = VerticalAlignment.Center, Margin = new Thickness(8, 0, 0, 0) };
+    readonly Button _copy = new() { Content = "复制图片", MinWidth = 88, IsDefault = true };
+    readonly Button _save = new() { Content = "保存…", MinWidth = 88, Margin = new Thickness(8, 0, 0, 0) };
+    readonly Button _pin = new() { Content = "贴到屏幕", MinWidth = 88, Margin = new Thickness(8, 0, 0, 0) };
     BitmapSource? _image;
 
     public QrGeneratorWindow(ScreenToolService service, string text)
@@ -39,21 +39,17 @@ sealed class QrGeneratorWindow : Window
         MinWidth = 480;
         MinHeight = 300;
         WindowStartupLocation = WindowStartupLocation.CenterScreen;
+        DialogWindow.ApplyTheme(this);
+        DialogWindow.StyleMultiline(_input);
 
         RenderOptions.SetBitmapScalingMode(_preview, BitmapScalingMode.NearestNeighbor);
         var left = new DockPanel { Margin = new Thickness(0, 0, 12, 0) };
-        var label = new TextBlock { Text = "输入文字或网址：", Margin = new Thickness(0, 0, 0, 4) };
+        var label = new TextBlock { Text = "输入文字或网址", Margin = new Thickness(0, 0, 0, 6) };
         DockPanel.SetDock(label, Dock.Top);
         left.Children.Add(label);
         left.Children.Add(_input);
 
-        var previewBox = new Border
-        {
-            BorderBrush = new SolidColorBrush(Color.FromRgb(220, 220, 220)),
-            BorderThickness = new Thickness(1),
-            Background = Brushes.White,
-            Child = new Grid { Children = { _preview, _placeholder } },
-        };
+        var previewBox = DialogWindow.Card(new Grid { Margin = new Thickness(8), Children = { _preview, _placeholder } });
 
         var grid = new Grid();
         grid.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(1, GridUnitType.Star) });
@@ -62,15 +58,15 @@ sealed class QrGeneratorWindow : Window
         Grid.SetColumn(previewBox, 1);
         grid.Children.Add(previewBox);
 
-        var close = new Button { Content = "关闭", Width = 80, IsCancel = true, Margin = new Thickness(8, 0, 0, 0) };
+        var close = new Button { Content = "关闭", MinWidth = 88, IsCancel = true, Margin = new Thickness(8, 0, 0, 0) };
         var buttons = new StackPanel { Orientation = Orientation.Horizontal, Children = { _copy, _save, _pin, close } };
         var sizeRow = new StackPanel { Orientation = Orientation.Horizontal, Children = { new TextBlock { Text = "尺寸", VerticalAlignment = VerticalAlignment.Center, Margin = new Thickness(0, 0, 6, 0) }, _size, _info } };
-        var bottom = new DockPanel { Margin = new Thickness(0, 10, 0, 0) };
+        var bottom = new DockPanel { Margin = new Thickness(0, 12, 0, 0) };
         DockPanel.SetDock(buttons, Dock.Right);
         bottom.Children.Add(buttons);
         bottom.Children.Add(sizeRow);
 
-        var root = new DockPanel { Margin = new Thickness(12) };
+        var root = new DockPanel { Margin = new Thickness(16) };
         DockPanel.SetDock(bottom, Dock.Bottom);
         root.Children.Add(bottom);
         root.Children.Add(grid);

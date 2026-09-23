@@ -1,5 +1,6 @@
 using System;
 using System.Collections.Generic;
+using System.Collections.ObjectModel;
 using System.ComponentModel;
 using System.IO;
 using System.Linq;
@@ -11,6 +12,7 @@ using System.Windows.Threading;
 using Microsoft.Win32;
 using SeedToolBox.Core.Native;
 using SeedToolBox.Core.Services;
+using SeedToolBox.Host;
 using SeedToolBox.Launcher;
 using SeedToolBox.Views;
 
@@ -34,9 +36,19 @@ public partial class MainWindow : Window
     DragAdorner? _dragAdorner;
 
     // Search state
-    const double TileSlotWidth = 84; // tile width + margins
+    const double TileSlotWidth = 80; // tile width + margins
     List<LaunchItem> _results = new();
     int _highlight = -1;
+
+    readonly ObservableCollection<ToolCommand> _tools = new();
+
+    // Settings menu, mirroring the tray menu
+    public event Action? HotkeyRequested;
+    public event Action? BackupRequested;
+    public event Action? RestoreRequested;
+    public event Action? OpenAppLocationRequested;
+    public event Action<bool>? AutoStartChanged;
+    public event Action? ExitRequested;
 
     public MainWindow(LauncherData data, ISettingsStore settings)
     {
@@ -50,7 +62,13 @@ public partial class MainWindow : Window
         _saveTimer.Tick += (_, _) => SaveNow();
 
         ApplyWindowSettings();
-        GroupList.SelectionChanged += (_, _) => UpdateEmptyHint();
+        GroupList.SelectionChanged += (_, _) =>
+        {
+            UpdateEmptyHint();
+            UpdateViewButtons();
+        };
+        Tools.ItemsSource = _tools;
+        SourceInitialized += (_, _) => WindowEffects.RoundCorners(this);
         GroupList.SelectedIndex = 0;
 
         LocationChanged += (_, _) => RequestSave();
@@ -174,6 +192,80 @@ public partial class MainWindow : Window
     void OnKeyDown(object sender, KeyEventArgs e)
     {
         if (e.Key == Key.Escape) Hide();
+    }
+
+    void OnSettingsClick(object sender, RoutedEventArgs e)
+    {
+        SettingsMenu.PlacementTarget = SettingsButton;
+        SettingsMenu.IsOpen = true;
+    }
+
+    void OnSettingsMenuOpened(object sender, RoutedEventArgs e)
+    {
+        LockSizeItem.IsChecked = _data.Window.SizeLocked;
+        AutoStartItem.IsChecked = AutoStart.IsEnabled;
+    }
+
+    void OnLockSizeClick(object sender, RoutedEventArgs e) => SetSizeLocked(LockSizeItem.IsChecked);
+    void OnAutoStartClick(object sender, RoutedEventArgs e) => AutoStartChanged?.Invoke(AutoStartItem.IsChecked);
+    void OnHotkeysClick(object sender, RoutedEventArgs e) => HotkeyRequested?.Invoke();
+    void OnBackupClick(object sender, RoutedEventArgs e) => BackupRequested?.Invoke();
+    void OnRestoreClick(object sender, RoutedEventArgs e) => RestoreRequested?.Invoke();
+    void OnAppLocationClick(object sender, RoutedEventArgs e) => OpenAppLocationRequested?.Invoke();
+    void OnExitClick(object sender, RoutedEventArgs e) => ExitRequested?.Invoke();
+
+    #endregion
+
+    #region Tools
+
+    /// <param name="hide">Hide the window first, for tools that work on the screen.</param>
+    public void AddTool(string id, string glyph, string label, Action action, bool hide = true) =>
+        _tools.Add(new ToolCommand(id, glyph, label, hide ? () => HideThen(action) : action));
+
+    public void SetToolHotkey(string id, string hotkey) => _tools.FirstOrDefault(t => t.Id == id)?.SetHotkey(hotkey);
+
+    void HideThen(Action action)
+    {
+        Hide();
+        // Give the window time to disappear from the screen
+        var timer = new DispatcherTimer { Interval = TimeSpan.FromMilliseconds(200) };
+        timer.Tick += (_, _) => { timer.Stop(); action(); };
+        timer.Start();
+    }
+
+    void OnToolClick(object sender, RoutedEventArgs e) => ((ToolCommand)((FrameworkElement)sender).DataContext).Action();
+
+    #endregion
+
+    #region Views
+
+    void UpdateViewButtons()
+    {
+        var view = CurrentGroup?.View;
+        LargeViewButton.IsChecked = view is not (ItemGroup.ViewSmall or ItemGroup.ViewList);
+        SmallViewButton.IsChecked = view == ItemGroup.ViewSmall;
+        ListViewButton.IsChecked = view == ItemGroup.ViewList;
+    }
+
+    void OnViewChecked(object sender, RoutedEventArgs e)
+    {
+        if (CurrentGroup is not { } group) return;
+        var view = (string)((FrameworkElement)sender).Tag;
+        if (group.View == view) return;
+        group.View = view;
+        RequestSave();
+    }
+
+    /// <summary>The wheel over the tabs switches group.</summary>
+    void OnGroupMouseWheel(object sender, MouseWheelEventArgs e)
+    {
+        int index = GroupList.SelectedIndex + (e.Delta < 0 ? 1 : -1);
+        if (index >= 0 && index < _data.Groups.Count)
+        {
+            GroupList.SelectedIndex = index;
+            GroupList.ScrollIntoView(GroupList.SelectedItem);
+        }
+        e.Handled = true;
     }
 
     #endregion
@@ -335,6 +427,7 @@ public partial class MainWindow : Window
         var group = new ItemGroup { Name = name };
         _data.Groups.Add(group);
         GroupList.SelectedItem = group;
+        GroupList.ScrollIntoView(group);
         RequestSave();
     }
 

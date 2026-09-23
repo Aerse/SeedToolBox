@@ -78,7 +78,7 @@ public partial class App : Application
         try { AutoStart.Refresh(); }
         catch (Exception ex) { Log.Error("Failed to refresh autostart entry", ex); }
 
-        _tray = new TrayIcon(data.Window.SizeLocked, AutoStart.IsEnabled);
+        _tray = new TrayIcon(() => data.Window.SizeLocked, () => AutoStart.IsEnabled);
         _tray.ToggleWindowRequested += _main.ToggleVisibility;
         _tray.ShowWindowRequested += _main.ShowAndActivate;
         _tray.OpenAppLocationRequested += () => ProcessLauncher.OpenLocation(ProcessLauncher.ExePath);
@@ -88,6 +88,12 @@ public partial class App : Application
         _tray.BackupRequested += BackupData;
         _tray.RestoreRequested += RestoreData;
         _tray.ExitRequested += ExitApp;
+        _main.OpenAppLocationRequested += () => ProcessLauncher.OpenLocation(ProcessLauncher.ExePath);
+        _main.AutoStartChanged += SetAutoStart;
+        _main.HotkeyRequested += ChangeHotkeys;
+        _main.BackupRequested += BackupData;
+        _main.RestoreRequested += RestoreData;
+        _main.ExitRequested += ExitApp;
 
         var screen = _screenTools = new ScreenToolService(settings);
         _tray.AddCommand("screenshot", "截图", AfterTrayMenu(screen.Screenshot));
@@ -99,6 +105,12 @@ public partial class App : Application
         _tray.AddCommand("qr", "识别二维码", AfterTrayMenu(screen.RecognizeQrCodes));
         _tray.AddCommand("qrscreen", "识别全屏二维码", AfterTrayMenu(screen.ScanQrCodes));
         _tray.AddCommand("qrgen", "生成二维码…", screen.GenerateQrCode);
+        _main.AddTool("screenshot", "\uE7A8", "截图", screen.Screenshot);
+        _main.AddTool("ocr", "\uE8D2", "识字", screen.RecognizeText);
+        _main.AddTool("qr", "\uED14", "扫码", screen.RecognizeQrCodes);
+        _main.AddTool("color", "\uEF3C", "取色", screen.PickColor);
+        _main.AddTool("ruler", "\uED5E", "标尺", screen.Ruler);
+        _main.AddTool("record", "\uE7C8", "录屏", screen.Record);
 
         var main = _main;
         _hotkeys.Add(new HotkeyBinding(TrayIcon.ShowWindowCommand, "呼出主窗口", () => data.Hotkey, v => data.Hotkey = v, main.ToggleFromHotkey));
@@ -114,6 +126,7 @@ public partial class App : Application
         {
             if (!binding.Register(binding.Get())) taken.Add($"{binding.Label} {binding.Get()}");
             _tray.SetShortcutText(binding.Command, binding.Get());
+            _main.SetToolHotkey(binding.Command, binding.Get());
         }
         if (taken.Count > 0)
             _tray.ShowMessage($"热键已被其他程序占用：{string.Join("、", taken)}。可在托盘菜单「热键设置」中更换");
@@ -157,6 +170,7 @@ public partial class App : Application
                 failed.Add($"{binding.Label} {values[i]}");
             }
             _tray!.SetShortcutText(binding.Command, binding.Get());
+            _main!.SetToolHotkey(binding.Command, binding.Get());
         }
         _main!.RequestSave();
         _screenTools!.SaveSettings();

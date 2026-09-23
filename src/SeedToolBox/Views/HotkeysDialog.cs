@@ -13,7 +13,7 @@ public static class HotkeysDialog
     public static string[]? Show(IReadOnlyList<(string Label, string Current)> entries)
     {
         var values = entries.Select(e => e.Current).ToArray();
-        var grid = new Grid { Margin = new Thickness(12, 8, 12, 4) };
+        var grid = new Grid { Margin = new Thickness(4, 4, 4, 8) };
         grid.ColumnDefinitions.Add(new ColumnDefinition { Width = GridLength.Auto });
         grid.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(1, GridUnitType.Star) });
         grid.ColumnDefinitions.Add(new ColumnDefinition { Width = GridLength.Auto });
@@ -32,10 +32,10 @@ public static class HotkeysDialog
                 MinWidth = 200,
                 FontSize = 14,
                 TextAlignment = TextAlignment.Center,
-                Padding = new Thickness(4),
+                Style = DialogWindow.TextBoxStyle,
                 Margin = new Thickness(0, 4, 8, 4),
             };
-            var clear = new Button { Content = "清除", Width = 56, Margin = new Thickness(0, 4, 0, 4) };
+            var clear = new Button { Content = "清除", Margin = new Thickness(0, 4, 0, 4) };
 
             box.PreviewKeyDown += (_, e) =>
             {
@@ -66,29 +66,14 @@ public static class HotkeysDialog
         var hint = new TextBlock
         {
             Text = "点击输入框后直接按下组合键（如 Ctrl+Alt+A、F1）",
-            Foreground = System.Windows.Media.Brushes.Gray,
-            Margin = new Thickness(12, 12, 12, 0),
+            Foreground = (System.Windows.Media.Brush)Application.Current.Resources["SecondaryTextBrush"],
+            Margin = new Thickness(4, 0, 4, 8),
         };
-        var ok = new Button { Content = "确定", IsDefault = true, Width = 72, Margin = new Thickness(0, 0, 8, 0) };
-        var cancel = new Button { Content = "取消", IsCancel = true, Width = 72 };
-        var buttons = new StackPanel
-        {
-            Orientation = Orientation.Horizontal,
-            HorizontalAlignment = HorizontalAlignment.Right,
-            Margin = new Thickness(12, 8, 12, 12),
-            Children = { ok, cancel },
-        };
-
-        var window = new Window
-        {
-            Title = "热键设置",
-            SizeToContent = SizeToContent.WidthAndHeight,
-            ResizeMode = ResizeMode.NoResize,
-            WindowStartupLocation = WindowStartupLocation.CenterScreen,
-            Topmost = true,
-            ShowInTaskbar = false,
-            Content = new StackPanel { Children = { hint, grid, buttons } },
-        };
+        var ok = DialogWindow.OkButton();
+        var cancel = DialogWindow.CancelButton();
+        var window = DialogWindow.Create("热键设置", new StackPanel { Children = { hint, grid } }, ok, cancel);
+        window.WindowStartupLocation = WindowStartupLocation.CenterScreen;
+        window.Topmost = true;
 
         ok.Click += (_, _) =>
         {

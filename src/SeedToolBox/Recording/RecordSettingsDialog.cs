@@ -2,6 +2,7 @@ using System;
 using System.Windows;
 using System.Windows.Controls;
 using SeedToolBox.ScreenTools;
+using SeedToolBox.Views;
 
 namespace SeedToolBox.Recording;
 
@@ -14,7 +15,7 @@ static class RecordSettingsDialog
     /// <summary>Edits the settings in place. Returns false if cancelled.</summary>
     public static bool Show(RecordSettings settings, Window? owner)
     {
-        var grid = new Grid { Margin = new Thickness(16, 12, 16, 4) };
+        var grid = new Grid { Margin = new Thickness(4) };
         grid.ColumnDefinitions.Add(new ColumnDefinition { Width = GridLength.Auto });
         grid.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(1, GridUnitType.Star) });
 
@@ -58,32 +59,18 @@ static class RecordSettingsDialog
         var hint = new TextBlock
         {
             Text = "录屏热键可在托盘菜单「热键设置」中修改；录制中再按一次热键即可停止",
-            Foreground = System.Windows.Media.Brushes.Gray,
+            Foreground = (System.Windows.Media.Brush)Application.Current.Resources["HintTextBrush"],
+            FontSize = 12,
             TextWrapping = TextWrapping.Wrap,
             MaxWidth = 320,
-            Margin = new Thickness(16, 8, 16, 0),
+            Margin = new Thickness(4, 8, 4, 8),
         };
-        var ok = new Button { Content = "确定", IsDefault = true, Width = 72, Margin = new Thickness(0, 0, 8, 0) };
-        var cancel = new Button { Content = "取消", IsCancel = true, Width = 72 };
-        var buttons = new StackPanel
-        {
-            Orientation = Orientation.Horizontal,
-            HorizontalAlignment = HorizontalAlignment.Right,
-            Margin = new Thickness(16, 12, 16, 12),
-            Children = { ok, cancel },
-        };
-
-        var window = new Window
-        {
-            Title = "录屏设置",
-            SizeToContent = SizeToContent.WidthAndHeight,
-            ResizeMode = ResizeMode.NoResize,
-            WindowStartupLocation = owner != null ? WindowStartupLocation.CenterOwner : WindowStartupLocation.CenterScreen,
-            Topmost = true,
-            ShowInTaskbar = false,
-            Owner = owner,
-            Content = new StackPanel { Children = { grid, hint, buttons } },
-        };
+        var ok = DialogWindow.OkButton();
+        var cancel = DialogWindow.CancelButton();
+        var window = DialogWindow.Create("录屏设置", new StackPanel { Children = { grid, hint } }, ok, cancel);
+        window.WindowStartupLocation = owner != null ? WindowStartupLocation.CenterOwner : WindowStartupLocation.CenterScreen;
+        window.Topmost = true;
+        window.Owner = owner;
         ok.Click += (_, _) => window.DialogResult = true;
         window.Loaded += (_, _) => window.Activate();
         if (window.ShowDialog() != true) return false;

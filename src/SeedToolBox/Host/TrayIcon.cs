@@ -30,7 +30,8 @@ public sealed class TrayIcon : IDisposable
 
     public const string ShowWindowCommand = "show";
 
-    public TrayIcon(bool sizeLocked, bool autoStart)
+    /// <param name="sizeLocked">Read each time the menu opens, as the main window can change these too.</param>
+    public TrayIcon(Func<bool> sizeLocked, Func<bool> autoStart)
     {
         _menu = new WinForms.ContextMenuStrip();
         _menu.Items.Add(_commandSeparator);
@@ -38,14 +39,14 @@ public sealed class TrayIcon : IDisposable
         _menu.Items.Add(_moduleSeparator);
         _menu.Items.Add("打开本程序位置", null, (_, _) => OpenAppLocationRequested?.Invoke());
 
-        var lockItem = new WinForms.ToolStripMenuItem("锁定窗体尺寸") { CheckOnClick = true, Checked = sizeLocked };
-        lockItem.CheckedChanged += (_, _) => LockSizeChanged?.Invoke(lockItem.Checked);
+        var lockItem = new WinForms.ToolStripMenuItem("锁定窗体尺寸") { CheckOnClick = true };
+        lockItem.Click += (_, _) => LockSizeChanged?.Invoke(lockItem.Checked);
         _menu.Items.Add(lockItem);
 
         _menu.Items.Add("热键设置...", null, (_, _) => HotkeyRequested?.Invoke());
 
-        var autoStartItem = new WinForms.ToolStripMenuItem("开机自启") { CheckOnClick = true, Checked = autoStart };
-        autoStartItem.CheckedChanged += (_, _) => AutoStartChanged?.Invoke(autoStartItem.Checked);
+        var autoStartItem = new WinForms.ToolStripMenuItem("开机自启") { CheckOnClick = true };
+        autoStartItem.Click += (_, _) => AutoStartChanged?.Invoke(autoStartItem.Checked);
         _menu.Items.Add(autoStartItem);
 
         _menu.Items.Add("备份数据...", null, (_, _) => BackupRequested?.Invoke());
@@ -53,6 +54,13 @@ public sealed class TrayIcon : IDisposable
 
         _menu.Items.Add(new WinForms.ToolStripSeparator());
         _menu.Items.Add("退出", null, (_, _) => ExitRequested?.Invoke());
+        _menu.Opening += (_, _) =>
+        {
+            lockItem.Checked = sizeLocked();
+            autoStartItem.Checked = autoStart();
+        };
+
+        FluentMenuRenderer.Apply(_menu);
 
         _notifyIcon = new WinForms.NotifyIcon
         {

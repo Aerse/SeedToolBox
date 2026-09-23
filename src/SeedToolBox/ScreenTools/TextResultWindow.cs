@@ -7,6 +7,7 @@ using System.Windows.Input;
 using System.Windows.Media;
 using System.Windows.Media.Imaging;
 using SeedToolBox.Launcher;
+using SeedToolBox.Views;
 
 namespace SeedToolBox.ScreenTools;
 
@@ -19,10 +20,9 @@ sealed class TextResultWindow : Window
         TextWrapping = TextWrapping.Wrap,
         VerticalScrollBarVisibility = ScrollBarVisibility.Auto,
         FontSize = 14,
-        Padding = new Thickness(4),
     };
-    readonly TextBlock _status = new() { VerticalAlignment = VerticalAlignment.Center, Foreground = Brushes.Gray };
-    readonly Button _copy = new() { Content = "复制", Width = 80, IsDefault = true };
+    readonly TextBlock _status = new() { VerticalAlignment = VerticalAlignment.Center, Foreground = DialogWindow.HintBrush };
+    readonly Button _copy = new() { Content = "复制", MinWidth = 88, IsDefault = true };
     readonly StackPanel _links = new() { Orientation = Orientation.Horizontal };
 
     public TextResultWindow(string title, BitmapSource? image)
@@ -34,10 +34,12 @@ sealed class TextResultWindow : Window
         MinHeight = 240;
         WindowStartupLocation = WindowStartupLocation.CenterScreen;
         Topmost = true;
+        DialogWindow.ApplyTheme(this);
+        DialogWindow.StyleMultiline(_text);
 
-        var close = new Button { Content = "关闭", Width = 80, IsCancel = true, Margin = new Thickness(8, 0, 0, 0) };
+        var close = new Button { Content = "关闭", MinWidth = 88, IsCancel = true, Margin = new Thickness(8, 0, 0, 0) };
         var buttons = new StackPanel { Orientation = Orientation.Horizontal, Children = { _copy, close } };
-        var bottom = new DockPanel { Margin = new Thickness(0, 10, 0, 0) };
+        var bottom = new DockPanel { Margin = new Thickness(0, 12, 0, 0) };
         DockPanel.SetDock(buttons, Dock.Right);
         DockPanel.SetDock(_links, Dock.Left);
         bottom.Children.Add(buttons);
@@ -49,19 +51,15 @@ sealed class TextResultWindow : Window
         {
             grid.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(2, GridUnitType.Star) });
             grid.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(3, GridUnitType.Star) });
-            var preview = new Border
-            {
-                Background = new SolidColorBrush(Color.FromRgb(240, 240, 240)),
-                Margin = new Thickness(0, 0, 10, 0),
-                // Never enlarged, so small captures stay crisp
-                Child = new Image { Source = image, Stretch = Stretch.Uniform, StretchDirection = StretchDirection.DownOnly, VerticalAlignment = VerticalAlignment.Top },
-            };
+            // Never enlarged, so small captures stay crisp
+            var preview = DialogWindow.Card(new Image { Source = image, Stretch = Stretch.Uniform, StretchDirection = StretchDirection.DownOnly, VerticalAlignment = VerticalAlignment.Top, Margin = new Thickness(8) });
+            preview.Margin = new Thickness(0, 0, 12, 0);
             grid.Children.Add(preview);
             Grid.SetColumn(_text, 1);
         }
         grid.Children.Add(_text);
 
-        var root = new DockPanel { Margin = new Thickness(12) };
+        var root = new DockPanel { Margin = new Thickness(16) };
         DockPanel.SetDock(bottom, Dock.Bottom);
         root.Children.Add(bottom);
         root.Children.Add(grid);
@@ -107,7 +105,6 @@ sealed class TextResultWindow : Window
             {
                 Content = list.Count == 1 ? "打开链接" : $"打开链接 {i + 1}",
                 ToolTip = link,
-                Padding = new Thickness(8, 2, 8, 2),
                 Margin = new Thickness(0, 0, 8, 0),
             };
             open.Click += (_, _) => ProcessLauncher.Start(link);
@@ -119,7 +116,7 @@ sealed class TextResultWindow : Window
     {
         Cursor = null;
         _status.Text = message;
-        _status.Foreground = Brushes.Firebrick;
+        _status.Foreground = (Brush)Application.Current.Resources["DangerBrush"];
     }
 
     public static bool IsLink(string text) =>

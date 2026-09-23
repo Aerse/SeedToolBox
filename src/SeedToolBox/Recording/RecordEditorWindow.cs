@@ -12,6 +12,7 @@ using Microsoft.Win32;
 using SeedToolBox.Core.Services;
 using SeedToolBox.Launcher;
 using SeedToolBox.ScreenTools;
+using SeedToolBox.Views;
 
 namespace SeedToolBox.Recording;
 
@@ -24,19 +25,19 @@ sealed class RecordEditorWindow : Window
     readonly MediaElement _media = new() { LoadedBehavior = MediaState.Manual, UnloadedBehavior = MediaState.Manual, ScrubbingEnabled = true, Stretch = Stretch.Uniform };
     readonly TrimBar _trim;
     readonly DispatcherTimer _timer = new() { Interval = TimeSpan.FromMilliseconds(30) };
-    readonly Button _play = new() { Content = "▶", Width = 40, FontFamily = new FontFamily("Segoe UI Symbol, Segoe UI"), ToolTip = "播放 / 暂停 (空格)" };
+    readonly Button _play = new() { Content = "\uE768", Width = 40, FontFamily = new FontFamily("Segoe Fluent Icons, Segoe MDL2 Assets"), ToolTip = "播放 / 暂停 (空格)" };
     readonly TextBlock _position = new() { VerticalAlignment = VerticalAlignment.Center, Margin = new Thickness(10, 0, 0, 0), MinWidth = 150 };
-    readonly TextBlock _range = new() { VerticalAlignment = VerticalAlignment.Center, Foreground = Brushes.DimGray };
+    readonly TextBlock _range = new() { VerticalAlignment = VerticalAlignment.Center, Foreground = DialogWindow.HintBrush };
     readonly RadioButton _mp4 = new() { Content = "MP4 视频", GroupName = "format", VerticalAlignment = VerticalAlignment.Center, Margin = new Thickness(0, 0, 12, 0) };
     readonly RadioButton _gif = new() { Content = "GIF 动图", GroupName = "format", VerticalAlignment = VerticalAlignment.Center, Margin = new Thickness(0, 0, 12, 0) };
     readonly ComboBox _gifFps = new() { Width = 80, Margin = new Thickness(4, 0, 12, 0) };
     readonly ComboBox _gifScale = new() { Width = 80, Margin = new Thickness(4, 0, 0, 0) };
     readonly StackPanel _gifOptions = new() { Orientation = Orientation.Horizontal };
-    readonly ProgressBar _progress = new() { Width = 160, Height = 14, Maximum = 1, Visibility = Visibility.Collapsed, Margin = new Thickness(0, 0, 8, 0) };
+    readonly ProgressBar _progress = new() { Width = 160, Height = 4, Maximum = 1, Visibility = Visibility.Collapsed, Margin = new Thickness(0, 0, 8, 0) };
     readonly TextBlock _status = new() { VerticalAlignment = VerticalAlignment.Center, TextTrimming = TextTrimming.CharacterEllipsis };
-    readonly Button _openFolder = new() { Content = "打开所在文件夹", Padding = new Thickness(8, 2, 8, 2), Margin = new Thickness(8, 0, 0, 0), Visibility = Visibility.Collapsed };
-    readonly Button _save = new() { Content = "导出…", Width = 80, IsDefault = true };
-    readonly Button _cancel = new() { Content = "取消导出", Width = 80, Margin = new Thickness(8, 0, 0, 0), Visibility = Visibility.Collapsed };
+    readonly Button _openFolder = new() { Content = "打开所在文件夹", Margin = new Thickness(8, 0, 0, 0), Visibility = Visibility.Collapsed };
+    readonly Button _save = new() { Content = "导出…", MinWidth = 88, IsDefault = true };
+    readonly Button _cancel = new() { Content = "取消导出", MinWidth = 88, Margin = new Thickness(8, 0, 0, 0), Visibility = Visibility.Collapsed };
     readonly Panel _controls;
 
     bool _playing, _saved, _closeAfterExport;
@@ -57,6 +58,7 @@ sealed class RecordEditorWindow : Window
         MinWidth = 640;
         MinHeight = 420;
         WindowStartupLocation = WindowStartupLocation.CenterScreen;
+        DialogWindow.ApplyTheme(this);
 
         _trim = new TrimBar(clip.Duration) { Height = 36, Margin = new Thickness(0, 8, 0, 4) };
         _trim.Seeked += SeekTo;
@@ -107,10 +109,11 @@ sealed class RecordEditorWindow : Window
         var hint = new TextBlock
         {
             Text = "拖动时间轴两端的滑块裁剪首尾，点击时间轴定位预览",
-            Foreground = Brushes.Gray,
+            Foreground = DialogWindow.HintBrush,
+            FontSize = 12,
             Margin = new Thickness(0, 0, 0, 2),
         };
-        var root = new DockPanel { Margin = new Thickness(12) };
+        var root = new DockPanel { Margin = new Thickness(16) };
         var lower = new StackPanel();
         _controls = new StackPanel { Children = { hint, _trim, playRow, formatRow } };
         lower.Children.Add(_controls);
@@ -172,7 +175,7 @@ sealed class RecordEditorWindow : Window
         _playing = true;
         _media.Play();
         _timer.Start();
-        _play.Content = "⏸";
+        _play.Content = "\uE769";
     }
 
     void Pause()
@@ -180,7 +183,7 @@ sealed class RecordEditorWindow : Window
         _playing = false;
         _media.Pause();
         _timer.Stop();
-        _play.Content = "▶";
+        _play.Content = "\uE768";
     }
 
     void SeekTo(long time)

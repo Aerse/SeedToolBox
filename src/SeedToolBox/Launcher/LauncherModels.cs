@@ -76,6 +76,13 @@ public class ItemGroup : ObservableObject
     public string Name { get => _name; set => Set(ref _name, value); }
     public ObservableCollection<LaunchItem> Items { get; set; } = new();
 
+    string _view = ViewLarge;
+
+    public const string ViewLarge = "Large", ViewSmall = "Small", ViewList = "List";
+
+    /// <summary>How the items are shown: <see cref="ViewLarge"/>, <see cref="ViewSmall"/> or <see cref="ViewList"/>.</summary>
+    public string View { get => _view; set => Set(ref _view, value); }
+
     bool _isDragging;
 
     /// <summary>True while this entry is being dragged (shown faded in place).</summary>
@@ -93,8 +100,8 @@ public class WindowSettings
 {
     public double? Left { get; set; }
     public double? Top { get; set; }
-    public double Width { get; set; } = 440;
-    public double Height { get; set; } = 620;
+    public double Width { get; set; } = 420;
+    public double Height { get; set; } = 600;
     public bool SizeLocked { get; set; }
 }
 
