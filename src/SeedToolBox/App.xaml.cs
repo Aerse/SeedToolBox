@@ -22,6 +22,7 @@ public partial class App : Application
     Mutex? _mutex;
     TrayIcon? _tray;
     MainWindow? _main;
+    ToolboxWindow? _toolbox;
     LauncherData? _data;
     ScreenToolService? _screenTools;
     Clips.ClipboardHistory? _clipboard;
@@ -76,6 +77,9 @@ public partial class App : Application
 
         _data = data;
         _main = new MainWindow(data, settings);
+        var main = _main;
+        var toolbox = _toolbox = new ToolboxWindow(data, main.RequestSave, RunHidden);
+        main.ToolboxRequested += () => toolbox.ShowAndActivate();
 
         try { AutoStart.Refresh(); }
         catch (Exception ex) { Log.Error("Failed to refresh autostart entry", ex); }
@@ -83,26 +87,27 @@ public partial class App : Application
         _tray = new TrayIcon();
         _tray.ToggleWindowRequested += _main.ToggleVisibility;
         _tray.ShowWindowRequested += _main.ShowAndActivate;
-        _tray.SettingsRequested += () => { _main.ShowPage("settings"); _main.ShowAndActivate(); };
+        _tray.SettingsRequested += () => toolbox.ShowAndActivate("settings");
         _tray.ExitRequested += ExitApp;
 
         var screen = _screenTools = new ScreenToolService(settings);
         _tray.AddCommand("screenshot", "截图", AfterTrayMenu(screen.Screenshot));
         _tray.AddCommand("ocr", "识别文字", AfterTrayMenu(screen.RecognizeText));
         _tray.AddCommand("record", "录屏", AfterTrayMenu(screen.Record));
-        _main.AddTool("screenshot", "\uE7A8", "截图", screen.Screenshot);
-        _main.AddTool("ocr", "\uE8D2", "识字", screen.RecognizeText);
-        _main.AddTool("qr", "\uED14", "扫码", screen.RecognizeQrCodes);
-        _main.AddTool("qrscreen", "\uE740", "全屏扫码", screen.ScanQrCodes);
-        _main.AddTool("qrgen", "\uE72D", "生成二维码", screen.GenerateQrCode, hide: false);
-        _main.AddTool("color", "\uEF3C", "取色", screen.PickColor);
-        _main.AddTool("ruler", "\uED5E", "标尺", screen.Ruler);
-        _main.AddTool("record", "\uE7C8", "录屏", screen.Record);
+        toolbox.AddTool("screenshot", "\uE7A8", "截图", screen.Screenshot);
+        toolbox.AddTool("ocr", "\uE8D2", "识字", screen.RecognizeText);
+        toolbox.AddTool("qr", "\uED14", "扫码", screen.RecognizeQrCodes);
+        toolbox.AddTool("qrscreen", "\uE740", "全屏扫码", screen.ScanQrCodes);
+        toolbox.AddTool("qrgen", "\uE72D", "生成二维码", screen.GenerateQrCode, hide: false);
+        toolbox.AddTool("color", "\uEF3C", "取色", screen.PickColor);
+        toolbox.AddTool("ruler", "\uED5E", "标尺", screen.Ruler);
+        toolbox.AddTool("record", "\uE7C8", "录屏", screen.Record);
         var clipboard = _clipboard = new Clips.ClipboardHistory(settings);
         Action showClipboard = () => (_clipboardWindow ??= new Clips.ClipboardWindow(clipboard)).ShowAtCursor();
         _tray.AddCommand("clipboard", "剪贴板历史", showClipboard);
-        _main.AddPage("clipboard", "\uE77F", "剪贴板", () => new Clips.ClipboardPage(clipboard));
-        _main.AddFooterPage("settings", "\uE713", "设置", () => new SettingsPage(new SettingsPage.Options
+        _tray.AddCommand("toolbox", "工具箱", () => toolbox.ShowAndActivate());
+        toolbox.AddPage("clipboard", "\uE77F", "剪贴板", () => new Clips.ClipboardPage(clipboard));
+        toolbox.AddFooterPage("settings", "\uE713", "设置", () => new SettingsPage(new SettingsPage.Options
         {
             SizeLocked = () => data.Window.SizeLocked,
             SetSizeLocked = _main.SetSizeLocked,
@@ -120,14 +125,13 @@ public partial class App : Application
             OpenApp = () => ProcessLauncher.OpenLocation(ProcessLauncher.ExePath),
         }));
 
-        var main = _main;
         _hotkeys.Add(new HotkeyBinding(TrayIcon.ShowWindowCommand, "呼出主窗口", () => data.Hotkey, v => data.Hotkey = v, main.ToggleFromHotkey));
-        _hotkeys.Add(new HotkeyBinding("screenshot", "截图", () => screen.Settings.ScreenshotHotkey, v => screen.Settings.ScreenshotHotkey = v, () => main.RunHidden(screen.Screenshot)));
-        _hotkeys.Add(new HotkeyBinding("color", "取色", () => screen.Settings.ColorPickerHotkey, v => screen.Settings.ColorPickerHotkey = v, () => main.RunHidden(screen.PickColor)));
-        _hotkeys.Add(new HotkeyBinding("ruler", "屏幕标尺", () => screen.Settings.RulerHotkey, v => screen.Settings.RulerHotkey = v, () => main.RunHidden(screen.Ruler)));
-        _hotkeys.Add(new HotkeyBinding("record", "录屏", () => screen.Settings.RecordHotkey, v => screen.Settings.RecordHotkey = v, () => main.RunHidden(screen.Record)));
-        _hotkeys.Add(new HotkeyBinding("ocr", "识别文字", () => screen.Settings.OcrHotkey, v => screen.Settings.OcrHotkey = v, () => main.RunHidden(screen.RecognizeText)));
-        _hotkeys.Add(new HotkeyBinding("qr", "识别二维码", () => screen.Settings.QrHotkey, v => screen.Settings.QrHotkey = v, () => main.RunHidden(screen.RecognizeQrCodes)));
+        _hotkeys.Add(new HotkeyBinding("screenshot", "截图", () => screen.Settings.ScreenshotHotkey, v => screen.Settings.ScreenshotHotkey = v, () => RunHidden(screen.Screenshot)));
+        _hotkeys.Add(new HotkeyBinding("color", "取色", () => screen.Settings.ColorPickerHotkey, v => screen.Settings.ColorPickerHotkey = v, () => RunHidden(screen.PickColor)));
+        _hotkeys.Add(new HotkeyBinding("ruler", "屏幕标尺", () => screen.Settings.RulerHotkey, v => screen.Settings.RulerHotkey = v, () => RunHidden(screen.Ruler)));
+        _hotkeys.Add(new HotkeyBinding("record", "录屏", () => screen.Settings.RecordHotkey, v => screen.Settings.RecordHotkey = v, () => RunHidden(screen.Record)));
+        _hotkeys.Add(new HotkeyBinding("ocr", "识别文字", () => screen.Settings.OcrHotkey, v => screen.Settings.OcrHotkey = v, () => RunHidden(screen.RecognizeText)));
+        _hotkeys.Add(new HotkeyBinding("qr", "识别二维码", () => screen.Settings.QrHotkey, v => screen.Settings.QrHotkey = v, () => RunHidden(screen.RecognizeQrCodes)));
         _hotkeys.Add(new HotkeyBinding("clipboard", "剪贴板历史", () => clipboard.Settings.Hotkey, v => clipboard.Settings.Hotkey = v, showClipboard));
 
         var taken = new List<string>();
@@ -135,7 +139,7 @@ public partial class App : Application
         {
             if (!binding.Register(binding.Get())) taken.Add($"{binding.Label} {binding.Get()}");
             _tray.SetShortcutText(binding.Command, binding.Get());
-            _main.SetToolHotkey(binding.Command, binding.Get());
+            toolbox.SetToolHotkey(binding.Command, binding.Get());
         }
         if (taken.Count > 0)
             _tray.ShowMessage($"热键已被其他程序占用：{string.Join("、", taken)}。可在「设置」页中更换");
@@ -148,6 +152,23 @@ public partial class App : Application
 
         if (!e.Args.Contains(AutoStart.BackgroundArg))
             _main.Show();
+    }
+
+    /// <summary>Starts a screen tool, first hiding the app's windows so they stay out of the capture.</summary>
+    void RunHidden(Action action)
+    {
+        bool hid = false;
+        foreach (var window in new Window?[] { _main, _toolbox })
+        {
+            if (window is not { IsVisible: true } || window.WindowState == WindowState.Minimized) continue;
+            window.Hide();
+            hid = true;
+        }
+        if (!hid) { action(); return; }
+        // Give the windows time to disappear from the screen
+        var timer = new DispatcherTimer { Interval = TimeSpan.FromMilliseconds(200) };
+        timer.Tick += (_, _) => { timer.Stop(); action(); };
+        timer.Start();
     }
 
     /// <summary>Waits for the tray menu to close so it isn't in the screenshot.</summary>
@@ -172,8 +193,8 @@ public partial class App : Application
         }
         binding.Set(value);
         _tray!.SetShortcutText(binding.Command, value);
-        _main!.SetToolHotkey(binding.Command, value);
-        _main.RequestSave();
+        _toolbox!.SetToolHotkey(binding.Command, value);
+        _main!.RequestSave();
         _screenTools!.SaveSettings();
         _clipboard?.SaveSettings();
         return null;
@@ -230,6 +251,7 @@ public partial class App : Application
         // Nothing may be saved from here on, or the restored files would be overwritten with the old data
         Log.Info($"Restored from {dialog.FileName}, restarting");
         _main.PrepareExit(false);
+        _toolbox?.PrepareExit();
         _mutex?.ReleaseMutex();
         _mutex?.Dispose();
         _mutex = null;
@@ -270,6 +292,7 @@ public partial class App : Application
     void ExitApp()
     {
         _main?.PrepareExit();
+        _toolbox?.PrepareExit();
         Shutdown();
     }
 

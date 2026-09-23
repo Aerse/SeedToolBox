@@ -2,17 +2,20 @@ using System;
 using System.Collections.Generic;
 using System.Linq;
 using System.Windows;
+using System.ComponentModel;
+using System.Collections.ObjectModel;
 using System.Windows.Controls;
+using System.Windows.Input;
 using System.Windows.Media;
 using SeedToolBox.DevTools;
+using SeedToolBox.Launcher;
+using SeedToolBox.Views;
 
 namespace SeedToolBox;
 
-/// <summary>The sidebar and page switching; the launcher itself lives in MainWindow.xaml.cs.</summary>
-public partial class MainWindow
+/// <summary>Everything besides the launcher: screen tools, clipboard history, developer tools and settings, behind a sidebar.</summary>
+public partial class ToolboxWindow : Window
 {
-    /// <summary>Current layout version, see <see cref="Launcher.WindowSettings.Layout"/>.</summary>
-    const int LayoutVersion = 2;
     const double NavWidth = 200, NavCollapsedWidth = 56;
 
     sealed class Page(string id, string group, string glyph, string name, Func<FrameworkElement>? create)
@@ -26,7 +29,6 @@ public partial class MainWindow
 
     readonly List<Page> _pages = new()
     {
-        new("launcher", "", "\uE80F", "启动器", null),
         new("tools", "", "\uE7A8", "屏幕工具", null),
         new("format", "格式与编码", "\uE943", "代码格式化", () => new FormatPage()),
         new("convert", "格式与编码", "\uE9D5", "数据格式互转", () => new DataConvertPage()),
@@ -52,14 +54,60 @@ public partial class MainWindow
     readonly Dictionary<string, FrameworkElement> _created = new();
     readonly List<TextBlock> _navTexts = new();
     readonly List<FrameworkElement> _navCaptions = new();
+    readonly ObservableCollection<ToolCommand> _tools = new();
+    readonly LauncherData _data;
+    readonly Action _requestSave;
+    readonly Action<Action> _runHidden;
+    bool _exiting;
+
+    /// <param name="runHidden">Hides the app's windows, then runs a screen tool.</param>
+    public ToolboxWindow(LauncherData data, Action requestSave, Action<Action> runHidden)
+    {
+        InitializeComponent();
+        _data = data;
+        _requestSave = requestSave;
+        _runHidden = runHidden;
+        Tools.ItemsSource = _tools;
+        SourceInitialized += (_, _) => WindowEffects.RoundCorners(this);
+        BuildNav();
+        Loaded += (_, _) => { if (NavList.SelectedItem != null) NavList.ScrollIntoView(NavList.SelectedItem); };
+        PreviewKeyDown += (_, e) => { if (e.Key == Key.Escape && Keyboard.FocusedElement is not TextBox) Hide(); };
+    }
+
+    /// <summary>Shows the window, optionally on a given page.</summary>
+    public void ShowAndActivate(string? page = null)
+    {
+        if (page != null) ShowPage(page);
+        Show();
+        if (WindowState == WindowState.Minimized) WindowState = WindowState.Normal;
+        Activate();
+    }
+
+    public void PrepareExit() => _exiting = true;
+
+    void OnClosing(object? sender, CancelEventArgs e)
+    {
+        if (_exiting) return;
+        // Keep the pages (and what was typed in them) for next time
+        e.Cancel = true;
+        Hide();
+    }
+
+    void OnCloseClick(object sender, RoutedEventArgs e) => Hide();
+
+    /// <param name="hide">Hide the windows first, for tools that work on the screen.</param>
+    public void AddTool(string id, string glyph, string label, Action action, bool hide = true) =>
+        _tools.Add(new ToolCommand(id, glyph, label, hide ? () => _runHidden(action) : action));
+
+    public void SetToolHotkey(string id, string hotkey) => _tools.FirstOrDefault(t => t.Id == id)?.SetHotkey(hotkey);
+
+    void OnToolClick(object sender, RoutedEventArgs e) => ((ToolCommand)((FrameworkElement)sender).DataContext).Action();
 
     const string FooterGroup = "footer";
 
-    string CurrentPage => (NavList.SelectedItem ?? FooterList.SelectedItem) is ListBoxItem { Tag: Page p } ? p.Id : "launcher";
-
     bool _buildingNav;
 
-    /// <summary>Adds a top-level page (below the launcher and screen tools) for a feature owned by the app.</summary>
+    /// <summary>Adds a top-level page (below the screen tools) for a feature owned by the app.</summary>
     public void AddPage(string id, string glyph, string name, Func<FrameworkElement> create)
     {
         _pages.Insert(_pages.FindLastIndex(p => p.Group == "") + 1, new Page(id, "", glyph, name, create));
@@ -125,7 +173,7 @@ public partial class MainWindow
         _buildingNav = false;
     }
 
-    /// <summary>Switches to a page by id; unknown ids fall back to the launcher.</summary>
+    /// <summary>Switches to a page by id; unknown ids fall back to the first page.</summary>
     public void ShowPage(string id)
     {
         var items = NavList.Items.OfType<ListBoxItem>().Concat(FooterList.Items.OfType<ListBoxItem>());
@@ -138,7 +186,6 @@ public partial class MainWindow
         if (((ListBox)sender).SelectedItem is not ListBoxItem { Tag: Page page }) return;
         // The two lists act as one: selecting in one clears the other
         (sender == NavList ? FooterList : NavList).SelectedItem = null;
-        LauncherView.Visibility = page.Id == "launcher" ? Visibility.Visible : Visibility.Collapsed;
         ToolsView.Visibility = page.Id == "tools" ? Visibility.Visible : Visibility.Collapsed;
         PageHost.Visibility = page.Create != null ? Visibility.Visible : Visibility.Collapsed;
         if (page.Create != null)
@@ -150,7 +197,7 @@ public partial class MainWindow
         if (!_buildingNav && _data.Window.LastPage != page.Id)
         {
             _data.Window.LastPage = page.Id;
-            RequestSave();
+            _requestSave();
         }
     }
 
@@ -158,7 +205,7 @@ public partial class MainWindow
     {
         _data.Window.NavCollapsed = !_data.Window.NavCollapsed;
         ApplyNavCollapsed();
-        RequestSave();
+        _requestSave();
     }
 
     void ApplyNavCollapsed()
@@ -174,60 +221,5 @@ public partial class MainWindow
         CollapseButton.Content = collapsed ? "\uE76C" : "\uE76B";
         CollapseButton.ToolTip = collapsed ? "展开侧边栏" : "收起侧边栏";
         System.Windows.Automation.AutomationProperties.SetName(CollapseButton, (string)CollapseButton.ToolTip);
-    }
-
-    sealed class Feature
-    {
-        public Feature(string glyph, string name, Action open)
-        {
-            Glyph = glyph;
-            Name = name;
-            Open = open;
-        }
-
-        public string Glyph { get; }
-        public string Name { get; }
-        public Action Open { get; }
-    }
-
-    List<Feature> _features = new();
-
-    /// <summary>Lists the pages and screen tools matching the launcher search, so it doubles as a global search.</summary>
-    void UpdateFeatureResults(string query)
-    {
-        var candidates = _pages.Where(p => p.Id != "launcher")
-            .Select(p => (p.Glyph, p.Name, Open: (Action)(() => ShowPage(p.Id))))
-            .Concat(_tools.Select(t => (t.Glyph, Name: t.Label, Open: t.Action)));
-        _features = query.Length == 0 ? new List<Feature>() : candidates
-            .Select(c => (c, score: Launcher.ItemSearch.Match(c.Name, query)))
-            .Where(x => x.score >= 0)
-            .OrderBy(x => x.score)
-            .Take(8)
-            .Select(x => new Feature(x.c.Glyph, x.c.Name, () => { SearchBox.Clear(); x.c.Open(); }))
-            .ToList();
-
-        FeatureResults.Children.Clear();
-        var iconFont = (FontFamily)FindResource("IconFont");
-        foreach (var f in _features)
-        {
-            var button = new Button
-            {
-                Margin = new Thickness(0, 0, 8, 8),
-                Padding = new Thickness(10, 5, 12, 5),
-                ToolTip = "打开功能：" + f.Name,
-                Content = new StackPanel
-                {
-                    Orientation = Orientation.Horizontal,
-                    Children =
-                    {
-                        new TextBlock { Text = f.Glyph, FontFamily = iconFont, FontSize = 14, Foreground = (Brush)FindResource("AccentBrush"), VerticalAlignment = VerticalAlignment.Center, Margin = new Thickness(0, 0, 8, 0) },
-                        new TextBlock { Text = f.Name, VerticalAlignment = VerticalAlignment.Center },
-                    },
-                },
-            };
-            button.Click += (_, _) => f.Open();
-            FeatureResults.Children.Add(button);
-        }
-        FeatureResults.Visibility = _features.Count > 0 ? Visibility.Visible : Visibility.Collapsed;
     }
 }

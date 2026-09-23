@@ -20,6 +20,9 @@ namespace SeedToolBox;
 
 public partial class MainWindow : Window
 {
+    /// <summary>Current layout version, see <see cref="WindowSettings.Layout"/>.</summary>
+    const int LayoutVersion = 3;
+
     readonly LauncherData _data;
     readonly ISettingsStore _settings;
     readonly DispatcherTimer _saveTimer;
@@ -40,8 +43,6 @@ public partial class MainWindow : Window
     List<LaunchItem> _results = new();
     int _highlight = -1;
 
-    readonly ObservableCollection<ToolCommand> _tools = new();
-
     public MainWindow(LauncherData data, ISettingsStore settings)
     {
         InitializeComponent();
@@ -59,11 +60,8 @@ public partial class MainWindow : Window
             UpdateEmptyHint();
             UpdateViewButtons();
         };
-        Tools.ItemsSource = _tools;
         SourceInitialized += (_, _) => WindowEffects.RoundCorners(this);
         GroupList.SelectedIndex = 0;
-        BuildNav();
-        Loaded += (_, _) => { if (NavList.SelectedItem != null) NavList.ScrollIntoView(NavList.SelectedItem); };
 
         LocationChanged += (_, _) => RequestSave();
         SizeChanged += (_, _) => RequestSave();
@@ -87,11 +85,14 @@ public partial class MainWindow : Window
         var w = _data.Window;
         if (w.Layout < LayoutVersion)
         {
-            // The window gained a sidebar; the old launcher-only size is too small
+            // Layout 2 had a sidebar and a wide window; the tools have since moved to the toolbox window
+            if (w.Layout == 2)
+            {
+                w.Width = 460;
+                w.Height = 640;
+                w.Left = w.Top = null;
+            }
             w.Layout = LayoutVersion;
-            w.Width = Math.Max(w.Width, 1000);
-            w.Height = Math.Max(w.Height, 680);
-            w.Left = w.Top = null;
         }
         Width = w.Width;
         Height = w.Height;
@@ -126,7 +127,6 @@ public partial class MainWindow : Window
         Show();
         if (WindowState == WindowState.Minimized) WindowState = WindowState.Normal;
         Activate();
-        if (CurrentPage != "launcher") return;
         SearchBox.Focus();
         SearchBox.SelectAll();
     }
@@ -199,33 +199,10 @@ public partial class MainWindow : Window
 
     #endregion
 
-    #region Tools
+    /// <summary>The title bar button that opens the toolbox window.</summary>
+    public event Action? ToolboxRequested;
 
-    /// <param name="hide">Hide the window first, for tools that work on the screen.</param>
-    public void AddTool(string id, string glyph, string label, Action action, bool hide = true) =>
-        _tools.Add(new ToolCommand(id, glyph, label, hide ? () => HideThen(action) : action));
-
-    public void SetToolHotkey(string id, string hotkey) => _tools.FirstOrDefault(t => t.Id == id)?.SetHotkey(hotkey);
-
-    /// <summary>For screen tools started by hotkey: keeps the main window out of the capture.</summary>
-    public void RunHidden(Action action)
-    {
-        if (IsVisible && WindowState != WindowState.Minimized) HideThen(action);
-        else action();
-    }
-
-    void HideThen(Action action)
-    {
-        Hide();
-        // Give the window time to disappear from the screen
-        var timer = new DispatcherTimer { Interval = TimeSpan.FromMilliseconds(200) };
-        timer.Tick += (_, _) => { timer.Stop(); action(); };
-        timer.Start();
-    }
-
-    void OnToolClick(object sender, RoutedEventArgs e) => ((ToolCommand)((FrameworkElement)sender).DataContext).Action();
-
-    #endregion
+    void OnToolboxClick(object sender, RoutedEventArgs e) => ToolboxRequested?.Invoke();
 
     #region Views
 
@@ -334,7 +311,7 @@ public partial class MainWindow : Window
         if (IsSearching)
         {
             EmptyHint.Text = "没有找到匹配的项目";
-            EmptyHint.Visibility = _results.Count > 0 || _features.Count > 0 ? Visibility.Collapsed : Visibility.Visible;
+            EmptyHint.Visibility = _results.Count > 0 ? Visibility.Collapsed : Visibility.Visible;
         }
         else
         {
@@ -613,7 +590,6 @@ public partial class MainWindow : Window
         SearchResults.Visibility = searching ? Visibility.Visible : Visibility.Collapsed;
         GroupItems.Visibility = searching ? Visibility.Collapsed : Visibility.Visible;
         if (_results.Count > 0) SetHighlight(0);
-        UpdateFeatureResults(query);
         UpdateEmptyHint();
     }
 
@@ -634,12 +610,6 @@ public partial class MainWindow : Window
             // First Esc clears the search, second hides the window
             if (SearchBox.Text.Length > 0) SearchBox.Clear();
             else Hide();
-            e.Handled = true;
-            return;
-        }
-        if (IsSearching && _results.Count == 0 && _features.Count > 0 && e.Key == Key.Enter)
-        {
-            _features[0].Open();
             e.Handled = true;
             return;
         }
@@ -670,7 +640,7 @@ public partial class MainWindow : Window
     /// <summary>Typing anywhere in the window goes to the search box.</summary>
     void OnPreviewTextInput(object sender, TextCompositionEventArgs e)
     {
-        if (!LauncherView.IsVisible || Keyboard.FocusedElement is TextBox || string.IsNullOrEmpty(e.Text) || char.IsControl(e.Text[0])) return;
+        if (Keyboard.FocusedElement is TextBox || string.IsNullOrEmpty(e.Text) || char.IsControl(e.Text[0])) return;
         SearchBox.Focus();
         SearchBox.AppendText(e.Text);
         SearchBox.CaretIndex = SearchBox.Text.Length;

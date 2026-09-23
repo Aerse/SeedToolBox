@@ -40,7 +40,7 @@ sealed class SettingsPage : ScrollViewer
     }
 
     readonly Options _o;
-    readonly CheckBox _lock = Check("锁定窗体尺寸");
+    readonly CheckBox _lock = Check("锁定启动器窗口尺寸");
     readonly CheckBox _autoStart = Check("开机自动启动（在后台运行）");
     readonly StackPanel _hotkeys = new();
     readonly TextBlock _hotkeyStatus = Ui.Status();

@@ -100,13 +100,13 @@ public class WindowSettings
 {
     public double? Left { get; set; }
     public double? Top { get; set; }
-    public double Width { get; set; } = 1000;
-    public double Height { get; set; } = 680;
+    public double Width { get; set; } = 460;
+    public double Height { get; set; } = 640;
     public bool SizeLocked { get; set; }
-    /// <summary>Sidebar shows icons only.</summary>
+    /// <summary>The toolbox window's sidebar shows icons only.</summary>
     public bool NavCollapsed { get; set; }
-    /// <summary>Page shown when the window opens.</summary>
-    public string LastPage { get; set; } = "launcher";
+    /// <summary>Toolbox page shown when it opens.</summary>
+    public string LastPage { get; set; } = "tools";
     /// <summary>Bumped when the window layout changes enough that saved sizes no longer fit.</summary>
     public int Layout { get; set; }
 }
