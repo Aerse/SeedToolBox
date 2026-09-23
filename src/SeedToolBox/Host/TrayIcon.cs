@@ -24,6 +24,8 @@ public sealed class TrayIcon : IDisposable
     public event Action<bool>? LockSizeChanged;
     public event Action<bool>? AutoStartChanged;
     public event Action? HotkeyRequested;
+    public event Action? BackupRequested;
+    public event Action? RestoreRequested;
     public event Action? ExitRequested;
 
     public const string ShowWindowCommand = "show";
@@ -45,6 +47,9 @@ public sealed class TrayIcon : IDisposable
         var autoStartItem = new WinForms.ToolStripMenuItem("开机自启") { CheckOnClick = true, Checked = autoStart };
         autoStartItem.CheckedChanged += (_, _) => AutoStartChanged?.Invoke(autoStartItem.Checked);
         _menu.Items.Add(autoStartItem);
+
+        _menu.Items.Add("备份数据...", null, (_, _) => BackupRequested?.Invoke());
+        _menu.Items.Add("恢复数据...", null, (_, _) => RestoreRequested?.Invoke());
 
         _menu.Items.Add(new WinForms.ToolStripSeparator());
         _menu.Items.Add("退出", null, (_, _) => ExitRequested?.Invoke());

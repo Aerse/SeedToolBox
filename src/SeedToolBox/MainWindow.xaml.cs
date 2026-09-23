@@ -123,11 +123,16 @@ public partial class MainWindow : Window
         else ShowAndActivate();
     }
 
-    public void PrepareExit()
+    /// <param name="save">False when the data files were just replaced (restore) and must not be overwritten.</param>
+    public void PrepareExit(bool save = true)
     {
         _exiting = true;
-        SaveNow();
+        if (save) SaveNow();
+        else _saveTimer.Stop();
     }
+
+    /// <summary>Writes pending changes now, e.g. before a backup.</summary>
+    public void PrepareSave() => SaveNow();
 
     public void RequestSave()
     {

@@ -85,6 +85,8 @@ public partial class App : Application
         _tray.LockSizeChanged += _main.SetSizeLocked;
         _tray.AutoStartChanged += SetAutoStart;
         _tray.HotkeyRequested += ChangeHotkeys;
+        _tray.BackupRequested += BackupData;
+        _tray.RestoreRequested += RestoreData;
         _tray.ExitRequested += ExitApp;
 
         var screen = _screenTools = new ScreenToolService(settings);
@@ -118,6 +120,9 @@ public partial class App : Application
 
         _modules = new ModuleManager(new AppHost(_tray, settings, Dispatcher));
         _modules.LoadAll();
+
+        try { DataBackup.AutoBackup(); }
+        catch (Exception ex) { Log.Error("Automatic backup failed", ex); }
 
         if (!e.Args.Contains(AutoStart.BackgroundArg))
             _main.Show();
@@ -158,6 +163,64 @@ public partial class App : Application
 
         if (failed.Count > 0)
             MessageBox.Show($"以下热键已被其他程序占用，未更改：\n{string.Join("\n", failed)}", "SeedToolBox", MessageBoxButton.OK, MessageBoxImage.Warning);
+    }
+
+    void BackupData()
+    {
+        _main!.PrepareSave();
+        var dialog = new Microsoft.Win32.SaveFileDialog
+        {
+            Title = "备份数据",
+            FileName = $"SeedToolBox备份_{DateTime.Now:yyyyMMdd_HHmmss}",
+            Filter = "备份文件|*.zip",
+        };
+        if (dialog.ShowDialog() != true) return;
+        try
+        {
+            DataBackup.Create(dialog.FileName);
+            _tray!.ShowMessage("备份完成");
+        }
+        catch (Exception ex)
+        {
+            Log.Error($"Backup to {dialog.FileName} failed", ex);
+            MessageBox.Show($"备份失败：{ex.Message}", "SeedToolBox", MessageBoxButton.OK, MessageBoxImage.Warning);
+        }
+    }
+
+    void RestoreData()
+    {
+        var dialog = new Microsoft.Win32.OpenFileDialog
+        {
+            Title = "恢复数据",
+            Filter = "备份文件|*.zip",
+            InitialDirectory = System.IO.Directory.Exists(DataBackup.Folder) ? DataBackup.Folder : "",
+        };
+        if (dialog.ShowDialog() != true) return;
+        if (MessageBox.Show("恢复后当前的启动项和设置会被备份中的内容替换，程序将自动重启。\n当前数据会先另存一份到 Data\\Backups。是否继续？",
+                "恢复数据", MessageBoxButton.OKCancel, MessageBoxImage.Question) != MessageBoxResult.OK) return;
+
+        try
+        {
+            _main!.PrepareSave();
+            System.IO.Directory.CreateDirectory(DataBackup.Folder);
+            DataBackup.Create(System.IO.Path.Combine(DataBackup.Folder, $"恢复前_{DateTime.Now:yyyyMMdd_HHmmss}.zip"));
+            DataBackup.Restore(dialog.FileName);
+        }
+        catch (Exception ex)
+        {
+            Log.Error($"Restore from {dialog.FileName} failed", ex);
+            MessageBox.Show($"恢复失败：{ex.Message}", "SeedToolBox", MessageBoxButton.OK, MessageBoxImage.Warning);
+            return;
+        }
+
+        // Nothing may be saved from here on, or the restored files would be overwritten with the old data
+        Log.Info($"Restored from {dialog.FileName}, restarting");
+        _main.PrepareExit(false);
+        _mutex?.ReleaseMutex();
+        _mutex?.Dispose();
+        _mutex = null;
+        System.Diagnostics.Process.Start(ProcessLauncher.ExePath);
+        Shutdown();
     }
 
     static void SetAutoStart(bool enabled)
