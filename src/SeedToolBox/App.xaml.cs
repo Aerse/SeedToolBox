@@ -91,12 +91,15 @@ public partial class App : Application
         _tray.AddCommand("screenshot", "截图", AfterTrayMenu(screen.Screenshot));
         _tray.AddCommand("color", "取色", AfterTrayMenu(screen.PickColor));
         _tray.AddCommand("ruler", "屏幕标尺", AfterTrayMenu(screen.Ruler));
+        _tray.AddCommand("record", "录屏", AfterTrayMenu(screen.Record));
+        _tray.AddCommand("recordsettings", "录屏设置…", () => screen.RecordSettings());
 
         var main = _main;
         _hotkeys.Add(new HotkeyBinding(TrayIcon.ShowWindowCommand, "呼出主窗口", () => data.Hotkey, v => data.Hotkey = v, main.ToggleFromHotkey));
         _hotkeys.Add(new HotkeyBinding("screenshot", "截图", () => screen.Settings.ScreenshotHotkey, v => screen.Settings.ScreenshotHotkey = v, screen.Screenshot));
         _hotkeys.Add(new HotkeyBinding("color", "取色", () => screen.Settings.ColorPickerHotkey, v => screen.Settings.ColorPickerHotkey = v, screen.PickColor));
         _hotkeys.Add(new HotkeyBinding("ruler", "屏幕标尺", () => screen.Settings.RulerHotkey, v => screen.Settings.RulerHotkey = v, screen.Ruler));
+        _hotkeys.Add(new HotkeyBinding("record", "录屏", () => screen.Settings.RecordHotkey, v => screen.Settings.RecordHotkey = v, screen.Record));
 
         var taken = new List<string>();
         foreach (var binding in _hotkeys)

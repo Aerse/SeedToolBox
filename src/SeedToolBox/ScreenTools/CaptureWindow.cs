@@ -14,6 +14,7 @@ namespace SeedToolBox.ScreenTools;
 /// <summary>
 /// Region screenshot: hover picks a window/control, dragging selects a rectangle,
 /// then the selection can be adjusted, annotated, copied, saved or pinned.
+/// In record mode the selection is only adjusted, then handed to the screen recorder.
 /// </summary>
 sealed class CaptureWindow : OverlayWindow
 {
@@ -39,6 +40,7 @@ sealed class CaptureWindow : OverlayWindow
 
     readonly ScreenToolService _service;
     readonly WindowFinder _finder;
+    readonly bool _record;
 
     // Surface (pixel) layer
     readonly RectangleGeometry _selectionGeometry = new();
@@ -55,6 +57,7 @@ sealed class CaptureWindow : OverlayWindow
     readonly Dictionary<Tool, Border> _toolButtons = new();
     readonly List<Border> _sizeButtons = new();
     readonly List<Border> _colorButtons = new();
+    readonly List<Action> _toggleUpdates = new();
 
     bool _editing;
     Rect _selection = Rect.Empty;
@@ -67,10 +70,11 @@ sealed class CaptureWindow : OverlayWindow
     Shape? _drawing;
     TextBox? _text;
 
-    public CaptureWindow(ScreenShot shot, WindowFinder finder, ScreenToolService service) : base(shot)
+    public CaptureWindow(ScreenShot shot, WindowFinder finder, ScreenToolService service, bool record = false) : base(shot)
     {
         _service = service;
         _finder = finder;
+        _record = record;
 
         _annotations = new Canvas { Width = shot.Width, Height = shot.Height, Clip = _clipGeometry };
         var mask = new Path
@@ -121,6 +125,11 @@ sealed class CaptureWindow : OverlayWindow
 
     void BuildToolbar()
     {
+        if (_record)
+        {
+            BuildRecordToolbar();
+            return;
+        }
         var main = new StackPanel { Orientation = Orientation.Horizontal };
         AddTool(main, Tool.Rectangle, "□", "矩形");
         AddTool(main, Tool.Ellipse, "○", "椭圆");
@@ -163,6 +172,58 @@ sealed class CaptureWindow : OverlayWindow
         style.Visibility = Visibility.Collapsed;
         _toolbar.Children.Add(style);
         UpdateStyleButtons();
+    }
+
+    void BuildRecordToolbar()
+    {
+        var settings = _service.Settings.Record;
+        var main = new StackPanel { Orientation = Orientation.Horizontal };
+        main.Children.Add(Toggle("🔊", "录制系统声音", () => settings.SystemAudio, v => settings.SystemAudio = v));
+        main.Children.Add(Toggle("🎤", "录制麦克风", () => settings.Microphone, v => settings.Microphone = v));
+        main.Children.Add(Divider());
+        main.Children.Add(Button("⚙", "录屏设置", () =>
+        {
+            _service.RecordSettings(this);
+            foreach (var update in _toggleUpdates) update();
+        }));
+        main.Children.Add(Button("✕", "退出 (Esc)", Close));
+        var start = Button("●", "开始录制 (Enter / 双击)", StartRecording, new SolidColorBrush(Color.FromRgb(230, 40, 40)));
+        start.Width = 36;
+        main.Children.Add(start);
+        _toolbar.Children.Add(Card(main));
+        // PlaceToolbar expects a style row
+        _toolbar.Children.Add(new Border { Visibility = Visibility.Collapsed });
+    }
+
+    Border Toggle(string glyph, string tip, Func<bool> get, Action<bool> set)
+    {
+        Border? button = null;
+        void Update()
+        {
+            button!.Background = get() ? ButtonSelected : Brushes.Transparent;
+            button.ToolTip = $"{tip}：{(get() ? "开" : "关")}";
+            button.Child.Opacity = get() ? 1 : 0.4;
+        }
+        button = Button(glyph, tip, () =>
+        {
+            set(!get());
+            _service.SaveSettings();
+            Update();
+        });
+        Update();
+        _toggleUpdates.Add(Update);
+        return button;
+    }
+
+    void StartRecording()
+    {
+        if (!_editing) return;
+        // The encoder needs even dimensions
+        int width = Math.Max(2, (int)_selection.Width & ~1), height = Math.Max(2, (int)_selection.Height & ~1);
+        var region = new System.Drawing.Rectangle((int)_selection.X + Shot.X, (int)_selection.Y + Shot.Y, width, height);
+        double scale = Scale;
+        Close();
+        _service.StartRecording(region, scale);
     }
 
     static Border Card(UIElement child) => new()
@@ -220,6 +281,12 @@ sealed class CaptureWindow : OverlayWindow
     {
         CommitText();
         _tool = tool;
+        if (_record)
+        {
+            UpdateHandles();
+            PlaceToolbar();
+            return;
+        }
         foreach (var pair in _toolButtons)
             pair.Value.Background = pair.Key == tool ? ButtonSelected : Brushes.Transparent;
         _toolbar.Children[1].Visibility = tool == Tool.None ? Visibility.Collapsed : Visibility.Visible;
@@ -784,6 +851,11 @@ sealed class CaptureWindow : OverlayWindow
     void CopyAndClose()
     {
         if (!_editing) return;
+        if (_record)
+        {
+            StartRecording();
+            return;
+        }
         var image = Render();
         Close();
         ScreenToolService.CopyImage(image);
@@ -837,8 +909,8 @@ sealed class CaptureWindow : OverlayWindow
             }
         }
         else if (e.Key == Key.Enter || (ctrl && e.Key == Key.C)) CopyAndClose();
-        else if (ctrl && e.Key == Key.S) Save();
-        else if (ctrl && e.Key == Key.Z) Undo();
+        else if (ctrl && e.Key == Key.S && !_record) Save();
+        else if (ctrl && e.Key == Key.Z && !_record) Undo();
         else if (e.Key is Key.Left or Key.Right or Key.Up or Key.Down && _drag == DragMode.None)
         {
             // Arrow keys nudge the selection by one pixel
