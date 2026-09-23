@@ -1,10 +1,16 @@
 # SeedToolBox
 
-Windows 桌面工具箱，当前功能：应用快捷启动 + 托盘图标。
+Windows 桌面工具箱。当前功能：应用快捷启动、托盘菜单、系统工具入口。
+
+- C# WPF + .NET Framework 4.8（Win10/11 自带，免装运行时）
+- 便携：配置保存在 exe 同目录 `Data/`
+- 模块化：功能以 `IModule` 接入，支持外部插件与 C++/Rust 原生组件
+
+架构说明见 [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md)。
 
 ## 开发
 
-需要 .NET 8 SDK。
+需要 .NET SDK（8 或更高即可，用来编译 net48）。
 
 ```bash
 dotnet build
@@ -14,7 +20,7 @@ dotnet run --project src/SeedToolBox
 ## 发布
 
 ```bash
-dotnet publish src/SeedToolBox -c Release -r win-x64 --self-contained -p:PublishSingleFile=true -o publish
+dotnet build src/SeedToolBox -c Release
 ```
 
-配置保存在 exe 同目录的 `Data/config.json`。
+产物在 `src/SeedToolBox/bin/Release/net48/`，把该目录（不含 `*.pdb`）整体打包即可。

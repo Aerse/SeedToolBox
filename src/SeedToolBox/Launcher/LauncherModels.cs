@@ -1,11 +1,11 @@
+using System.Collections.Generic;
 using System.Collections.ObjectModel;
 using System.ComponentModel;
 using System.Runtime.CompilerServices;
-using System.Text.Json.Serialization;
 using System.Windows.Media;
-using SeedToolBox.Services;
+using Newtonsoft.Json;
 
-namespace SeedToolBox.Models;
+namespace SeedToolBox.Launcher;
 
 public abstract class ObservableObject : INotifyPropertyChanged
 {
@@ -50,8 +50,10 @@ public class WindowSettings
     public bool SizeLocked { get; set; }
 }
 
-public class AppData
+public class LauncherData
 {
+    public const string SettingsName = "launcher";
+
     public ObservableCollection<ItemGroup> Groups { get; set; } = new();
     public WindowSettings Window { get; set; } = new();
 }

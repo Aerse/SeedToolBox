@@ -1,25 +1,31 @@
+using System;
 using System.ComponentModel;
 using System.IO;
+using System.Linq;
 using System.Windows;
 using System.Windows.Input;
 using System.Windows.Threading;
 using Microsoft.Win32;
-using SeedToolBox.Models;
-using SeedToolBox.Services;
+using SeedToolBox.Core.Native;
+using SeedToolBox.Core.Services;
+using SeedToolBox.Launcher;
 using SeedToolBox.Views;
 
 namespace SeedToolBox;
 
 public partial class MainWindow : Window
 {
-    readonly AppData _data;
+    readonly LauncherData _data;
+    readonly ISettingsStore _settings;
     readonly DispatcherTimer _saveTimer;
+    readonly DispatcherTimer _trimTimer;
     bool _exiting;
 
-    public MainWindow(AppData data)
+    public MainWindow(LauncherData data, ISettingsStore settings)
     {
         InitializeComponent();
         _data = data;
+        _settings = settings;
         DataContext = data;
 
         // Debounce saves so dragging/resizing doesn't hammer the disk
@@ -32,6 +38,15 @@ public partial class MainWindow : Window
 
         LocationChanged += (_, _) => RequestSave();
         SizeChanged += (_, _) => RequestSave();
+
+        // Release memory shortly after hiding to tray; cancelled if shown again
+        _trimTimer = new DispatcherTimer { Interval = TimeSpan.FromSeconds(2) };
+        _trimTimer.Tick += (_, _) => { _trimTimer.Stop(); MemoryTrimmer.Trim(); };
+        IsVisibleChanged += (_, _) =>
+        {
+            if (IsVisible) _trimTimer.Stop();
+            else _trimTimer.Start();
+        };
     }
 
     ItemGroup? CurrentGroup => GroupList.SelectedItem as ItemGroup;
@@ -106,10 +121,11 @@ public partial class MainWindow : Window
         }
         try
         {
-            DataStore.Save(_data);
+            _settings.Save(LauncherData.SettingsName, _data);
         }
         catch (Exception ex)
         {
+            Log.Error("Failed to save launcher settings", ex);
             MessageBox.Show($"保存配置失败：{ex.Message}", "SeedToolBox", MessageBoxButton.OK, MessageBoxImage.Warning);
         }
     }
@@ -203,17 +219,17 @@ public partial class MainWindow : Window
 
     static LaunchItem ItemOf(object sender) => (LaunchItem)((FrameworkElement)sender).DataContext;
 
-    void OnItemClick(object sender, MouseButtonEventArgs e) => Launcher.Launch(ItemOf(sender));
+    void OnItemClick(object sender, MouseButtonEventArgs e) => ProcessLauncher.Launch(ItemOf(sender));
 
-    void OnItemOpen(object sender, RoutedEventArgs e) => Launcher.Launch(ItemOf(sender));
+    void OnItemOpen(object sender, RoutedEventArgs e) => ProcessLauncher.Launch(ItemOf(sender));
 
-    void OnItemRunAsAdmin(object sender, RoutedEventArgs e) => Launcher.Launch(ItemOf(sender), asAdmin: true);
+    void OnItemRunAsAdmin(object sender, RoutedEventArgs e) => ProcessLauncher.Launch(ItemOf(sender), asAdmin: true);
 
     void OnItemOpenLocation(object sender, RoutedEventArgs e)
     {
         var item = ItemOf(sender);
-        if (IconHelper.IsUrl(item.Path)) Launcher.Launch(item);
-        else Launcher.OpenLocation(item.Path);
+        if (IconHelper.IsUrl(item.Path)) ProcessLauncher.Launch(item);
+        else ProcessLauncher.OpenLocation(item.Path);
     }
 
     void OnItemRename(object sender, RoutedEventArgs e)

@@ -7,6 +7,8 @@ Project("{2150E333-8FDC-42A3-9474-1A3956D46DE8}") = "src", "src", "{DBE52811-BF9
 EndProject
 Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "SeedToolBox", "src\SeedToolBox\SeedToolBox.csproj", "{F64BC1E5-AF7D-44B6-8DCA-77327A119435}"
 EndProject
+Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "SeedToolBox.Core", "src\SeedToolBox.Core\SeedToolBox.Core.csproj", "{C5414F74-9A64-4453-9CF9-30D0B1D35644}"
+EndProject
 Global
 	GlobalSection(SolutionConfigurationPlatforms) = preSolution
 		Debug|Any CPU = Debug|Any CPU
@@ -20,8 +22,13 @@ Global
 		{F64BC1E5-AF7D-44B6-8DCA-77327A119435}.Debug|Any CPU.Build.0 = Debug|Any CPU
 		{F64BC1E5-AF7D-44B6-8DCA-77327A119435}.Release|Any CPU.ActiveCfg = Release|Any CPU
 		{F64BC1E5-AF7D-44B6-8DCA-77327A119435}.Release|Any CPU.Build.0 = Release|Any CPU
+		{C5414F74-9A64-4453-9CF9-30D0B1D35644}.Debug|Any CPU.ActiveCfg = Debug|Any CPU
+		{C5414F74-9A64-4453-9CF9-30D0B1D35644}.Debug|Any CPU.Build.0 = Debug|Any CPU
+		{C5414F74-9A64-4453-9CF9-30D0B1D35644}.Release|Any CPU.ActiveCfg = Release|Any CPU
+		{C5414F74-9A64-4453-9CF9-30D0B1D35644}.Release|Any CPU.Build.0 = Release|Any CPU
 	EndGlobalSection
 	GlobalSection(NestedProjects) = preSolution
 		{F64BC1E5-AF7D-44B6-8DCA-77327A119435} = {DBE52811-BF9C-40E5-9D66-A5A95BDE7BDF}
+		{C5414F74-9A64-4453-9CF9-30D0B1D35644} = {DBE52811-BF9C-40E5-9D66-A5A95BDE7BDF}
 	EndGlobalSection
 EndGlobal

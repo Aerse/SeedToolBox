@@ -1,0 +1,12 @@
+<Project>
+  <PropertyGroup>
+    <TargetFramework>net48</TargetFramework>
+    <LangVersion>latest</LangVersion>
+    <Nullable>enable</Nullable>
+    <!-- x64 only, so native (C++/Rust) DLLs only need one build -->
+    <PlatformTarget>x64</PlatformTarget>
+    <Version>0.1.0</Version>
+    <Authors>Seed</Authors>
+    <Product>SeedToolBox</Product>
+  </PropertyGroup>
+</Project>
