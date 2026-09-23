@@ -47,6 +47,12 @@ public class LaunchItem : ObservableObject
     [JsonIgnore]
     public string ToolTip => Remarks.Length > 0 ? $"{Remarks}\n{Path}" : Path;
 
+    bool _isDragging;
+
+    /// <summary>True while this entry is being dragged (shown faded in place).</summary>
+    [JsonIgnore]
+    public bool IsDragging { get => _isDragging; set => Set(ref _isDragging, value); }
+
     void ResetDisplay()
     {
         _icon = null;
@@ -61,6 +67,18 @@ public class ItemGroup : ObservableObject
 
     public string Name { get => _name; set => Set(ref _name, value); }
     public ObservableCollection<LaunchItem> Items { get; set; } = new();
+
+    bool _isDragging;
+
+    /// <summary>True while this entry is being dragged (shown faded in place).</summary>
+    [JsonIgnore]
+    public bool IsDragging { get => _isDragging; set => Set(ref _isDragging, value); }
+
+    bool _isDropTarget;
+
+    /// <summary>True while an item is dragged over this group.</summary>
+    [JsonIgnore]
+    public bool IsDropTarget { get => _isDropTarget; set => Set(ref _isDropTarget, value); }
 }
 
 public class WindowSettings

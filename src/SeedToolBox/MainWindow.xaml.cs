@@ -3,6 +3,7 @@ using System.ComponentModel;
 using System.IO;
 using System.Linq;
 using System.Windows;
+using System.Windows.Documents;
 using System.Windows.Input;
 using System.Windows.Threading;
 using Microsoft.Win32;
@@ -27,6 +28,8 @@ public partial class MainWindow : Window
     Point _pressPoint;
     LaunchItem? _pressedItem;
     ItemGroup? _pressedGroup;
+    FrameworkElement? _pressedGroupElement;
+    DragAdorner? _dragAdorner;
 
     public MainWindow(LauncherData data, ISettingsStore settings)
     {
@@ -347,8 +350,8 @@ public partial class MainWindow : Window
     {
         if (e.LeftButton != MouseButtonState.Pressed || _pressedItem is not { } item || !IsDragGesture(e)) return;
         _pressedItem = null;
-        DragDrop.DoDragDrop((DependencyObject)sender, new DataObject(ItemFormat, item), DragDropEffects.Move);
-        RequestSave();
+        var tile = (FrameworkElement)sender;
+        RunDrag(tile, tile, new DataObject(ItemFormat, item), dragging => item.IsDragging = dragging);
     }
 
     void OnTileDragOver(object sender, DragEventArgs e)
@@ -372,7 +375,8 @@ public partial class MainWindow : Window
 
     void OnGroupMouseDown(object sender, MouseButtonEventArgs e)
     {
-        _pressedGroup = (ItemGroup)((FrameworkElement)sender).DataContext;
+        _pressedGroupElement = (FrameworkElement)sender;
+        _pressedGroup = (ItemGroup)_pressedGroupElement.DataContext;
         _pressPoint = e.GetPosition(this);
     }
 
@@ -380,8 +384,41 @@ public partial class MainWindow : Window
     {
         if (e.LeftButton != MouseButtonState.Pressed || _pressedGroup is not { } group || !IsDragGesture(e)) return;
         _pressedGroup = null;
-        DragDrop.DoDragDrop(GroupList, new DataObject(GroupFormat, group), DragDropEffects.Move);
-        RequestSave();
+        RunDrag(GroupList, _pressedGroupElement!, new DataObject(GroupFormat, group), dragging => group.IsDragging = dragging);
+    }
+
+    /// <summary>Runs a drag with a ghost image under the cursor and the source faded in place.</summary>
+    void RunDrag(DependencyObject source, FrameworkElement visual, DataObject data, Action<bool> setDragging)
+    {
+        var layer = AdornerLayer.GetAdornerLayer(Root);
+        if (layer != null)
+        {
+            _dragAdorner = new DragAdorner(Root, visual, Mouse.GetPosition(visual));
+            _dragAdorner.MoveTo(Mouse.GetPosition(Root));
+            layer.Add(_dragAdorner);
+        }
+        setDragging(true);
+        try
+        {
+            DragDrop.DoDragDrop(source, data, DragDropEffects.Move);
+        }
+        finally
+        {
+            setDragging(false);
+            if (_dragAdorner != null) layer?.Remove(_dragAdorner);
+            _dragAdorner = null;
+            foreach (var g in _data.Groups) g.IsDropTarget = false;
+            RequestSave();
+        }
+    }
+
+    void OnPreviewDragOver(object sender, DragEventArgs e) => _dragAdorner?.MoveTo(e.GetPosition(Root));
+
+    void OnWindowDragLeave(object sender, DragEventArgs e)
+    {
+        // DragLeave also fires when moving between child elements; only hide when really outside
+        var p = e.GetPosition(Root);
+        if (p.X < 0 || p.Y < 0 || p.X >= Root.ActualWidth || p.Y >= Root.ActualHeight) _dragAdorner?.Hide();
     }
 
     void OnGroupDragOver(object sender, DragEventArgs e)
@@ -398,10 +435,15 @@ public partial class MainWindow : Window
         else if (e.Data.GetDataPresent(ItemFormat))
         {
             // Dropping an item on another group moves it there
-            e.Effects = target != CurrentGroup ? DragDropEffects.Move : DragDropEffects.None;
+            bool canDrop = target != CurrentGroup;
+            foreach (var g in _data.Groups) g.IsDropTarget = canDrop && g == target;
+            e.Effects = canDrop ? DragDropEffects.Move : DragDropEffects.None;
             e.Handled = true;
         }
     }
+
+    void OnGroupDragLeave(object sender, DragEventArgs e) =>
+        ((ItemGroup)((FrameworkElement)sender).DataContext).IsDropTarget = false;
 
     void OnGroupDrop(object sender, DragEventArgs e)
     {
