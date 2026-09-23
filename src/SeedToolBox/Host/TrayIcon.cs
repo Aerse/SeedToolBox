@@ -14,7 +14,9 @@ public sealed class TrayIcon : IDisposable
     // Module entries are inserted just above this separator
     readonly WinForms.ToolStripSeparator _moduleSeparator = new() { Visible = false };
     readonly Dictionary<string, WinForms.ToolStripMenuItem> _submenus = new();
-    readonly WinForms.ToolStripMenuItem _hotkeyItem;
+    // Commands such as screenshot go above this separator, next to "show main window"
+    readonly WinForms.ToolStripSeparator _commandSeparator = new();
+    readonly Dictionary<string, WinForms.ToolStripMenuItem> _commands = new();
 
     public event Action? ToggleWindowRequested;
     public event Action? ShowWindowRequested;
@@ -24,11 +26,13 @@ public sealed class TrayIcon : IDisposable
     public event Action? HotkeyRequested;
     public event Action? ExitRequested;
 
-    public TrayIcon(bool sizeLocked, bool autoStart, string hotkey)
+    public const string ShowWindowCommand = "show";
+
+    public TrayIcon(bool sizeLocked, bool autoStart)
     {
         _menu = new WinForms.ContextMenuStrip();
-        _menu.Items.Add("显示主窗口", null, (_, _) => ShowWindowRequested?.Invoke());
-        _menu.Items.Add(new WinForms.ToolStripSeparator());
+        _menu.Items.Add(_commandSeparator);
+        AddCommand(ShowWindowCommand, "显示主窗口", () => ShowWindowRequested?.Invoke());
         _menu.Items.Add(_moduleSeparator);
         _menu.Items.Add("打开本程序位置", null, (_, _) => OpenAppLocationRequested?.Invoke());
 
@@ -36,9 +40,7 @@ public sealed class TrayIcon : IDisposable
         lockItem.CheckedChanged += (_, _) => LockSizeChanged?.Invoke(lockItem.Checked);
         _menu.Items.Add(lockItem);
 
-        _hotkeyItem = new WinForms.ToolStripMenuItem("", null, (_, _) => HotkeyRequested?.Invoke());
-        SetHotkeyText(hotkey);
-        _menu.Items.Add(_hotkeyItem);
+        _menu.Items.Add("热键设置...", null, (_, _) => HotkeyRequested?.Invoke());
 
         var autoStartItem = new WinForms.ToolStripMenuItem("开机自启") { CheckOnClick = true, Checked = autoStart };
         autoStartItem.CheckedChanged += (_, _) => AutoStartChanged?.Invoke(autoStartItem.Checked);
@@ -80,8 +82,18 @@ public sealed class TrayIcon : IDisposable
         _moduleSeparator.Visible = true;
     }
 
-    public void SetHotkeyText(string hotkey) =>
-        _hotkeyItem.Text = $"呼出热键：{(hotkey.Length > 0 ? hotkey : "无")}...";
+    public void AddCommand(string id, string text, Action onClick)
+    {
+        var item = new WinForms.ToolStripMenuItem(text, null, (_, _) => onClick());
+        _commands[id] = item;
+        _menu.Items.Insert(_menu.Items.IndexOf(_commandSeparator), item);
+    }
+
+    /// <summary>Shows the command's hotkey right-aligned in the menu.</summary>
+    public void SetShortcutText(string id, string hotkey)
+    {
+        if (_commands.TryGetValue(id, out var item)) item.ShortcutKeyDisplayString = hotkey;
+    }
 
     public void ShowMessage(string text) =>
         _notifyIcon.ShowBalloonTip(5000, "SeedToolBox", text, WinForms.ToolTipIcon.Warning);

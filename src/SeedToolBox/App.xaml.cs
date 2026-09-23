@@ -1,4 +1,5 @@
 using System;
+using System.Collections.Generic;
 using System.Linq;
 using System.Threading;
 using System.Windows;
@@ -8,6 +9,7 @@ using SeedToolBox.Core.Native;
 using SeedToolBox.Core.Services;
 using SeedToolBox.Host;
 using SeedToolBox.Launcher;
+using SeedToolBox.ScreenTools;
 using SeedToolBox.Views;
 
 namespace SeedToolBox;
@@ -20,9 +22,31 @@ public partial class App : Application
     Mutex? _mutex;
     TrayIcon? _tray;
     MainWindow? _main;
-    GlobalHotkey? _hotkey;
     LauncherData? _data;
+    ScreenToolService? _screenTools;
     ModuleManager? _modules;
+    readonly List<HotkeyBinding> _hotkeys = new();
+
+    /// <summary>A configurable global hotkey and the tray command it mirrors.</summary>
+    sealed class HotkeyBinding
+    {
+        public HotkeyBinding(string command, string label, Func<string> get, Action<string> set, Action action)
+        {
+            Command = command;
+            Label = label;
+            Get = get;
+            Set = set;
+            Hotkey.Pressed += action;
+        }
+
+        public string Command { get; }
+        public string Label { get; }
+        public Func<string> Get { get; }
+        public Action<string> Set { get; }
+        public GlobalHotkey Hotkey { get; } = new();
+
+        public bool Register(string text) => Hotkey.Register(Host.Hotkey.TryParse(text, out var key) ? key : null);
+    }
 
     protected override void OnStartup(StartupEventArgs e)
     {
@@ -54,19 +78,34 @@ public partial class App : Application
         try { AutoStart.Refresh(); }
         catch (Exception ex) { Log.Error("Failed to refresh autostart entry", ex); }
 
-        _tray = new TrayIcon(data.Window.SizeLocked, AutoStart.IsEnabled, data.Hotkey);
+        _tray = new TrayIcon(data.Window.SizeLocked, AutoStart.IsEnabled);
         _tray.ToggleWindowRequested += _main.ToggleVisibility;
         _tray.ShowWindowRequested += _main.ShowAndActivate;
         _tray.OpenAppLocationRequested += () => ProcessLauncher.OpenLocation(ProcessLauncher.ExePath);
         _tray.LockSizeChanged += _main.SetSizeLocked;
         _tray.AutoStartChanged += SetAutoStart;
-        _tray.HotkeyRequested += ChangeHotkey;
+        _tray.HotkeyRequested += ChangeHotkeys;
         _tray.ExitRequested += ExitApp;
 
-        _hotkey = new GlobalHotkey();
-        _hotkey.Pressed += _main.ToggleFromHotkey;
-        if (!RegisterHotkey(data.Hotkey))
-            _tray.ShowMessage($"呼出热键 {data.Hotkey} 已被其他程序占用，可在托盘菜单中更换");
+        var screen = _screenTools = new ScreenToolService(settings);
+        _tray.AddCommand("screenshot", "截图", AfterTrayMenu(screen.Screenshot));
+        _tray.AddCommand("color", "取色", AfterTrayMenu(screen.PickColor));
+        _tray.AddCommand("ruler", "屏幕标尺", AfterTrayMenu(screen.Ruler));
+
+        var main = _main;
+        _hotkeys.Add(new HotkeyBinding(TrayIcon.ShowWindowCommand, "呼出主窗口", () => data.Hotkey, v => data.Hotkey = v, main.ToggleFromHotkey));
+        _hotkeys.Add(new HotkeyBinding("screenshot", "截图", () => screen.Settings.ScreenshotHotkey, v => screen.Settings.ScreenshotHotkey = v, screen.Screenshot));
+        _hotkeys.Add(new HotkeyBinding("color", "取色", () => screen.Settings.ColorPickerHotkey, v => screen.Settings.ColorPickerHotkey = v, screen.PickColor));
+        _hotkeys.Add(new HotkeyBinding("ruler", "屏幕标尺", () => screen.Settings.RulerHotkey, v => screen.Settings.RulerHotkey = v, screen.Ruler));
+
+        var taken = new List<string>();
+        foreach (var binding in _hotkeys)
+        {
+            if (!binding.Register(binding.Get())) taken.Add($"{binding.Label} {binding.Get()}");
+            _tray.SetShortcutText(binding.Command, binding.Get());
+        }
+        if (taken.Count > 0)
+            _tray.ShowMessage($"热键已被其他程序占用：{string.Join("、", taken)}。可在托盘菜单「热键设置」中更换");
 
         _modules = new ModuleManager(new AppHost(_tray, settings, Dispatcher));
         _modules.LoadAll();
@@ -75,23 +114,41 @@ public partial class App : Application
             _main.Show();
     }
 
-    bool RegisterHotkey(string text) =>
-        _hotkey!.Register(Hotkey.TryParse(text, out var key) ? key : null);
-
-    void ChangeHotkey()
+    /// <summary>Waits for the tray menu to close so it isn't in the screenshot.</summary>
+    Action AfterTrayMenu(Action action) => () =>
     {
-        var old = _data!.Hotkey;
-        if (HotkeyDialog.Show(old) is not { } text || text == old) return;
+        var timer = new DispatcherTimer { Interval = TimeSpan.FromMilliseconds(250) };
+        timer.Tick += (_, _) => { timer.Stop(); action(); };
+        timer.Start();
+    };
 
-        if (!RegisterHotkey(text))
+    void ChangeHotkeys()
+    {
+        var values = HotkeysDialog.Show(_hotkeys.Select(h => (h.Label, h.Get())).ToList());
+        if (values == null) return;
+
+        var failed = new List<string>();
+        for (int i = 0; i < _hotkeys.Count; i++)
         {
-            RegisterHotkey(old);
-            MessageBox.Show($"热键 {text} 已被其他程序占用，请换一个", "SeedToolBox", MessageBoxButton.OK, MessageBoxImage.Warning);
-            return;
+            var binding = _hotkeys[i];
+            var old = binding.Get();
+            if (values[i] == old) continue;
+            if (binding.Register(values[i]))
+            {
+                binding.Set(values[i]);
+            }
+            else
+            {
+                binding.Register(old);
+                failed.Add($"{binding.Label} {values[i]}");
+            }
+            _tray!.SetShortcutText(binding.Command, binding.Get());
         }
-        _data.Hotkey = text;
-        _tray!.SetHotkeyText(text);
         _main!.RequestSave();
+        _screenTools!.SaveSettings();
+
+        if (failed.Count > 0)
+            MessageBox.Show($"以下热键已被其他程序占用，未更改：\n{string.Join("\n", failed)}", "SeedToolBox", MessageBoxButton.OK, MessageBoxImage.Warning);
     }
 
     static void SetAutoStart(bool enabled)
@@ -133,7 +190,7 @@ public partial class App : Application
     protected override void OnExit(ExitEventArgs e)
     {
         _modules?.ShutdownAll();
-        _hotkey?.Dispose();
+        foreach (var binding in _hotkeys) binding.Hotkey.Dispose();
         _tray?.Dispose();
         _mutex?.Dispose();
         Log.Info("Exited");
