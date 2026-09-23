@@ -104,8 +104,105 @@ static class Ui
         return grid;
     }
 
-    public static string FormatSize(long bytes) =>
-        bytes < 1024 ? $"{bytes} B" : bytes < 1024 * 1024 ? $"{bytes / 1024.0:0.#} KB" : $"{bytes / 1024.0 / 1024.0:0.##} MB";
+    static readonly string[] SizeUnits = { "KB", "MB", "GB", "TB" };
+
+    public static string FormatSize(long bytes)
+    {
+        if (bytes < 1024) return $"{bytes} B";
+        double value = bytes / 1024.0;
+        int unit = 0;
+        while (value >= 1024 && unit < SizeUnits.Length - 1) { value /= 1024; unit++; }
+        return unit == 0 ? $"{value:0.#} KB" : $"{value:0.##} {SizeUnits[unit]}";
+    }
+
+    /// <summary>Accepts files dropped from Explorer. Uses the preview events so text boxes do not swallow the drop.</summary>
+    public static void FileDrop(UIElement target, Action<string[]> onFiles)
+    {
+        target.AllowDrop = true;
+        target.PreviewDragOver += (_, e) =>
+        {
+            e.Effects = e.Data.GetDataPresent(DataFormats.FileDrop) ? DragDropEffects.Copy : DragDropEffects.None;
+            e.Handled = true;
+        };
+        target.PreviewDrop += (_, e) =>
+        {
+            if (e.Data.GetData(DataFormats.FileDrop) is not string[] { Length: > 0 } files) return;
+            e.Handled = true;
+            onFiles(files);
+        };
+    }
+
+    /// <summary>Copies whatever <paramref name="text"/> returns, if it is not empty.</summary>
+    public static Button CopyButton(Func<string> text, string label = "复制结果") =>
+        Button(label, () => { var t = text(); if (t.Length > 0) ScreenTools.ScreenToolService.CopyText(t); });
+
+    /// <summary>Loads a text file into <paramref name="target"/>; <paramref name="loaded"/> gets the path afterwards.</summary>
+    public static Button OpenButton(TextBox target, TextBlock status, Action<string>? loaded = null) => Button("打开…", () =>
+    {
+        var dialog = new Microsoft.Win32.OpenFileDialog { Filter = "所有文件|*.*" };
+        if (dialog.ShowDialog(Window.GetWindow(target)) != true) return;
+        LoadText(target, dialog.FileName, status);
+        loaded?.Invoke(dialog.FileName);
+    });
+
+    /// <summary>Reads a text file into a box, reporting failures in the status line.</summary>
+    public static bool LoadText(TextBox target, string path, TextBlock status)
+    {
+        try
+        {
+            if (new FileInfo(path).Length > 50L * 1024 * 1024)
+            {
+                SetStatus(status, "文件超过 50 MB，太大了", true);
+                return false;
+            }
+            target.Text = TextFiles.Read(path, out _);
+            return true;
+        }
+        catch (Exception ex)
+        {
+            SetStatus(status, "读取失败：" + ex.Message, true);
+            return false;
+        }
+    }
+
+    /// <summary>Saves whatever <paramref name="text"/> returns as UTF-8.</summary>
+    public static Button SaveButton(Func<string> text, TextBlock status, string fileName = "result.txt") => Button("保存…", () =>
+    {
+        var content = text();
+        if (content.Length == 0) { SetStatus(status, "没有可保存的内容", true); return; }
+        var dialog = new Microsoft.Win32.SaveFileDialog { FileName = fileName, Filter = "所有文件|*.*" };
+        if (dialog.ShowDialog(Application.Current.MainWindow) != true) return;
+        try
+        {
+            File.WriteAllText(dialog.FileName, content, new UTF8Encoding(false));
+            SetStatus(status, "已保存到 " + dialog.FileName);
+        }
+        catch (Exception ex) { SetStatus(status, "保存失败：" + ex.Message, true); }
+    });
+
+    /// <summary>
+    /// Runs <paramref name="work"/> off the UI thread and hands the result back on it.
+    /// Only the latest call per <paramref name="token"/> reports, so stale results from fast typing are dropped.
+    /// </summary>
+    public static async void RunAsync<T>(AsyncToken token, Func<T> work, Action<T> done, Action<Exception> failed)
+    {
+        int id = ++token.Current;
+        try
+        {
+            var result = await System.Threading.Tasks.Task.Run(work);
+            if (id == token.Current) done(result);
+        }
+        catch (Exception ex)
+        {
+            if (id == token.Current) failed(ex);
+        }
+    }
+}
+
+/// <summary>Tracks the latest <see cref="Ui.RunAsync"/> call of one page.</summary>
+sealed class AsyncToken
+{
+    public int Current;
 }
 
 /// <summary>Reads text files keeping their encoding, so rewriting them does not change it.</summary>

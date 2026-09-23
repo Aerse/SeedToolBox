@@ -31,6 +31,7 @@ sealed class Base64TextPage : DockPanel
             return b;
         }
 
+        Ui.FileDrop(_text, files => Ui.LoadText(_text, files[0], _status));
         var body = Ui.Columns(Ui.Titled("文本", _text, Copy(_text)), Ui.Titled("Base64", _base64, Copy(_base64)));
         SetDock(header, Dock.Top);
         SetDock(toolbar, Dock.Top);

@@ -61,7 +61,6 @@ sealed class ImageConvertPage : DockPanel
         _format.SelectionChanged += (_, _) => _quality.IsEnabled = _format.SelectedIndex == 1;
 
         _list.ItemsSource = _items;
-        _list.AllowDrop = true;
         _list.BorderBrush = (Brush)Application.Current.Resources["ControlBorderBrush"];
         var view = new GridView();
         view.Columns.Add(new GridViewColumn { Header = "文件", Width = 280, DisplayMemberBinding = new Binding(nameof(ImageConvertItem.Name)) });
@@ -69,8 +68,7 @@ sealed class ImageConvertPage : DockPanel
         view.Columns.Add(new GridViewColumn { Header = "结果", Width = 150, DisplayMemberBinding = new Binding(nameof(ImageConvertItem.Result)) });
         view.Columns.Add(new GridViewColumn { Header = "状态", Width = 200, DisplayMemberBinding = new Binding(nameof(ImageConvertItem.State)) });
         _list.View = view;
-        _list.DragOver += (_, e) => { e.Effects = DragDropEffects.Copy; e.Handled = true; };
-        _list.Drop += (_, e) => { if (e.Data.GetData(DataFormats.FileDrop) is string[] paths) AddPaths(paths); };
+        Ui.FileDrop(_list, AddPaths);
         _list.MouseDoubleClick += (_, _) =>
         {
             if (_list.SelectedItem is ImageConvertItem item) ProcessLauncher.OpenLocation(item.Output ?? item.Path);

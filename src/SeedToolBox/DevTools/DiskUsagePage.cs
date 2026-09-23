@@ -51,9 +51,7 @@ sealed class DiskUsagePage : DockPanel
         _scan = Ui.Button("分析", () => Scan(_folder.Text.Trim(), rescan: true), accent: true);
         var row = Ui.Row(Ui.Label("文件夹"), _folder, browse, _scan, Ui.Button("上一级", Up), Ui.Button("停止", () => _cancel?.Cancel()), Ui.Button("打开", () => { if (Directory.Exists(_folder.Text)) ProcessLauncher.OpenLocation(_folder.Text); }));
         _folder.KeyDown += (_, e) => { if (e.Key == System.Windows.Input.Key.Enter) Scan(_folder.Text.Trim(), rescan: false); };
-        _folder.AllowDrop = true;
-        _folder.PreviewDragOver += (_, e) => { e.Effects = DragDropEffects.Copy; e.Handled = true; };
-        _folder.PreviewDrop += (_, e) => { e.Handled = true; if (e.Data.GetData(DataFormats.FileDrop) is string[] { Length: > 0 } p && Directory.Exists(p[0])) Scan(p[0], rescan: true); };
+        Ui.FileDrop(_folder, p => { if (Directory.Exists(p[0])) Scan(p[0], rescan: true); });
 
         _list.ItemsSource = _items;
         _list.BorderBrush = (Brush)Application.Current.Resources["ControlBorderBrush"];

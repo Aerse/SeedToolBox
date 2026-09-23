@@ -45,9 +45,7 @@ sealed class DuplicatePage : DockPanel
         _scan = Ui.Button("开始查找", Scan, accent: true);
         var row1 = Ui.Row(Ui.Label("文件夹"), _folder, browse, Ui.Label("最小"), _minSize, Ui.Label("KB", 16), _scan, Ui.Button("停止", () => _cancel?.Cancel()));
         var row2 = Ui.Row(Ui.Button("每组保留最早的", () => AutoCheck(keepOldest: true)), Ui.Button("每组保留最新的", () => AutoCheck(keepOldest: false)), Ui.Button("取消勾选", () => { foreach (var i in _items) i.Check = false; }), Ui.Label("", 16), Ui.Button("删除勾选（回收站）", DeleteChecked));
-        _folder.AllowDrop = true;
-        _folder.PreviewDragOver += (_, e) => { e.Effects = DragDropEffects.Copy; e.Handled = true; };
-        _folder.PreviewDrop += (_, e) => { e.Handled = true; if (e.Data.GetData(DataFormats.FileDrop) is string[] { Length: > 0 } p && Directory.Exists(p[0])) _folder.Text = p[0]; };
+        Ui.FileDrop(_folder, p => { if (Directory.Exists(p[0])) _folder.Text = p[0]; });
 
         _list.ItemsSource = _items;
         _list.BorderBrush = (Brush)Application.Current.Resources["ControlBorderBrush"];

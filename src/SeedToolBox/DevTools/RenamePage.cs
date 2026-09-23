@@ -58,15 +58,13 @@ sealed class RenamePage : DockPanel
         _sort.SelectionChanged += (_, _) => Sort();
 
         _list.ItemsSource = _items;
-        _list.AllowDrop = true;
         _list.BorderBrush = (Brush)Application.Current.Resources["ControlBorderBrush"];
         var view = new GridView();
         view.Columns.Add(new GridViewColumn { Header = "原文件名", Width = 280, DisplayMemberBinding = new Binding(nameof(RenameItem.Name)) });
         view.Columns.Add(new GridViewColumn { Header = "新文件名", Width = 280, DisplayMemberBinding = new Binding(nameof(RenameItem.NewName)) });
         view.Columns.Add(new GridViewColumn { Header = "状态", Width = 170, DisplayMemberBinding = new Binding(nameof(RenameItem.State)) });
         _list.View = view;
-        _list.DragOver += (_, e) => { e.Effects = DragDropEffects.Copy; e.Handled = true; };
-        _list.Drop += (_, e) => { if (e.Data.GetData(DataFormats.FileDrop) is string[] paths) AddPaths(paths); };
+        Ui.FileDrop(_list, AddPaths);
         _list.MouseDoubleClick += (_, _) => { if (_list.SelectedItem is RenameItem item) ProcessLauncher.OpenLocation(item.Path); };
         _list.KeyDown += (_, e) =>
         {

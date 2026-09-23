@@ -22,6 +22,7 @@ sealed class JwtPage : DockPanel
         _input.Height = 110;
         _input.TextChanged += (_, _) => Decode();
 
+        Ui.FileDrop(_input, files => Ui.LoadText(_input, files[0], _status));
         var top = Ui.Titled("Token", _input);
         top.Margin = new System.Windows.Thickness(0, 0, 0, 12);
         var left = Ui.Titled("头部 Header", _header);

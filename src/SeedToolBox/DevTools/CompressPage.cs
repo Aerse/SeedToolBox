@@ -54,7 +54,6 @@ sealed class CompressPage : DockPanel
             Ui.Button("清空列表", () => { if (_cancel == null) { _items.Clear(); _status.Text = ""; } }));
 
         _list.ItemsSource = _items;
-        _list.AllowDrop = true;
         _list.BorderBrush = (System.Windows.Media.Brush)Application.Current.Resources["ControlBorderBrush"];
         var view = new GridView();
         view.Columns.Add(new GridViewColumn { Header = "文件", Width = 300, DisplayMemberBinding = new Binding(nameof(CompressItem.Name)) });
@@ -63,8 +62,7 @@ sealed class CompressPage : DockPanel
         view.Columns.Add(new GridViewColumn { Header = "节省", Width = 70, DisplayMemberBinding = new Binding(nameof(CompressItem.Ratio)) });
         view.Columns.Add(new GridViewColumn { Header = "状态", Width = 200, DisplayMemberBinding = new Binding(nameof(CompressItem.State)) });
         _list.View = view;
-        _list.DragOver += (_, e) => { e.Effects = DragDropEffects.Copy; e.Handled = true; };
-        _list.Drop += (_, e) => { if (e.Data.GetData(DataFormats.FileDrop) is string[] paths) AddPaths(paths); };
+        Ui.FileDrop(_list, AddPaths);
         _list.MouseDoubleClick += (_, _) =>
         {
             if (_list.SelectedItem is CompressItem item) ProcessLauncher.OpenLocation(item.Output ?? item.Path);

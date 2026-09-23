@@ -29,7 +29,7 @@ sealed class GeneratorPage : DockPanel
 
         var uuidRow = Ui.Row(Ui.Label("UUID"), _uuidFormat, Ui.Label("", 8), Ui.Button("生成 UUID", GenerateUuids, accent: true));
         var pwdRow = Ui.Row(Ui.Label("密码长度"), _length, Ui.Label("", 12), _upper, _lower, _digits, _symbols, _noAmbiguous, Ui.Button("生成密码", GeneratePasswords, accent: true));
-        var common = Ui.Row(Ui.Label("数量"), _count, Ui.Label("", 16), Ui.Button("复制全部", () => { if (_output.Text.Length > 0) ScreenToolService.CopyText(_output.Text.TrimEnd()); }), Ui.Button("清空", () => _output.Clear()));
+        var common = Ui.Row(Ui.Label("数量"), _count, Ui.Label("", 16), Ui.Button("复制全部", () => { if (_output.Text.Length > 0) ScreenToolService.CopyText(_output.Text.TrimEnd()); }), Ui.SaveButton(() => _output.Text.TrimEnd(), _status, "generated.txt"), Ui.Button("清空", () => _output.Clear()));
 
         foreach (var box in new[] { _upper, _lower, _digits, _symbols, _noAmbiguous })
             box.Margin = new Thickness(0, 0, 12, 0);

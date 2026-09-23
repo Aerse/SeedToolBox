@@ -50,17 +50,7 @@ sealed class DiffPage : DockPanel
         Children.Add(grid);
     }
 
-    void AllowFileDrop(TextBox box)
-    {
-        box.PreviewDragOver += (_, e) => { e.Effects = DragDropEffects.Copy; e.Handled = true; };
-        box.PreviewDrop += (_, e) =>
-        {
-            e.Handled = true;
-            if (e.Data.GetData(DataFormats.FileDrop) is not string[] { Length: > 0 } files) return;
-            try { box.Text = TextFiles.Read(files[0], out System.Text.Encoding _); }
-            catch (Exception ex) { Ui.SetStatus(_status, "读取失败：" + ex.Message, true); }
-        };
-    }
+    void AllowFileDrop(TextBox box) => Ui.FileDrop(box, files => Ui.LoadText(box, files[0], _status));
 
     void Compare()
     {

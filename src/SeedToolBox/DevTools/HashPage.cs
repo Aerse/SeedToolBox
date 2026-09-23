@@ -37,12 +37,7 @@ sealed class HashPage : DockPanel
             if (_path != null) return;
             ComputeText();
         };
-        _input.PreviewDragOver += (_, e) => { e.Effects = DragDropEffects.Copy; e.Handled = true; };
-        _input.PreviewDrop += (_, e) =>
-        {
-            e.Handled = true;
-            if (e.Data.GetData(DataFormats.FileDrop) is string[] { Length: > 0 } files && File.Exists(files[0])) ComputeFile(files[0]);
-        };
+        Ui.FileDrop(_input, files => { if (File.Exists(files[0])) ComputeFile(files[0]); });
 
         var results = new StackPanel();
         for (int i = 0; i < Names.Length; i++)

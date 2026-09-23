@@ -53,6 +53,7 @@ sealed class RegexPage : DockPanel
         foreach (var check in new[] { _ignoreCase, _multiline, _singleline }) check.Click += (_, _) => Schedule();
         _timer.Tick += (_, _) => { _timer.Stop(); Run(); };
 
+        Ui.FileDrop(_input, files => Ui.LoadText(_input, files[0], _status));
         var body = Ui.Columns(Ui.Titled("测试文本", _input), _tabs);
         SetDock(header, Dock.Top);
         SetDock(patternRow, Dock.Top);

@@ -39,27 +39,20 @@ sealed class DataConvertPage : DockPanel
             Ui.Button("转换", Convert, accent: true),
             Ui.Button("清空", () => { _input.Clear(); _output.Clear(); _status.Text = ""; }));
 
-        _input.PreviewDragOver += (_, e) => { e.Effects = DragDropEffects.Copy; e.Handled = true; };
-        _input.PreviewDrop += (_, e) =>
+        Ui.FileDrop(_input, files =>
         {
-            e.Handled = true;
-            if (e.Data.GetData(DataFormats.FileDrop) is not string[] { Length: > 0 } files) return;
-            try
-            {
-                _input.Text = TextFiles.Read(files[0], out Encoding _);
-                var ext = Path.GetExtension(files[0]).ToLowerInvariant();
-                int i = ext switch { ".xml" => 1, ".yml" or ".yaml" => 2, ".csv" => 3, _ => 0 };
-                _from.SelectedIndex = i;
-                if (_to.SelectedIndex == i) _to.SelectedIndex = i == 0 ? 2 : 0;
-            }
-            catch (Exception ex) { Ui.SetStatus(_status, "读取失败：" + ex.Message, true); }
-        };
+            if (!Ui.LoadText(_input, files[0], _status)) return;
+            var ext = Path.GetExtension(files[0]).ToLowerInvariant();
+            int i = ext switch { ".xml" => 1, ".yml" or ".yaml" => 2, ".csv" => 3, _ => 0 };
+            _from.SelectedIndex = i;
+            if (_to.SelectedIndex == i) _to.SelectedIndex = i == 0 ? 2 : 0;
+        });
 
         var format = Ui.Button("整理输入", () => { try { if (_from.SelectedIndex == 0) _input.Text = JToken.Parse(_input.Text).ToString(Newtonsoft.Json.Formatting.Indented); } catch (Exception ex) { Ui.SetStatus(_status, ex.Message, true); } });
         format.Margin = new Thickness(0);
         var copy = Ui.Button("复制结果", () => { if (_output.Text.Length > 0) ScreenToolService.CopyText(_output.Text); });
         copy.Margin = new Thickness(0);
-        var body = Ui.Columns(Ui.Titled("输入（可拖入文件）", _input, format), Ui.Titled("结果", _output, copy));
+        var body = Ui.Columns(Ui.Titled("输入（可拖入文件）", _input, new StackPanel { Orientation = Orientation.Horizontal, Children = { Ui.OpenButton(_input, _status), format } }), Ui.Titled("结果", _output, new StackPanel { Orientation = Orientation.Horizontal, Children = { Ui.SaveButton(() => _output.Text, _status), copy } }));
         SetDock(header, Dock.Top);
         SetDock(toolbar, Dock.Top);
         SetDock(_status, Dock.Bottom);

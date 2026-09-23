@@ -45,15 +45,10 @@ sealed class ImageBase64Page : DockPanel
             BorderBrush = (Brush)Application.Current.Resources["ControlBorderBrush"],
             BorderThickness = new Thickness(1),
             CornerRadius = new CornerRadius(4),
-            AllowDrop = true,
             Padding = new Thickness(8),
             Child = new Grid { Children = { _placeholder, _preview } },
         };
-        drop.DragOver += (_, e) => { e.Effects = DragDropEffects.Copy; e.Handled = true; };
-        drop.Drop += (_, e) =>
-        {
-            if (e.Data.GetData(DataFormats.FileDrop) is string[] { Length: > 0 } files) LoadFile(files[0]);
-        };
+        Ui.FileDrop(drop, files => LoadFile(files[0]));
 
         var copy = Ui.Button("复制", () => { if (_base64.Text.Length > 0) ScreenToolService.CopyText(_base64.Text); });
         copy.Margin = new Thickness(0);

@@ -37,6 +37,7 @@ sealed class EncodePage : DockPanel
             return b;
         }
 
+        Ui.FileDrop(_plain, files => Ui.LoadText(_plain, files[0], _status));
         var body = Ui.Columns(Ui.Titled("原文", _plain, Copy(_plain)), Ui.Titled("编码结果", _encoded, Copy(_encoded)));
         SetDock(header, Dock.Top);
         SetDock(toolbar, Dock.Top);

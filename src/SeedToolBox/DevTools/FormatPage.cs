@@ -20,6 +20,7 @@ sealed class FormatPage : DockPanel
     readonly ComboBox _language = new() { Width = 120, ItemsSource = new[] { "JSON", "JavaScript", "CSS" }, SelectedIndex = 0 };
     readonly ComboBox _indent = new() { Width = 100, ItemsSource = new[] { "2 空格", "4 空格", "Tab" }, SelectedIndex = 1 };
     readonly TextBlock _status = Ui.Status();
+    readonly AsyncToken _busy = new();
 
     public FormatPage()
     {
@@ -32,15 +33,15 @@ sealed class FormatPage : DockPanel
             Ui.Button("校验", Validate),
             Ui.Button("清空", () => { _input.Clear(); _output.Clear(); _status.Text = ""; }));
 
-        _input.PreviewDragOver += (_, e) => { e.Effects = DragDropEffects.Copy; e.Handled = true; };
-        _input.PreviewDrop += OnDrop;
+        Ui.FileDrop(_input, files => Load(files[0]));
 
-        var copy = Ui.Button("复制结果", () => { if (_output.Text.Length > 0) ScreenToolService.CopyText(_output.Text); });
+        var copy = Ui.CopyButton(() => _output.Text);
         copy.Margin = new Thickness(0);
         var swap = Ui.Button("结果放回输入", () => _input.Text = _output.Text);
-        var buttons = new StackPanel { Orientation = Orientation.Horizontal, Children = { swap, copy } };
+        var save = Ui.SaveButton(() => _output.Text, _status, "result" + Extension);
+        var buttons = new StackPanel { Orientation = Orientation.Horizontal, Children = { swap, save, copy } };
 
-        var body = Ui.Columns(Ui.Titled("输入（可拖入文件）", _input), Ui.Titled("结果", _output, buttons));
+        var body = Ui.Columns(Ui.Titled("输入（可拖入文件）", _input, Ui.OpenButton(_input, _status, PickLanguage)), Ui.Titled("结果", _output, buttons));
         SetDock(header, Dock.Top);
         SetDock(toolbar, Dock.Top);
         SetDock(_status, Dock.Bottom);
@@ -52,21 +53,17 @@ sealed class FormatPage : DockPanel
 
     string Language => (string)_language.SelectedItem;
 
-    void OnDrop(object sender, DragEventArgs e)
+    string Extension => Language switch { "JavaScript" => ".js", "CSS" => ".css", _ => ".json" };
+
+    void Load(string path)
     {
-        e.Handled = true;
-        if (e.Data.GetData(DataFormats.FileDrop) is not string[] { Length: > 0 } files) return;
-        var path = files[0];
-        try
-        {
-            _input.Text = TextFiles.Read(path, out _);
-            var ext = Path.GetExtension(path).ToLowerInvariant();
-            _language.SelectedItem = ext switch { ".js" or ".mjs" or ".cjs" or ".ts" => "JavaScript", ".css" => "CSS", _ => "JSON" };
-        }
-        catch (Exception ex)
-        {
-            Ui.SetStatus(_status, "读取失败：" + ex.Message, true);
-        }
+        if (Ui.LoadText(_input, path, _status)) PickLanguage(path);
+    }
+
+    void PickLanguage(string path)
+    {
+        var ext = Path.GetExtension(path).ToLowerInvariant();
+        _language.SelectedItem = ext switch { ".js" or ".mjs" or ".cjs" or ".ts" => "JavaScript", ".css" => "CSS", _ => "JSON" };
     }
 
     void Beautify() => Run(true);
@@ -76,20 +73,19 @@ sealed class FormatPage : DockPanel
     {
         var text = _input.Text;
         if (text.Trim().Length == 0) { Ui.SetStatus(_status, "请先输入内容", true); return; }
-        try
+        var language = Language;
+        int indent = _indent.SelectedIndex;
+        Ui.SetStatus(_status, "处理中…");
+        Ui.RunAsync(_busy, () => language switch
         {
-            _output.Text = Language switch
-            {
-                "JSON" => FormatJson(text, beautify),
-                "JavaScript" => FormatJs(text, beautify),
-                _ => FormatCss(text, beautify),
-            };
-            Ui.SetStatus(_status, $"完成：{text.Length:N0} → {_output.Text.Length:N0} 字符");
-        }
-        catch (Exception ex)
+            "JSON" => FormatJson(text, beautify, indent),
+            "JavaScript" => FormatJs(text, beautify, indent),
+            _ => FormatCss(text, beautify, indent),
+        }, result =>
         {
-            Ui.SetStatus(_status, ex.Message, true);
-        }
+            _output.Text = result;
+            Ui.SetStatus(_status, $"完成：{text.Length:N0} → {result.Length:N0} 字符");
+        }, ex => Ui.SetStatus(_status, ex.Message, true));
     }
 
     void Validate()
@@ -109,7 +105,7 @@ sealed class FormatPage : DockPanel
         }
     }
 
-    string IndentText => _indent.SelectedIndex switch { 0 => "  ", 2 => "\t", _ => "    " };
+    static string IndentText(int indent) => indent switch { 0 => "  ", 2 => "\t", _ => "    " };
 
     static JToken ParseJson(string text)
     {
@@ -126,44 +122,44 @@ sealed class FormatPage : DockPanel
         }
     }
 
-    string FormatJson(string text, bool beautify)
+    static string FormatJson(string text, bool beautify, int indent)
     {
         var token = ParseJson(text);
         if (!beautify) return token.ToString(Formatting.None);
         using var writer = new StringWriter();
         using var json = new JsonTextWriter(writer) { Formatting = Formatting.Indented };
-        if (_indent.SelectedIndex == 2) { json.IndentChar = '\t'; json.Indentation = 1; }
-        else json.Indentation = _indent.SelectedIndex == 0 ? 2 : 4;
+        if (indent == 2) { json.IndentChar = '\t'; json.Indentation = 1; }
+        else json.Indentation = indent == 0 ? 2 : 4;
         token.WriteTo(json);
         json.Flush();
         return writer.ToString();
     }
 
-    string FormatJs(string text, bool beautify)
+    static string FormatJs(string text, bool beautify, int indent)
     {
         var settings = new CodeSettings();
         if (beautify)
         {
             settings.MinifyCode = false;
             settings.OutputMode = OutputMode.MultipleLines;
-            settings.IndentSize = IndentText == "\t" ? 4 : IndentText.Length;
+            settings.IndentSize = IndentText(indent) == "\t" ? 4 : IndentText(indent).Length;
             settings.PreserveImportantComments = true;
             settings.BlocksStartOnSameLine = BlockStart.SameLine;
             settings.TermSemicolons = true;
         }
         var result = Uglify.Js(text, settings);
         Check(result);
-        return beautify && IndentText == "\t" ? Retab(result.Code, 4) : result.Code;
+        return beautify && IndentText(indent) == "\t" ? Retab(result.Code, 4) : result.Code;
     }
 
-    string FormatCss(string text, bool beautify)
+    static string FormatCss(string text, bool beautify, int indent)
     {
         var settings = new CssSettings();
         var code = new CodeSettings();
         if (beautify)
         {
             settings.OutputMode = OutputMode.MultipleLines;
-            settings.IndentSize = IndentText == "\t" ? 4 : IndentText.Length;
+            settings.IndentSize = IndentText(indent) == "\t" ? 4 : IndentText(indent).Length;
             settings.CommentMode = CssComment.All;
             settings.BlocksStartOnSameLine = BlockStart.SameLine;
             settings.TermSemicolons = true;
@@ -171,7 +167,7 @@ sealed class FormatPage : DockPanel
         }
         var result = Uglify.Css(text, settings, code);
         Check(result);
-        return beautify && IndentText == "\t" ? Retab(result.Code, 4) : result.Code;
+        return beautify && IndentText(indent) == "\t" ? Retab(result.Code, 4) : result.Code;
     }
 
     static void Check(UglifyResult result)
