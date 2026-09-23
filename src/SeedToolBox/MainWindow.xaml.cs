@@ -42,14 +42,6 @@ public partial class MainWindow : Window
 
     readonly ObservableCollection<ToolCommand> _tools = new();
 
-    // Settings menu, mirroring the tray menu
-    public event Action? HotkeyRequested;
-    public event Action? BackupRequested;
-    public event Action? RestoreRequested;
-    public event Action? OpenAppLocationRequested;
-    public event Action<bool>? AutoStartChanged;
-    public event Action? ExitRequested;
-
     public MainWindow(LauncherData data, ISettingsStore settings)
     {
         InitializeComponent();
@@ -204,26 +196,6 @@ public partial class MainWindow : Window
     {
         if (e.Key == Key.Escape) Hide();
     }
-
-    void OnSettingsClick(object sender, RoutedEventArgs e)
-    {
-        SettingsMenu.PlacementTarget = SettingsButton;
-        SettingsMenu.IsOpen = true;
-    }
-
-    void OnSettingsMenuOpened(object sender, RoutedEventArgs e)
-    {
-        LockSizeItem.IsChecked = _data.Window.SizeLocked;
-        AutoStartItem.IsChecked = AutoStart.IsEnabled;
-    }
-
-    void OnLockSizeClick(object sender, RoutedEventArgs e) => SetSizeLocked(LockSizeItem.IsChecked);
-    void OnAutoStartClick(object sender, RoutedEventArgs e) => AutoStartChanged?.Invoke(AutoStartItem.IsChecked);
-    void OnHotkeysClick(object sender, RoutedEventArgs e) => HotkeyRequested?.Invoke();
-    void OnBackupClick(object sender, RoutedEventArgs e) => BackupRequested?.Invoke();
-    void OnRestoreClick(object sender, RoutedEventArgs e) => RestoreRequested?.Invoke();
-    void OnAppLocationClick(object sender, RoutedEventArgs e) => OpenAppLocationRequested?.Invoke();
-    void OnExitClick(object sender, RoutedEventArgs e) => ExitRequested?.Invoke();
 
     #endregion
 

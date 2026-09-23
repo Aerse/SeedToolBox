@@ -80,29 +80,17 @@ public partial class App : Application
         try { AutoStart.Refresh(); }
         catch (Exception ex) { Log.Error("Failed to refresh autostart entry", ex); }
 
-        _tray = new TrayIcon(() => data.Window.SizeLocked, () => AutoStart.IsEnabled);
+        _tray = new TrayIcon();
         _tray.ToggleWindowRequested += _main.ToggleVisibility;
         _tray.ShowWindowRequested += _main.ShowAndActivate;
-        _tray.OpenAppLocationRequested += () => ProcessLauncher.OpenLocation(ProcessLauncher.ExePath);
-        _tray.LockSizeChanged += _main.SetSizeLocked;
-        _tray.AutoStartChanged += SetAutoStart;
-        _tray.HotkeyRequested += ChangeHotkeys;
-        _tray.BackupRequested += BackupData;
-        _tray.RestoreRequested += RestoreData;
+        _tray.SettingsRequested += () => { _main.ShowPage("settings"); _main.ShowAndActivate(); };
         _tray.ExitRequested += ExitApp;
-        _main.OpenAppLocationRequested += () => ProcessLauncher.OpenLocation(ProcessLauncher.ExePath);
-        _main.AutoStartChanged += SetAutoStart;
-        _main.HotkeyRequested += ChangeHotkeys;
-        _main.BackupRequested += BackupData;
-        _main.RestoreRequested += RestoreData;
-        _main.ExitRequested += ExitApp;
 
         var screen = _screenTools = new ScreenToolService(settings);
         _tray.AddCommand("screenshot", "截图", AfterTrayMenu(screen.Screenshot));
         _tray.AddCommand("color", "取色", AfterTrayMenu(screen.PickColor));
         _tray.AddCommand("ruler", "屏幕标尺", AfterTrayMenu(screen.Ruler));
         _tray.AddCommand("record", "录屏", AfterTrayMenu(screen.Record));
-        _tray.AddCommand("recordsettings", "录屏设置…", () => screen.RecordSettings());
         _tray.AddCommand("ocr", "识别文字", AfterTrayMenu(screen.RecognizeText));
         _tray.AddCommand("qr", "识别二维码", AfterTrayMenu(screen.RecognizeQrCodes));
         _tray.AddCommand("qrscreen", "识别全屏二维码", AfterTrayMenu(screen.ScanQrCodes));
@@ -118,6 +106,23 @@ public partial class App : Application
         Action showClipboard = () => (_clipboardWindow ??= new Clips.ClipboardWindow(clipboard)).ShowAtCursor();
         _tray.AddCommand("clipboard", "剪贴板历史", showClipboard);
         _main.AddPage("clipboard", "\uE77F", "剪贴板", () => new Clips.ClipboardPage(clipboard));
+        _main.AddFooterPage("settings", "\uE713", "设置", () => new SettingsPage(new SettingsPage.Options
+        {
+            SizeLocked = () => data.Window.SizeLocked,
+            SetSizeLocked = _main.SetSizeLocked,
+            AutoStart = () => AutoStart.IsEnabled,
+            SetAutoStart = SetAutoStart,
+            Hotkeys = () => _hotkeys.Select(h => (h.Label, h.Get())).ToList(),
+            SetHotkey = SetHotkey,
+            Record = screen.Settings.Record,
+            SaveRecord = screen.SaveSettings,
+            Clipboard = clipboard.Settings,
+            SaveClipboard = clipboard.SaveSettings,
+            Backup = BackupData,
+            Restore = RestoreData,
+            OpenData = () => ProcessLauncher.OpenLocation(AppPaths.Data),
+            OpenApp = () => ProcessLauncher.OpenLocation(ProcessLauncher.ExePath),
+        }));
 
         var main = _main;
         _hotkeys.Add(new HotkeyBinding(TrayIcon.ShowWindowCommand, "呼出主窗口", () => data.Hotkey, v => data.Hotkey = v, main.ToggleFromHotkey));
@@ -137,7 +142,7 @@ public partial class App : Application
             _main.SetToolHotkey(binding.Command, binding.Get());
         }
         if (taken.Count > 0)
-            _tray.ShowMessage($"热键已被其他程序占用：{string.Join("、", taken)}。可在托盘菜单「热键设置」中更换");
+            _tray.ShowMessage($"热键已被其他程序占用：{string.Join("、", taken)}。可在「设置」页中更换");
 
         _modules = new ModuleManager(new AppHost(_tray, settings, Dispatcher));
         _modules.LoadAll();
@@ -157,35 +162,25 @@ public partial class App : Application
         timer.Start();
     };
 
-    void ChangeHotkeys()
+    /// <summary>Changes one hotkey, keeping the old one if the new one can't be registered.</summary>
+    string? SetHotkey(int index, string value)
     {
-        var values = HotkeysDialog.Show(_hotkeys.Select(h => (h.Label, h.Get())).ToList());
-        if (values == null) return;
-
-        var failed = new List<string>();
-        for (int i = 0; i < _hotkeys.Count; i++)
+        var binding = _hotkeys[index];
+        var clash = value.Length > 0 ? _hotkeys.FirstOrDefault(h => h != binding && h.Get() == value) : null;
+        if (clash != null) return $"{value} 已用于「{clash.Label}」";
+        var old = binding.Get();
+        if (!binding.Register(value))
         {
-            var binding = _hotkeys[i];
-            var old = binding.Get();
-            if (values[i] == old) continue;
-            if (binding.Register(values[i]))
-            {
-                binding.Set(values[i]);
-            }
-            else
-            {
-                binding.Register(old);
-                failed.Add($"{binding.Label} {values[i]}");
-            }
-            _tray!.SetShortcutText(binding.Command, binding.Get());
-            _main!.SetToolHotkey(binding.Command, binding.Get());
+            binding.Register(old);
+            return $"{value} 已被其他程序占用，未更改";
         }
-        _main!.RequestSave();
+        binding.Set(value);
+        _tray!.SetShortcutText(binding.Command, value);
+        _main!.SetToolHotkey(binding.Command, value);
+        _main.RequestSave();
         _screenTools!.SaveSettings();
         _clipboard?.SaveSettings();
-
-        if (failed.Count > 0)
-            MessageBox.Show($"以下热键已被其他程序占用，未更改：\n{string.Join("\n", failed)}", "SeedToolBox", MessageBoxButton.OK, MessageBoxImage.Warning);
+        return null;
     }
 
     void BackupData()

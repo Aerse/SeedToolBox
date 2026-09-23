@@ -53,7 +53,9 @@ public partial class MainWindow
     readonly List<TextBlock> _navTexts = new();
     readonly List<FrameworkElement> _navCaptions = new();
 
-    string CurrentPage => NavList.SelectedItem is ListBoxItem { Tag: Page p } ? p.Id : "launcher";
+    const string FooterGroup = "footer";
+
+    string CurrentPage => (NavList.SelectedItem ?? FooterList.SelectedItem) is ListBoxItem { Tag: Page p } ? p.Id : "launcher";
 
     bool _buildingNav;
 
@@ -64,10 +66,18 @@ public partial class MainWindow
         BuildNav();
     }
 
+    /// <summary>Adds a page pinned to the bottom of the sidebar, such as settings.</summary>
+    public void AddFooterPage(string id, string glyph, string name, Func<FrameworkElement> create)
+    {
+        _pages.Add(new Page(id, FooterGroup, glyph, name, create));
+        BuildNav();
+    }
+
     void BuildNav()
     {
         _buildingNav = true;
         NavList.Items.Clear();
+        FooterList.Items.Clear();
         _navTexts.Clear();
         _navCaptions.Clear();
         var hint = (Brush)FindResource("HintTextBrush");
@@ -75,7 +85,8 @@ public partial class MainWindow
         string group = "";
         foreach (var p in _pages)
         {
-            if (p.Group != group)
+            var list = p.Group == FooterGroup ? FooterList : NavList;
+            if (list == NavList && p.Group != group)
             {
                 group = p.Group;
                 var caption = new TextBlock { Text = p.Group, FontSize = 12, Foreground = hint, Margin = new Thickness(12, 14, 0, 4) };
@@ -93,7 +104,7 @@ public partial class MainWindow
             }
             var text = new TextBlock { Text = p.Name, VerticalAlignment = VerticalAlignment.Center, TextTrimming = TextTrimming.CharacterEllipsis };
             _navTexts.Add(text);
-            NavList.Items.Add(new ListBoxItem
+            list.Items.Add(new ListBoxItem
             {
                 Tag = p,
                 ToolTip = p.Name,
@@ -117,14 +128,16 @@ public partial class MainWindow
     /// <summary>Switches to a page by id; unknown ids fall back to the launcher.</summary>
     public void ShowPage(string id)
     {
-        var item = NavList.Items.OfType<ListBoxItem>().FirstOrDefault(i => i.Tag is Page p && p.Id == id)
-            ?? NavList.Items.OfType<ListBoxItem>().First(i => i.Tag is Page);
-        NavList.SelectedItem = item;
+        var items = NavList.Items.OfType<ListBoxItem>().Concat(FooterList.Items.OfType<ListBoxItem>());
+        var item = items.FirstOrDefault(i => i.Tag is Page p && p.Id == id) ?? items.First(i => i.Tag is Page);
+        (NavList.Items.Contains(item) ? NavList : FooterList).SelectedItem = item;
     }
 
     void OnNavSelectionChanged(object sender, SelectionChangedEventArgs e)
     {
-        if (NavList.SelectedItem is not ListBoxItem { Tag: Page page }) return;
+        if (((ListBox)sender).SelectedItem is not ListBoxItem { Tag: Page page }) return;
+        // The two lists act as one: selecting in one clears the other
+        (sender == NavList ? FooterList : NavList).SelectedItem = null;
         LauncherView.Visibility = page.Id == "launcher" ? Visibility.Visible : Visibility.Collapsed;
         ToolsView.Visibility = page.Id == "tools" ? Visibility.Visible : Visibility.Collapsed;
         PageHost.Visibility = page.Create != null ? Visibility.Visible : Visibility.Collapsed;

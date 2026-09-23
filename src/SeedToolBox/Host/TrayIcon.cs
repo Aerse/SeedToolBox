@@ -20,45 +20,19 @@ public sealed class TrayIcon : IDisposable
 
     public event Action? ToggleWindowRequested;
     public event Action? ShowWindowRequested;
-    public event Action? OpenAppLocationRequested;
-    public event Action<bool>? LockSizeChanged;
-    public event Action<bool>? AutoStartChanged;
-    public event Action? HotkeyRequested;
-    public event Action? BackupRequested;
-    public event Action? RestoreRequested;
+    public event Action? SettingsRequested;
     public event Action? ExitRequested;
 
     public const string ShowWindowCommand = "show";
 
-    /// <param name="sizeLocked">Read each time the menu opens, as the main window can change these too.</param>
-    public TrayIcon(Func<bool> sizeLocked, Func<bool> autoStart)
+    public TrayIcon()
     {
         _menu = new WinForms.ContextMenuStrip();
         _menu.Items.Add(_commandSeparator);
         AddCommand(ShowWindowCommand, "显示主窗口", () => ShowWindowRequested?.Invoke());
         _menu.Items.Add(_moduleSeparator);
-        _menu.Items.Add("打开本程序位置", null, (_, _) => OpenAppLocationRequested?.Invoke());
-
-        var lockItem = new WinForms.ToolStripMenuItem("锁定窗体尺寸") { CheckOnClick = true };
-        lockItem.Click += (_, _) => LockSizeChanged?.Invoke(lockItem.Checked);
-        _menu.Items.Add(lockItem);
-
-        _menu.Items.Add("热键设置...", null, (_, _) => HotkeyRequested?.Invoke());
-
-        var autoStartItem = new WinForms.ToolStripMenuItem("开机自启") { CheckOnClick = true };
-        autoStartItem.Click += (_, _) => AutoStartChanged?.Invoke(autoStartItem.Checked);
-        _menu.Items.Add(autoStartItem);
-
-        _menu.Items.Add("备份数据...", null, (_, _) => BackupRequested?.Invoke());
-        _menu.Items.Add("恢复数据...", null, (_, _) => RestoreRequested?.Invoke());
-
-        _menu.Items.Add(new WinForms.ToolStripSeparator());
+        _menu.Items.Add("设置…", null, (_, _) => SettingsRequested?.Invoke());
         _menu.Items.Add("退出", null, (_, _) => ExitRequested?.Invoke());
-        _menu.Opening += (_, _) =>
-        {
-            lockItem.Checked = sizeLocked();
-            autoStartItem.Checked = autoStart();
-        };
 
         FluentMenuRenderer.Apply(_menu);
 

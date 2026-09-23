@@ -207,22 +207,6 @@
         <DockPanel Grid.ColumnSpan="2" Margin="14,0,6,0">
             <Button DockPanel.Dock="Right" Content="&#xE8BB;" Style="{StaticResource CloseButton}" Click="OnCloseClick"
                     ToolTip="隐藏到托盘" AutomationProperties.Name="隐藏到托盘" WindowChrome.IsHitTestVisibleInChrome="True" />
-            <Button x:Name="SettingsButton" DockPanel.Dock="Right" Content="&#xE713;" Style="{StaticResource IconButton}"
-                    Margin="0,0,2,0" ToolTip="设置" AutomationProperties.Name="设置" Click="OnSettingsClick" WindowChrome.IsHitTestVisibleInChrome="True">
-                <Button.ContextMenu>
-                    <ContextMenu x:Name="SettingsMenu" Placement="Bottom" Opened="OnSettingsMenuOpened">
-                        <MenuItem x:Name="LockSizeItem" Header="锁定窗体尺寸" IsCheckable="True" Click="OnLockSizeClick" />
-                        <MenuItem x:Name="AutoStartItem" Header="开机自启" IsCheckable="True" Click="OnAutoStartClick" />
-                        <MenuItem Header="热键设置..." Click="OnHotkeysClick" />
-                        <Separator />
-                        <MenuItem Header="备份数据..." Click="OnBackupClick" />
-                        <MenuItem Header="恢复数据..." Click="OnRestoreClick" />
-                        <MenuItem Header="打开本程序位置" Click="OnAppLocationClick" />
-                        <Separator />
-                        <MenuItem Header="退出" Click="OnExitClick" />
-                    </ContextMenu>
-                </Button.ContextMenu>
-            </Button>
             <Image Source="/Assets/app.ico" Width="18" Height="18" VerticalAlignment="Center" RenderOptions.BitmapScalingMode="HighQuality" />
             <TextBlock Text="SeedToolBox" FontSize="14" FontWeight="SemiBold" VerticalAlignment="Center" Margin="8,0,0,0" />
         </DockPanel>
@@ -231,6 +215,8 @@
         <DockPanel x:Name="NavPanel" Grid.Row="1" Width="200">
             <Button x:Name="CollapseButton" DockPanel.Dock="Bottom" Style="{StaticResource IconButton}" HorizontalAlignment="Left"
                     Margin="12,4,0,10" Click="OnCollapseClick" />
+            <ListBox x:Name="FooterList" DockPanel.Dock="Bottom" ItemContainerStyle="{StaticResource NavItem}" Background="Transparent" BorderThickness="0"
+                     Margin="8,4,8,0" ScrollViewer.HorizontalScrollBarVisibility="Disabled" SelectionChanged="OnNavSelectionChanged" />
             <ListBox x:Name="NavList" ItemContainerStyle="{StaticResource NavItem}" Background="Transparent" BorderThickness="0"
                      Margin="8,0,8,4" ScrollViewer.HorizontalScrollBarVisibility="Disabled" SelectionChanged="OnNavSelectionChanged" />
         </DockPanel>

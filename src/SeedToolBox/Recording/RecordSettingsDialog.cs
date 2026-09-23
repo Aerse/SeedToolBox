@@ -58,7 +58,7 @@ static class RecordSettingsDialog
 
         var hint = new TextBlock
         {
-            Text = "录屏热键可在托盘菜单「热键设置」中修改；录制中再按一次热键即可停止",
+            Text = "录屏热键可在「设置」页中修改；录制中再按一次热键即可停止",
             Foreground = (System.Windows.Media.Brush)Application.Current.Resources["HintTextBrush"],
             FontSize = 12,
             TextWrapping = TextWrapping.Wrap,
