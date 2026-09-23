@@ -14,14 +14,17 @@ public sealed class TrayIcon : IDisposable
     // Module entries are inserted just above this separator
     readonly WinForms.ToolStripSeparator _moduleSeparator = new() { Visible = false };
     readonly Dictionary<string, WinForms.ToolStripMenuItem> _submenus = new();
+    readonly WinForms.ToolStripMenuItem _hotkeyItem;
 
     public event Action? ToggleWindowRequested;
     public event Action? ShowWindowRequested;
     public event Action? OpenAppLocationRequested;
     public event Action<bool>? LockSizeChanged;
+    public event Action<bool>? AutoStartChanged;
+    public event Action? HotkeyRequested;
     public event Action? ExitRequested;
 
-    public TrayIcon(bool sizeLocked)
+    public TrayIcon(bool sizeLocked, bool autoStart, string hotkey)
     {
         _menu = new WinForms.ContextMenuStrip();
         _menu.Items.Add("显示主窗口", null, (_, _) => ShowWindowRequested?.Invoke());
@@ -32,6 +35,14 @@ public sealed class TrayIcon : IDisposable
         var lockItem = new WinForms.ToolStripMenuItem("锁定窗体尺寸") { CheckOnClick = true, Checked = sizeLocked };
         lockItem.CheckedChanged += (_, _) => LockSizeChanged?.Invoke(lockItem.Checked);
         _menu.Items.Add(lockItem);
+
+        _hotkeyItem = new WinForms.ToolStripMenuItem("", null, (_, _) => HotkeyRequested?.Invoke());
+        SetHotkeyText(hotkey);
+        _menu.Items.Add(_hotkeyItem);
+
+        var autoStartItem = new WinForms.ToolStripMenuItem("开机自启") { CheckOnClick = true, Checked = autoStart };
+        autoStartItem.CheckedChanged += (_, _) => AutoStartChanged?.Invoke(autoStartItem.Checked);
+        _menu.Items.Add(autoStartItem);
 
         _menu.Items.Add(new WinForms.ToolStripSeparator());
         _menu.Items.Add("退出", null, (_, _) => ExitRequested?.Invoke());
@@ -68,6 +79,12 @@ public sealed class TrayIcon : IDisposable
         }
         _moduleSeparator.Visible = true;
     }
+
+    public void SetHotkeyText(string hotkey) =>
+        _hotkeyItem.Text = $"呼出热键：{(hotkey.Length > 0 ? hotkey : "无")}...";
+
+    public void ShowMessage(string text) =>
+        _notifyIcon.ShowBalloonTip(5000, "SeedToolBox", text, WinForms.ToolTipIcon.Warning);
 
     static Icon LoadIcon()
     {

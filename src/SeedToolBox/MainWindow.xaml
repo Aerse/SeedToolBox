@@ -45,6 +45,10 @@
 
         <Style x:Key="GroupItemStyle" TargetType="ListBoxItem">
             <Setter Property="Padding" Value="14,9" />
+            <Setter Property="AllowDrop" Value="True" />
+            <EventSetter Event="PreviewMouseLeftButtonDown" Handler="OnGroupMouseDown" />
+            <EventSetter Event="DragOver" Handler="OnGroupDragOver" />
+            <EventSetter Event="Drop" Handler="OnGroupDrop" />
             <Setter Property="Template">
                 <Setter.Value>
                     <ControlTemplate TargetType="ListBoxItem">
@@ -89,7 +93,8 @@
                 <ListBox x:Name="GroupList" ItemsSource="{Binding Groups}" DisplayMemberPath="Name"
                          ItemContainerStyle="{StaticResource GroupItemStyle}"
                          Background="#EBEBEB" BorderThickness="0"
-                         ScrollViewer.HorizontalScrollBarVisibility="Disabled">
+                         ScrollViewer.HorizontalScrollBarVisibility="Disabled"
+                         PreviewMouseMove="OnGroupMouseMove">
                     <ListBox.ContextMenu>
                         <ContextMenu>
                             <MenuItem Header="新建分组" Click="OnAddGroup" />
@@ -118,7 +123,9 @@
                             <ItemsControl.ItemTemplate>
                                 <DataTemplate>
                                     <Border Style="{StaticResource TileStyle}" Width="80" Height="86" Margin="2"
-                                            ToolTip="{Binding Path}" MouseLeftButtonUp="OnItemClick">
+                                            ToolTip="{Binding ToolTip}" AllowDrop="True"
+                                            PreviewMouseLeftButtonDown="OnTileMouseDown" MouseMove="OnTileMouseMove"
+                                            MouseLeftButtonUp="OnItemClick" DragOver="OnTileDragOver" Drop="OnTileDrop">
                                         <Border.ContextMenu>
                                             <ContextMenu>
                                                 <MenuItem Header="打开" FontWeight="Bold" Click="OnItemOpen" />
@@ -127,10 +134,12 @@
                                                 <Separator />
                                                 <MenuItem Header="重命名" Click="OnItemRename" />
                                                 <MenuItem Header="删除" Click="OnItemDelete" />
+                                                <Separator />
+                                                <MenuItem Header="属性..." Click="OnItemProperties" />
                                             </ContextMenu>
                                         </Border.ContextMenu>
                                         <StackPanel Margin="2,8,2,0">
-                                            <Image Source="{Binding Icon}" Width="32" Height="32" />
+                                            <Image Source="{Binding Icon}" Width="32" Height="32" RenderOptions.BitmapScalingMode="HighQuality" />
                                             <TextBlock Text="{Binding Name}" TextAlignment="Center" TextWrapping="Wrap"
                                                        TextTrimming="CharacterEllipsis" Margin="0,5,0,0"
                                                        LineHeight="17" LineStackingStrategy="BlockLineHeight" MaxHeight="34" />

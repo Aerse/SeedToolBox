@@ -14,17 +14,20 @@ public static class ProcessLauncher
     public static string ExePath { get; } = Process.GetCurrentProcess().MainModule!.FileName;
 
     public static void Launch(LaunchItem item, bool asAdmin = false) =>
-        Start(item.Path, item.Arguments, item.Name, asAdmin);
+        Start(item.Path, item.Arguments, item.Name, asAdmin || item.RunAsAdmin, item.WorkingDirectory);
 
     /// <summary>Starts a program/file/URL through the shell, reporting failures to the user.</summary>
-    public static void Start(string path, string arguments = "", string? displayName = null, bool asAdmin = false)
+    public static void Start(string path, string arguments = "", string? displayName = null, bool asAdmin = false, string? workingDirectory = null)
     {
+        path = Environment.ExpandEnvironmentVariables(path);
         var psi = new ProcessStartInfo(path)
         {
             UseShellExecute = true,
             Arguments = arguments,
         };
-        if (File.Exists(path))
+        if (!string.IsNullOrWhiteSpace(workingDirectory))
+            psi.WorkingDirectory = Environment.ExpandEnvironmentVariables(workingDirectory);
+        else if (File.Exists(path))
             psi.WorkingDirectory = Path.GetDirectoryName(Path.GetFullPath(path));
         if (asAdmin)
             psi.Verb = "runas";
@@ -46,6 +49,7 @@ public static class ProcessLauncher
 
     public static void OpenLocation(string path)
     {
+        path = Environment.ExpandEnvironmentVariables(path);
         if (File.Exists(path) || Directory.Exists(path))
             Process.Start("explorer.exe", $"/select,\"{Path.GetFullPath(path)}\"");
         else

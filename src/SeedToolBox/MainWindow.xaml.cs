@@ -21,6 +21,13 @@ public partial class MainWindow : Window
     readonly DispatcherTimer _trimTimer;
     bool _exiting;
 
+    // Drag-to-reorder state
+    const string ItemFormat = "SeedToolBox.LaunchItem";
+    const string GroupFormat = "SeedToolBox.ItemGroup";
+    Point _pressPoint;
+    LaunchItem? _pressedItem;
+    ItemGroup? _pressedGroup;
+
     public MainWindow(LauncherData data, ISettingsStore settings)
     {
         InitializeComponent();
@@ -97,13 +104,20 @@ public partial class MainWindow : Window
         else ShowAndActivate();
     }
 
+    /// <summary>Hotkey: bring the window to front, or hide it if it's already in front.</summary>
+    public void ToggleFromHotkey()
+    {
+        if (IsVisible && IsActive && WindowState != WindowState.Minimized) Hide();
+        else ShowAndActivate();
+    }
+
     public void PrepareExit()
     {
         _exiting = true;
         SaveNow();
     }
 
-    void RequestSave()
+    public void RequestSave()
     {
         _saveTimer.Stop();
         _saveTimer.Start();
@@ -151,6 +165,12 @@ public partial class MainWindow : Window
 
     void OnDragOver(object sender, DragEventArgs e)
     {
+        if (e.Data.GetDataPresent(ItemFormat) || e.Data.GetDataPresent(GroupFormat))
+        {
+            e.Effects = DragDropEffects.Move;
+            e.Handled = true;
+            return;
+        }
         bool ok = e.Data.GetDataPresent(DataFormats.FileDrop) || e.Data.GetDataPresent(DataFormats.UnicodeText);
         e.Effects = ok ? DragDropEffects.Link : DragDropEffects.None;
         e.Handled = true;
@@ -219,7 +239,14 @@ public partial class MainWindow : Window
 
     static LaunchItem ItemOf(object sender) => (LaunchItem)((FrameworkElement)sender).DataContext;
 
-    void OnItemClick(object sender, MouseButtonEventArgs e) => ProcessLauncher.Launch(ItemOf(sender));
+    void OnItemClick(object sender, MouseButtonEventArgs e)
+    {
+        // Only launch if the press also started on this tile
+        var item = ItemOf(sender);
+        if (_pressedItem != item) return;
+        _pressedItem = null;
+        ProcessLauncher.Launch(item);
+    }
 
     void OnItemOpen(object sender, RoutedEventArgs e) => ProcessLauncher.Launch(ItemOf(sender));
 
@@ -240,6 +267,11 @@ public partial class MainWindow : Window
             item.Name = name;
             RequestSave();
         }
+    }
+
+    void OnItemProperties(object sender, RoutedEventArgs e)
+    {
+        if (PropertiesDialog.Show(this, ItemOf(sender))) RequestSave();
     }
 
     void OnItemDelete(object sender, RoutedEventArgs e)
@@ -292,6 +324,107 @@ public partial class MainWindow : Window
         _data.Groups.Remove(group);
         GroupList.SelectedIndex = Math.Min(index, _data.Groups.Count - 1);
         RequestSave();
+    }
+
+    #endregion
+
+    #region Drag to reorder
+
+    bool IsDragGesture(MouseEventArgs e)
+    {
+        var delta = e.GetPosition(this) - _pressPoint;
+        return Math.Abs(delta.X) >= SystemParameters.MinimumHorizontalDragDistance ||
+               Math.Abs(delta.Y) >= SystemParameters.MinimumVerticalDragDistance;
+    }
+
+    void OnTileMouseDown(object sender, MouseButtonEventArgs e)
+    {
+        _pressedItem = ItemOf(sender);
+        _pressPoint = e.GetPosition(this);
+    }
+
+    void OnTileMouseMove(object sender, MouseEventArgs e)
+    {
+        if (e.LeftButton != MouseButtonState.Pressed || _pressedItem is not { } item || !IsDragGesture(e)) return;
+        _pressedItem = null;
+        DragDrop.DoDragDrop((DependencyObject)sender, new DataObject(ItemFormat, item), DragDropEffects.Move);
+        RequestSave();
+    }
+
+    void OnTileDragOver(object sender, DragEventArgs e)
+    {
+        if (e.Data.GetData(ItemFormat) is not LaunchItem source || CurrentGroup is not { } group) return;
+
+        // Reorder live while hovering so the tiles show where the item will land
+        var target = ItemOf(sender);
+        int from = group.Items.IndexOf(source), to = group.Items.IndexOf(target);
+        if (from >= 0 && to >= 0 && from != to) group.Items.Move(from, to);
+
+        e.Effects = DragDropEffects.Move;
+        e.Handled = true;
+    }
+
+    void OnTileDrop(object sender, DragEventArgs e)
+    {
+        // Already moved during DragOver; files/URLs bubble up to the window handler
+        if (e.Data.GetDataPresent(ItemFormat)) e.Handled = true;
+    }
+
+    void OnGroupMouseDown(object sender, MouseButtonEventArgs e)
+    {
+        _pressedGroup = (ItemGroup)((FrameworkElement)sender).DataContext;
+        _pressPoint = e.GetPosition(this);
+    }
+
+    void OnGroupMouseMove(object sender, MouseEventArgs e)
+    {
+        if (e.LeftButton != MouseButtonState.Pressed || _pressedGroup is not { } group || !IsDragGesture(e)) return;
+        _pressedGroup = null;
+        DragDrop.DoDragDrop(GroupList, new DataObject(GroupFormat, group), DragDropEffects.Move);
+        RequestSave();
+    }
+
+    void OnGroupDragOver(object sender, DragEventArgs e)
+    {
+        var target = (ItemGroup)((FrameworkElement)sender).DataContext;
+
+        if (e.Data.GetData(GroupFormat) is ItemGroup source)
+        {
+            int from = _data.Groups.IndexOf(source), to = _data.Groups.IndexOf(target);
+            if (from >= 0 && to >= 0 && from != to) _data.Groups.Move(from, to);
+            e.Effects = DragDropEffects.Move;
+            e.Handled = true;
+        }
+        else if (e.Data.GetDataPresent(ItemFormat))
+        {
+            // Dropping an item on another group moves it there
+            e.Effects = target != CurrentGroup ? DragDropEffects.Move : DragDropEffects.None;
+            e.Handled = true;
+        }
+    }
+
+    void OnGroupDrop(object sender, DragEventArgs e)
+    {
+        var target = (ItemGroup)((FrameworkElement)sender).DataContext;
+
+        if (e.Data.GetData(ItemFormat) is LaunchItem item)
+        {
+            e.Handled = true;
+            if (CurrentGroup is not { } source || source == target) return;
+            source.Items.Remove(item);
+            target.Items.Add(item);
+            UpdateEmptyHint();
+            RequestSave();
+        }
+        else if (e.Data.GetDataPresent(GroupFormat))
+        {
+            e.Handled = true;
+        }
+        else
+        {
+            // Files dropped on a group: select it, then let the window handler add them there
+            GroupList.SelectedItem = target;
+        }
     }
 
     #endregion

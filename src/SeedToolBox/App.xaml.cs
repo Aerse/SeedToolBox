@@ -1,4 +1,5 @@
 using System;
+using System.Linq;
 using System.Threading;
 using System.Windows;
 using System.Windows.Threading;
@@ -7,6 +8,7 @@ using SeedToolBox.Core.Native;
 using SeedToolBox.Core.Services;
 using SeedToolBox.Host;
 using SeedToolBox.Launcher;
+using SeedToolBox.Views;
 
 namespace SeedToolBox;
 
@@ -18,6 +20,8 @@ public partial class App : Application
     Mutex? _mutex;
     TrayIcon? _tray;
     MainWindow? _main;
+    GlobalHotkey? _hotkey;
+    LauncherData? _data;
     ModuleManager? _modules;
 
     protected override void OnStartup(StartupEventArgs e)
@@ -44,19 +48,63 @@ public partial class App : Application
         var data = settings.Load<LauncherData>(LauncherData.SettingsName);
         if (data.Groups.Count == 0) data.Groups.Add(new ItemGroup { Name = "常用工具" });
 
+        _data = data;
         _main = new MainWindow(data, settings);
 
-        _tray = new TrayIcon(data.Window.SizeLocked);
+        try { AutoStart.Refresh(); }
+        catch (Exception ex) { Log.Error("Failed to refresh autostart entry", ex); }
+
+        _tray = new TrayIcon(data.Window.SizeLocked, AutoStart.IsEnabled, data.Hotkey);
         _tray.ToggleWindowRequested += _main.ToggleVisibility;
         _tray.ShowWindowRequested += _main.ShowAndActivate;
         _tray.OpenAppLocationRequested += () => ProcessLauncher.OpenLocation(ProcessLauncher.ExePath);
         _tray.LockSizeChanged += _main.SetSizeLocked;
+        _tray.AutoStartChanged += SetAutoStart;
+        _tray.HotkeyRequested += ChangeHotkey;
         _tray.ExitRequested += ExitApp;
+
+        _hotkey = new GlobalHotkey();
+        _hotkey.Pressed += _main.ToggleFromHotkey;
+        if (!RegisterHotkey(data.Hotkey))
+            _tray.ShowMessage($"呼出热键 {data.Hotkey} 已被其他程序占用，可在托盘菜单中更换");
 
         _modules = new ModuleManager(new AppHost(_tray, settings, Dispatcher));
         _modules.LoadAll();
 
-        _main.Show();
+        if (!e.Args.Contains(AutoStart.BackgroundArg))
+            _main.Show();
+    }
+
+    bool RegisterHotkey(string text) =>
+        _hotkey!.Register(Hotkey.TryParse(text, out var key) ? key : null);
+
+    void ChangeHotkey()
+    {
+        var old = _data!.Hotkey;
+        if (HotkeyDialog.Show(old) is not { } text || text == old) return;
+
+        if (!RegisterHotkey(text))
+        {
+            RegisterHotkey(old);
+            MessageBox.Show($"热键 {text} 已被其他程序占用，请换一个", "SeedToolBox", MessageBoxButton.OK, MessageBoxImage.Warning);
+            return;
+        }
+        _data.Hotkey = text;
+        _tray!.SetHotkeyText(text);
+        _main!.RequestSave();
+    }
+
+    static void SetAutoStart(bool enabled)
+    {
+        try
+        {
+            AutoStart.Set(enabled);
+        }
+        catch (Exception ex)
+        {
+            Log.Error("Failed to change autostart", ex);
+            MessageBox.Show($"设置开机自启失败：{ex.Message}", "SeedToolBox", MessageBoxButton.OK, MessageBoxImage.Warning);
+        }
     }
 
     void ListenForShowRequests()
@@ -85,6 +133,7 @@ public partial class App : Application
     protected override void OnExit(ExitEventArgs e)
     {
         _modules?.ShutdownAll();
+        _hotkey?.Dispose();
         _tray?.Dispose();
         _mutex?.Dispose();
         Log.Info("Exited");
