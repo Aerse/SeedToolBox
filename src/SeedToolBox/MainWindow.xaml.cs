@@ -207,6 +207,13 @@ public partial class MainWindow : Window
 
     public void SetToolHotkey(string id, string hotkey) => _tools.FirstOrDefault(t => t.Id == id)?.SetHotkey(hotkey);
 
+    /// <summary>For screen tools started by hotkey: keeps the main window out of the capture.</summary>
+    public void RunHidden(Action action)
+    {
+        if (IsVisible && WindowState != WindowState.Minimized) HideThen(action);
+        else action();
+    }
+
     void HideThen(Action action)
     {
         Hide();
@@ -327,7 +334,7 @@ public partial class MainWindow : Window
         if (IsSearching)
         {
             EmptyHint.Text = "没有找到匹配的项目";
-            EmptyHint.Visibility = _results.Count > 0 ? Visibility.Collapsed : Visibility.Visible;
+            EmptyHint.Visibility = _results.Count > 0 || _features.Count > 0 ? Visibility.Collapsed : Visibility.Visible;
         }
         else
         {
@@ -606,6 +613,7 @@ public partial class MainWindow : Window
         SearchResults.Visibility = searching ? Visibility.Visible : Visibility.Collapsed;
         GroupItems.Visibility = searching ? Visibility.Collapsed : Visibility.Visible;
         if (_results.Count > 0) SetHighlight(0);
+        UpdateFeatureResults(query);
         UpdateEmptyHint();
     }
 
@@ -626,6 +634,12 @@ public partial class MainWindow : Window
             // First Esc clears the search, second hides the window
             if (SearchBox.Text.Length > 0) SearchBox.Clear();
             else Hide();
+            e.Handled = true;
+            return;
+        }
+        if (IsSearching && _results.Count == 0 && _features.Count > 0 && e.Key == Key.Enter)
+        {
+            _features[0].Open();
             e.Handled = true;
             return;
         }

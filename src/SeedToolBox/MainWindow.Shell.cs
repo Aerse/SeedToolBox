@@ -173,4 +173,59 @@ public partial class MainWindow
         CollapseButton.ToolTip = collapsed ? "展开侧边栏" : "收起侧边栏";
         System.Windows.Automation.AutomationProperties.SetName(CollapseButton, (string)CollapseButton.ToolTip);
     }
+
+    sealed class Feature
+    {
+        public Feature(string glyph, string name, Action open)
+        {
+            Glyph = glyph;
+            Name = name;
+            Open = open;
+        }
+
+        public string Glyph { get; }
+        public string Name { get; }
+        public Action Open { get; }
+    }
+
+    List<Feature> _features = new();
+
+    /// <summary>Lists the pages and screen tools matching the launcher search, so it doubles as a global search.</summary>
+    void UpdateFeatureResults(string query)
+    {
+        var candidates = _pages.Where(p => p.Id != "launcher")
+            .Select(p => (p.Glyph, p.Name, Open: (Action)(() => ShowPage(p.Id))))
+            .Concat(_tools.Select(t => (t.Glyph, Name: t.Label, Open: t.Action)));
+        _features = query.Length == 0 ? new List<Feature>() : candidates
+            .Select(c => (c, score: Launcher.ItemSearch.Match(c.Name, query)))
+            .Where(x => x.score >= 0)
+            .OrderBy(x => x.score)
+            .Take(8)
+            .Select(x => new Feature(x.c.Glyph, x.c.Name, () => { SearchBox.Clear(); x.c.Open(); }))
+            .ToList();
+
+        FeatureResults.Children.Clear();
+        var iconFont = (FontFamily)FindResource("IconFont");
+        foreach (var f in _features)
+        {
+            var button = new Button
+            {
+                Margin = new Thickness(0, 0, 8, 8),
+                Padding = new Thickness(10, 5, 12, 5),
+                ToolTip = "打开功能：" + f.Name,
+                Content = new StackPanel
+                {
+                    Orientation = Orientation.Horizontal,
+                    Children =
+                    {
+                        new TextBlock { Text = f.Glyph, FontFamily = iconFont, FontSize = 14, Foreground = (Brush)FindResource("AccentBrush"), VerticalAlignment = VerticalAlignment.Center, Margin = new Thickness(0, 0, 8, 0) },
+                        new TextBlock { Text = f.Name, VerticalAlignment = VerticalAlignment.Center },
+                    },
+                },
+            };
+            button.Click += (_, _) => f.Open();
+            FeatureResults.Children.Add(button);
+        }
+        FeatureResults.Visibility = _features.Count > 0 ? Visibility.Visible : Visibility.Collapsed;
+    }
 }

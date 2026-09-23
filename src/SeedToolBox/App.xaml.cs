@@ -88,17 +88,13 @@ public partial class App : Application
 
         var screen = _screenTools = new ScreenToolService(settings);
         _tray.AddCommand("screenshot", "截图", AfterTrayMenu(screen.Screenshot));
-        _tray.AddCommand("color", "取色", AfterTrayMenu(screen.PickColor));
-        _tray.AddCommand("ruler", "屏幕标尺", AfterTrayMenu(screen.Ruler));
-        _tray.AddCommand("record", "录屏", AfterTrayMenu(screen.Record));
         _tray.AddCommand("ocr", "识别文字", AfterTrayMenu(screen.RecognizeText));
-        _tray.AddCommand("qr", "识别二维码", AfterTrayMenu(screen.RecognizeQrCodes));
-        _tray.AddCommand("qrscreen", "识别全屏二维码", AfterTrayMenu(screen.ScanQrCodes));
-        _tray.AddCommand("qrgen", "生成二维码…", screen.GenerateQrCode);
-        _tray.AddCommand("devtools", "开发工具…", () => { _main.ShowPage("format"); _main.ShowAndActivate(); });
+        _tray.AddCommand("record", "录屏", AfterTrayMenu(screen.Record));
         _main.AddTool("screenshot", "\uE7A8", "截图", screen.Screenshot);
         _main.AddTool("ocr", "\uE8D2", "识字", screen.RecognizeText);
         _main.AddTool("qr", "\uED14", "扫码", screen.RecognizeQrCodes);
+        _main.AddTool("qrscreen", "\uE740", "全屏扫码", screen.ScanQrCodes);
+        _main.AddTool("qrgen", "\uE72D", "生成二维码", screen.GenerateQrCode, hide: false);
         _main.AddTool("color", "\uEF3C", "取色", screen.PickColor);
         _main.AddTool("ruler", "\uED5E", "标尺", screen.Ruler);
         _main.AddTool("record", "\uE7C8", "录屏", screen.Record);
@@ -126,12 +122,12 @@ public partial class App : Application
 
         var main = _main;
         _hotkeys.Add(new HotkeyBinding(TrayIcon.ShowWindowCommand, "呼出主窗口", () => data.Hotkey, v => data.Hotkey = v, main.ToggleFromHotkey));
-        _hotkeys.Add(new HotkeyBinding("screenshot", "截图", () => screen.Settings.ScreenshotHotkey, v => screen.Settings.ScreenshotHotkey = v, screen.Screenshot));
-        _hotkeys.Add(new HotkeyBinding("color", "取色", () => screen.Settings.ColorPickerHotkey, v => screen.Settings.ColorPickerHotkey = v, screen.PickColor));
-        _hotkeys.Add(new HotkeyBinding("ruler", "屏幕标尺", () => screen.Settings.RulerHotkey, v => screen.Settings.RulerHotkey = v, screen.Ruler));
-        _hotkeys.Add(new HotkeyBinding("record", "录屏", () => screen.Settings.RecordHotkey, v => screen.Settings.RecordHotkey = v, screen.Record));
-        _hotkeys.Add(new HotkeyBinding("ocr", "识别文字", () => screen.Settings.OcrHotkey, v => screen.Settings.OcrHotkey = v, screen.RecognizeText));
-        _hotkeys.Add(new HotkeyBinding("qr", "识别二维码", () => screen.Settings.QrHotkey, v => screen.Settings.QrHotkey = v, screen.RecognizeQrCodes));
+        _hotkeys.Add(new HotkeyBinding("screenshot", "截图", () => screen.Settings.ScreenshotHotkey, v => screen.Settings.ScreenshotHotkey = v, () => main.RunHidden(screen.Screenshot)));
+        _hotkeys.Add(new HotkeyBinding("color", "取色", () => screen.Settings.ColorPickerHotkey, v => screen.Settings.ColorPickerHotkey = v, () => main.RunHidden(screen.PickColor)));
+        _hotkeys.Add(new HotkeyBinding("ruler", "屏幕标尺", () => screen.Settings.RulerHotkey, v => screen.Settings.RulerHotkey = v, () => main.RunHidden(screen.Ruler)));
+        _hotkeys.Add(new HotkeyBinding("record", "录屏", () => screen.Settings.RecordHotkey, v => screen.Settings.RecordHotkey = v, () => main.RunHidden(screen.Record)));
+        _hotkeys.Add(new HotkeyBinding("ocr", "识别文字", () => screen.Settings.OcrHotkey, v => screen.Settings.OcrHotkey = v, () => main.RunHidden(screen.RecognizeText)));
+        _hotkeys.Add(new HotkeyBinding("qr", "识别二维码", () => screen.Settings.QrHotkey, v => screen.Settings.QrHotkey = v, () => main.RunHidden(screen.RecognizeQrCodes)));
         _hotkeys.Add(new HotkeyBinding("clipboard", "剪贴板历史", () => clipboard.Settings.Hotkey, v => clipboard.Settings.Hotkey = v, showClipboard));
 
         var taken = new List<string>();

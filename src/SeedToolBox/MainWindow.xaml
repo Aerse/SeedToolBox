@@ -237,7 +237,7 @@
                                  TextChanged="OnSearchTextChanged" PreviewKeyDown="OnSearchKeyDown" />
                         <TextBlock Text="&#xE721;" FontFamily="{StaticResource IconFont}" FontSize="13" Foreground="{StaticResource HintTextBrush}"
                                    VerticalAlignment="Center" Margin="11,0,0,0" IsHitTestVisible="False" />
-                        <TextBlock x:Name="SearchPlaceholder" Text="搜索（支持拼音首字母）" Foreground="{StaticResource HintTextBrush}"
+                        <TextBlock x:Name="SearchPlaceholder" Text="搜索启动项和功能（支持拼音首字母）" Foreground="{StaticResource HintTextBrush}"
                                    VerticalAlignment="Center" Margin="33,0,0,0" IsHitTestVisible="False" />
                     </Grid>
 
@@ -296,14 +296,18 @@
                             <Grid Background="Transparent">
                                 <ItemsControl x:Name="GroupItems" ItemsSource="{Binding SelectedItem.Items, ElementName=GroupList}"
                                               Style="{StaticResource GroupItemsStyle}" Margin="4,0" />
-                                <ItemsControl x:Name="SearchResults" ItemTemplate="{StaticResource LargeTileTemplate}" Margin="4,0"
-                                              Visibility="Collapsed">
-                                    <ItemsControl.ItemsPanel>
-                                        <ItemsPanelTemplate>
-                                            <WrapPanel />
-                                        </ItemsPanelTemplate>
-                                    </ItemsControl.ItemsPanel>
-                                </ItemsControl>
+                                <StackPanel>
+                                    <!-- Pages and tools matching the search -->
+                                    <WrapPanel x:Name="FeatureResults" Margin="8,6,8,2" Visibility="Collapsed" />
+                                    <ItemsControl x:Name="SearchResults" ItemTemplate="{StaticResource LargeTileTemplate}" Margin="4,0"
+                                                  Visibility="Collapsed">
+                                        <ItemsControl.ItemsPanel>
+                                            <ItemsPanelTemplate>
+                                                <WrapPanel />
+                                            </ItemsPanelTemplate>
+                                        </ItemsControl.ItemsPanel>
+                                    </ItemsControl>
+                                </StackPanel>
                                 <StackPanel Visibility="{Binding Visibility, ElementName=EmptyHint}" VerticalAlignment="Top"
                                             Margin="0,90,0,0" IsHitTestVisible="False">
                                     <TextBlock Text="&#xE8B7;" FontFamily="{StaticResource IconFont}" FontSize="36"

@@ -31,16 +31,23 @@ public static class ItemSearch
     /// <summary>Lower is better; -1 means no match.</summary>
     static int Score(LaunchItem item, string q)
     {
-        var name = item.Name.ToLowerInvariant();
+        var score = Match(item.Name, q);
+        if (score >= 0) return score;
+        // e.g. "notepad" finds an item renamed to 记事本
+        if (TargetName(item.Path).Contains(q)) return 4;
+        return -1;
+    }
+
+    /// <summary>Matches a name by text or pinyin; lower is better, -1 means no match.</summary>
+    public static int Match(string text, string q)
+    {
+        var name = text.ToLowerInvariant();
         if (name.StartsWith(q, StringComparison.Ordinal)) return 0;
         if (name.Contains(q)) return 1;
 
-        var (initials, full) = Pinyin.Keys(item.Name);
+        var (initials, full) = Pinyin.Keys(text);
         if (initials.StartsWith(q, StringComparison.Ordinal) || full.StartsWith(q, StringComparison.Ordinal)) return 2;
         if (initials.Contains(q) || full.Contains(q)) return 3;
-
-        // e.g. "notepad" finds an item renamed to 记事本
-        if (TargetName(item.Path).Contains(q)) return 4;
         return -1;
     }
 
