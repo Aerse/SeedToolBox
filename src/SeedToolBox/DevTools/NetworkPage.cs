@@ -31,12 +31,15 @@ sealed class PortEntry
 }
 
 /// <summary>Ports and the processes holding them, network adapters, ping and TCP port tests.</summary>
-sealed class NetworkPage : DockPanel
+sealed partial class NetworkPage : DockPanel
 {
     readonly ObservableCollection<PortEntry> _ports = new();
     readonly ListView _portList = new();
     readonly TextBox _filter = Ui.Field(220);
     readonly CheckBox _listenOnly = new() { Content = "只看监听端口", IsChecked = true, VerticalAlignment = VerticalAlignment.Center, Margin = new Thickness(0, 0, 16, 0) };
+    readonly CheckBox _autoRefresh = new() { Content = "自动刷新（3 秒）", VerticalAlignment = VerticalAlignment.Center, Margin = new Thickness(0, 0, 16, 0) };
+    readonly System.Windows.Threading.DispatcherTimer _portTimer = new() { Interval = TimeSpan.FromSeconds(3) };
+    bool _refreshing;
     readonly TextBlock _portStatus = Ui.Status();
     List<PortEntry> _allPorts = new();
 
@@ -50,15 +53,24 @@ sealed class NetworkPage : DockPanel
 
     public NetworkPage()
     {
-        var header = Ui.Header("端口 / 网络", "查看端口被哪个进程占用并结束它，网卡与 IP 信息，Ping 与 TCP 端口连通测试");
+        var header = Ui.Header("端口 / 网络", "端口占用与结束进程，网卡与 IP，Ping、路由追踪、DNS 查询、端口扫描、子网计算与 HTTP 请求测试");
         var tabs = new TabControl();
         tabs.Items.Add(new TabItem { Header = "端口占用", Content = BuildPorts() });
         tabs.Items.Add(new TabItem { Header = "网卡与 IP", Content = BuildAdapters() });
         tabs.Items.Add(new TabItem { Header = "Ping / 端口测试", Content = BuildPing() });
+        tabs.Items.Add(new TabItem { Header = "DNS 查询", Content = BuildDns() });
+        tabs.Items.Add(new TabItem { Header = "端口扫描", Content = BuildScan() });
+        tabs.Items.Add(new TabItem { Header = "子网计算", Content = BuildSubnet() });
+        tabs.Items.Add(new TabItem { Header = "HTTP 请求", Content = BuildHttp() });
         SetDock(header, Dock.Top);
         Children.Add(header);
         Children.Add(tabs);
-        Loaded += (_, _) => { if (_allPorts.Count == 0) RefreshPorts(); };
+        Loaded += (_, _) =>
+        {
+            if (_allPorts.Count == 0) RefreshPorts();
+            if (_autoRefresh.IsChecked == true) _portTimer.Start();
+        };
+        Unloaded += (_, _) => _portTimer.Stop();
     }
 
     // Ports
@@ -68,7 +80,9 @@ sealed class NetworkPage : DockPanel
         _filter.ToolTip = "端口号、进程名或 PID";
         _filter.TextChanged += (_, _) => ApplyFilter();
         _listenOnly.Click += (_, _) => ApplyFilter();
-        var toolbar = Ui.Row(Ui.Label("筛选"), _filter, Ui.Label("", 12), _listenOnly, Ui.Button("刷新", RefreshPorts), Ui.Button("结束进程", KillSelected), Ui.Button("打开位置", () =>
+        _portTimer.Tick += (_, _) => { if (!_refreshing) RefreshPorts(); };
+        _autoRefresh.Click += (_, _) => { if (_autoRefresh.IsChecked == true) _portTimer.Start(); else _portTimer.Stop(); };
+        var toolbar = Ui.Row(Ui.Label("筛选"), _filter, Ui.Label("", 12), _listenOnly, _autoRefresh, Ui.Button("刷新", RefreshPorts), Ui.Button("结束进程", KillSelected), Ui.Button("打开位置", () =>
         {
             if (_portList.SelectedItem is PortEntry { ProcessPath: { } path }) Launcher.ProcessLauncher.OpenLocation(path);
         }), ListTools.ExportButton(_portList, _portStatus, "端口占用.csv"));
@@ -114,7 +128,8 @@ sealed class NetworkPage : DockPanel
 
     async void RefreshPorts()
     {
-        Ui.SetStatus(_portStatus, "读取中…");
+        if (_autoRefresh.IsChecked != true) Ui.SetStatus(_portStatus, "读取中…");
+        _refreshing = true;
         try
         {
             _allPorts = await Task.Run(PortTable.Read);
@@ -123,6 +138,10 @@ sealed class NetworkPage : DockPanel
         catch (Exception ex)
         {
             Ui.SetStatus(_portStatus, "读取端口失败：" + ex.Message, true);
+        }
+        finally
+        {
+            _refreshing = false;
         }
     }
 
@@ -135,8 +154,12 @@ sealed class NetworkPage : DockPanel
             .Where(p => q.Length == 0 || p.Port.ToString() == q || p.Pid.ToString() == q || p.Process.IndexOf(q, StringComparison.OrdinalIgnoreCase) >= 0 || p.Remote.Contains(q))
             .OrderBy(p => p.Port).ThenBy(p => p.Protocol)
             .ToList();
+        // Keep the selected row across refreshes
+        var selected = _portList.SelectedItem as PortEntry;
         _ports.Clear();
         foreach (var p in list) _ports.Add(p);
+        if (selected != null)
+            _portList.SelectedItem = list.FirstOrDefault(p => p.Protocol == selected.Protocol && p.Port == selected.Port && p.Pid == selected.Pid && p.Local == selected.Local && p.Remote == selected.Remote);
         Ui.SetStatus(_portStatus, $"共 {list.Count} 条（总计 {_allPorts.Count}）  右键可结束进程；系统进程需要以管理员身份运行才能结束");
     }
 
@@ -206,7 +229,7 @@ sealed class NetworkPage : DockPanel
         _pingCount.Text = "4";
         _testPort.Text = "443";
         _log.IsReadOnly = true;
-        var ping = Ui.Row(Ui.Label("主机"), _host, Ui.Label("", 12), Ui.Label("次数"), _pingCount, Ui.Label("", 12), Ui.Button("Ping", Ping, accent: true), Ui.Label("", 12), Ui.Label("端口"), _testPort, Ui.Label("", 8), Ui.Button("测试 TCP 端口", TestPort), Ui.Button("清空", () => _log.Clear()));
+        var ping = Ui.Row(Ui.Label("主机"), _host, Ui.Label("", 12), Ui.Label("次数"), _pingCount, Ui.Label("", 12), Ui.Button("Ping", Ping, accent: true), Ui.Label("", 12), Ui.Label("端口"), _testPort, Ui.Label("", 8), Ui.Button("测试 TCP 端口", TestPort), Ui.Button("路由追踪", Traceroute), Ui.Button("清空", () => _log.Clear()));
         ping.Margin = new Thickness(0, 10, 0, 10);
         _host.KeyDown += (_, e) => { if (e.Key == System.Windows.Input.Key.Enter) Ping(); };
         var panel = new DockPanel { Margin = new Thickness(0, 4, 0, 0) };
