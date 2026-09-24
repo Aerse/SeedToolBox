@@ -88,28 +88,52 @@ static class Exporter
         writer.Finish();
     }
 
-    public static void Gif(RecordedClip source, string path, long start, long end, int fps, double scale, Action<double> progress, CancellationToken cancel)
+    /// <summary>
+    /// Exports [start, end) as a GIF sampled at <paramref name="fps"/>. <paramref name="edits"/> remove sampled frames or give them
+    /// a fixed delay; they match by source time and later edits override earlier ones.
+    /// </summary>
+    public static void Gif(RecordedClip source, string path, long start, long end, int fps, double scale, IReadOnlyList<GifFrameEdit>? edits, Action<double> progress, CancellationToken cancel)
     {
         int width = Math.Max(1, (int)Math.Round(source.Width * scale));
         int height = Math.Max(1, (int)Math.Round(source.Height * scale));
+        edits ??= Array.Empty<GifFrameEdit>();
 
-        // Pass 1: gather colors for one palette shared by every frame
+        GifFrameEdit? EditAt(long time)
+        {
+            for (int i = edits.Count - 1; i >= 0; i--)
+                if (time >= edits[i].Start && time < edits[i].End) return edits[i];
+            return null;
+        }
+
+        // Pass 1: gather colors for one palette shared by every kept frame
         var quantizer = new Quantizer();
+        int kept = 0;
         ForEachGifFrame(source, start, end, fps, width, height, cancel, (time, pixels) =>
         {
-            quantizer.Add(pixels);
+            if (EditAt(time) is not { Remove: true })
+            {
+                quantizer.Add(pixels);
+                kept++;
+            }
             progress(0.4 * (time - start) / (end - start));
         });
+        if (kept == 0) throw new InvalidOperationException("所有帧都已被删除");
         quantizer.Build();
 
-        // Pass 2: encode
+        // Pass 2: encode, laying kept frames out back to back with their delays
         using var gif = new GifEncoder(File.Create(path), width, height, quantizer.Palette);
+        double output = 0, frame = (double)Second / fps;
         ForEachGifFrame(source, start, end, fps, width, height, cancel, (time, pixels) =>
         {
-            gif.AddFrame(quantizer.Map(pixels), time - start);
+            var edit = EditAt(time);
+            if (edit is not { Remove: true })
+            {
+                gif.AddFrame(quantizer.Map(pixels), (long)output);
+                output += edit is { DelayMs: > 0 } ? edit.DelayMs * 10_000.0 : frame;
+            }
             progress(0.4 + 0.6 * (time - start) / (end - start));
         });
-        gif.Finish(end - start);
+        gif.Finish((long)output);
     }
 
     /// <summary>Samples the video at a fixed rate, delivering scaled BGRA frames.</summary>
@@ -209,6 +233,15 @@ static class Exporter
             _target.Dispose();
         }
     }
+}
+
+/// <summary>A GIF frame edit over source times [Start, End): remove the frames, or show each for DelayMs.</summary>
+sealed class GifFrameEdit
+{
+    public long Start { get; set; }
+    public long End { get; set; }
+    public bool Remove { get; set; }
+    public int DelayMs { get; set; }
 }
 
 /// <summary>Median-cut palette of up to 255 colors (index 255 is left for transparency).</summary>

@@ -1,4 +1,6 @@
 using System;
+using System.Collections.Generic;
+using System.Linq;
 using System.IO;
 using System.Threading;
 using System.Threading.Tasks;
@@ -39,6 +41,12 @@ sealed class RecordEditorWindow : Window
     readonly Button _save = new() { Content = "导出…", MinWidth = 88, IsDefault = true };
     readonly Button _cancel = new() { Content = "取消导出", MinWidth = 88, Margin = new Thickness(8, 0, 0, 0), Visibility = Visibility.Collapsed };
     readonly Panel _controls;
+    readonly StackPanel _frameEdit = new() { Margin = new Thickness(0, 8, 0, 0), Visibility = Visibility.Collapsed };
+    readonly TextBlock _selection = new() { VerticalAlignment = VerticalAlignment.Center, Margin = new Thickness(8, 0, 12, 0), MinWidth = 180 };
+    readonly TextBox _delay = new() { Width = 60, Text = "500", VerticalAlignment = VerticalAlignment.Center, Margin = new Thickness(4, 0, 4, 0) };
+    readonly ListBox _editList = new() { MaxHeight = 90, Margin = new Thickness(0, 6, 0, 0) };
+    readonly List<GifFrameEdit> _edits = new();
+    long? _selStart, _selEnd;
 
     bool _playing, _saved, _closeAfterExport;
     string? _lastSaved;
@@ -72,8 +80,10 @@ sealed class RecordEditorWindow : Window
         _gifOptions.Children.Add(_gifFps);
         _gifOptions.Children.Add(new TextBlock { Text = "尺寸", VerticalAlignment = VerticalAlignment.Center });
         _gifOptions.Children.Add(_gifScale);
-        _mp4.Checked += (_, _) => _gifOptions.IsEnabled = false;
-        _gif.Checked += (_, _) => _gifOptions.IsEnabled = true;
+        _mp4.Checked += (_, _) => { _gifOptions.IsEnabled = false; _frameEdit.Visibility = Visibility.Collapsed; _trim.Edits = null; };
+        _gif.Checked += (_, _) => { _gifOptions.IsEnabled = true; _frameEdit.Visibility = Visibility.Visible; _trim.Edits = _edits; };
+        _gifFps.SelectionChanged += (_, _) => UpdateSelection();
+        BuildFrameEdit();
         _mp4.IsChecked = true;
 
         var preview = new Border { Background = Brushes.Black, Child = _media };
@@ -115,7 +125,7 @@ sealed class RecordEditorWindow : Window
         };
         var root = new DockPanel { Margin = new Thickness(16) };
         var lower = new StackPanel();
-        _controls = new StackPanel { Children = { hint, _trim, playRow, formatRow } };
+        _controls = new StackPanel { Children = { hint, _trim, playRow, formatRow, _frameEdit } };
         lower.Children.Add(_controls);
         lower.Children.Add(bottom);
         DockPanel.SetDock(lower, Dock.Bottom);
@@ -160,6 +170,132 @@ sealed class RecordEditorWindow : Window
         return t.TotalHours >= 1 ? t.ToString(@"h\:mm\:ss\.f") : t.ToString(@"mm\:ss\.f");
     }
 
+    #region GIF frame editing
+
+    long FrameLength => 10_000_000 / GifRates[Math.Max(0, _gifFps.SelectedIndex)];
+
+    /// <summary>Source time range of the GIF frame sampled at the playhead.</summary>
+    (long Start, long End) CurrentFrame()
+    {
+        long length = FrameLength;
+        long index = Math.Max(0, (_trim.Position - _trim.Start) / length);
+        long start = _trim.Start + index * length;
+        return (start, Math.Min(_clip.Duration, start + length));
+    }
+
+    /// <summary>The marked range snapped to whole frames, or the current frame when nothing is marked.</summary>
+    (long Start, long End) Selection()
+    {
+        if (_selStart == null && _selEnd == null) return CurrentFrame();
+        long length = FrameLength;
+        long a = _selStart ?? _trim.Start, b = _selEnd ?? _trim.End - 1;
+        if (a > b) (a, b) = (b, a);
+        long first = _trim.Start + Math.Max(0, (a - _trim.Start) / length) * length;
+        long last = _trim.Start + Math.Max(0, (b - _trim.Start) / length) * length + length;
+        return (Math.Max(0, first), Math.Min(_clip.Duration, last));
+    }
+
+    void BuildFrameEdit()
+    {
+        Button Btn(string text, Action click, string? tip = null)
+        {
+            var b = new Button { Content = text, Margin = new Thickness(0, 0, 6, 0), Padding = new Thickness(8, 2, 8, 2), ToolTip = tip };
+            b.Click += (_, _) => click();
+            return b;
+        }
+
+        var row1 = new StackPanel { Orientation = Orientation.Horizontal };
+        row1.Children.Add(new TextBlock { Text = "帧编辑", VerticalAlignment = VerticalAlignment.Center, Margin = new Thickness(0, 0, 12, 0) });
+        row1.Children.Add(Btn("选区起点", () => { _selStart = _trim.Position; UpdateSelection(); }, "把播放头所在帧设为选区起点 (I)"));
+        row1.Children.Add(Btn("选区终点", () => { _selEnd = _trim.Position; UpdateSelection(); }, "把播放头所在帧设为选区终点 (O)"));
+        row1.Children.Add(Btn("清除选区", () => { _selStart = _selEnd = null; UpdateSelection(); }));
+        row1.Children.Add(_selection);
+        row1.Children.Add(Btn("◀", () => StepFrame(-1), "上一帧 (←)"));
+        row1.Children.Add(Btn("▶", () => StepFrame(1), "下一帧 (→)"));
+
+        var row2 = new StackPanel { Orientation = Orientation.Horizontal, Margin = new Thickness(0, 6, 0, 0) };
+        row2.Children.Add(Btn("删除选中帧", () => AddEdit(true, 0), "删除选区内的帧，无选区时删除当前帧 (Delete)"));
+        row2.Children.Add(new TextBlock { Text = "每帧延迟", VerticalAlignment = VerticalAlignment.Center, Margin = new Thickness(12, 0, 0, 0) });
+        row2.Children.Add(_delay);
+        row2.Children.Add(new TextBlock { Text = "毫秒", VerticalAlignment = VerticalAlignment.Center, Margin = new Thickness(0, 0, 6, 0) });
+        row2.Children.Add(Btn("设置延迟", SetDelay, "让选区内（或当前）每一帧显示指定时长"));
+        row2.Children.Add(Btn("撤销选中编辑", () =>
+        {
+            if (_editList.SelectedIndex < 0) return;
+            _edits.RemoveAt(_editList.SelectedIndex);
+            RefreshEdits();
+        }));
+        row2.Children.Add(Btn("清除全部编辑", () => { _edits.Clear(); RefreshEdits(); }));
+
+        _editList.SelectionChanged += (_, _) =>
+        {
+            if (_editList.SelectedIndex >= 0 && _editList.SelectedIndex < _edits.Count) SeekTo(_edits[_editList.SelectedIndex].Start);
+        };
+        _frameEdit.Children.Add(row1);
+        _frameEdit.Children.Add(row2);
+        _frameEdit.Children.Add(_editList);
+        RefreshEdits();
+    }
+
+    void SetDelay()
+    {
+        if (!int.TryParse(_delay.Text.Trim(), out int ms) || ms < 20 || ms > 60_000)
+        {
+            _status.Text = "延迟需为 20 – 60000 毫秒的整数";
+            return;
+        }
+        AddEdit(false, ms);
+    }
+
+    void AddEdit(bool remove, int delayMs)
+    {
+        var (start, end) = Selection();
+        if (end <= start) return;
+        _edits.Add(new GifFrameEdit { Start = start, End = end, Remove = remove, DelayMs = delayMs });
+        RefreshEdits();
+        _status.Text = remove ? "已标记删除，导出时生效" : "已设置延迟，导出时生效";
+    }
+
+    void StepFrame(int direction)
+    {
+        Pause();
+        var (start, _) = CurrentFrame();
+        SeekTo(Math.Max(0, Math.Min(_clip.Duration - 1, start + direction * FrameLength)));
+    }
+
+    void RefreshEdits()
+    {
+        _editList.Items.Clear();
+        foreach (var e in _edits)
+            _editList.Items.Add($"{Format(e.Start)} – {Format(e.End)}  {(e.Remove ? "删除" : $"延迟 {e.DelayMs} 毫秒/帧")}");
+        _editList.Visibility = _edits.Count > 0 ? Visibility.Visible : Visibility.Collapsed;
+        _trim.InvalidateVisual();
+        UpdateSelection();
+    }
+
+    void UpdateSelection()
+    {
+        if (_selection == null || _trim == null) return;
+        var (start, end) = Selection();
+        long length = FrameLength;
+        long frames = Math.Max(1, (end - start + length - 1) / length);
+        _selection.Text = _selStart == null && _selEnd == null
+            ? $"当前帧 {Format(start)}"
+            : $"选区 {Format(start)} – {Format(end)}（{frames} 帧）";
+        _trim.Selection = _selStart == null && _selEnd == null ? null : (start, end);
+    }
+
+    /// <summary>The edit removing the frame at <paramref name="time"/>, if the latest edit covering it removes frames.</summary>
+    GifFrameEdit? RemovedAt(long time)
+    {
+        if (_gif.IsChecked != true) return null;
+        for (int i = _edits.Count - 1; i >= 0; i--)
+            if (time >= _edits[i].Start && time < _edits[i].End) return _edits[i].Remove ? _edits[i] : null;
+        return null;
+    }
+
+    #endregion
+
     #region Preview
 
     void TogglePlay()
@@ -196,6 +332,12 @@ sealed class RecordEditorWindow : Window
     void OnTick()
     {
         long now = _media.Position.Ticks;
+        // Skip frames marked as removed while previewing
+        if (RemovedAt(now) is { } removed && removed.End < _trim.End)
+        {
+            _media.Position = TimeSpan.FromTicks(removed.End);
+            now = removed.End;
+        }
         if (now >= _trim.End)
         {
             Pause();
@@ -205,7 +347,11 @@ sealed class RecordEditorWindow : Window
         UpdatePosition();
     }
 
-    void UpdatePosition() => _position.Text = $"{Format(_trim.Position)} / {Format(_clip.Duration)}";
+    void UpdatePosition()
+    {
+        _position.Text = $"{Format(_trim.Position)} / {Format(_clip.Duration)}";
+        if (_selStart == null && _selEnd == null) UpdateSelection();
+    }
 
     void UpdateRange()
     {
@@ -215,11 +361,24 @@ sealed class RecordEditorWindow : Window
 
     void OnKey(object sender, KeyEventArgs e)
     {
-        if (e.Key == Key.Space && _export == null)
+        if (_export != null || e.OriginalSource is TextBox) return;
+        if (e.Key == Key.Space)
         {
             TogglePlay();
             e.Handled = true;
+            return;
         }
+        if (_gif.IsChecked != true) return;
+        switch (e.Key)
+        {
+            case Key.Left: StepFrame(-1); break;
+            case Key.Right: StepFrame(1); break;
+            case Key.Delete: AddEdit(true, 0); break;
+            case Key.I: _selStart = _trim.Position; UpdateSelection(); break;
+            case Key.O: _selEnd = _trim.Position; UpdateSelection(); break;
+            default: return;
+        }
+        e.Handled = true;
     }
 
     #endregion
@@ -254,6 +413,7 @@ sealed class RecordEditorWindow : Window
         _saveSettings();
 
         long start = _trim.Start, end = _trim.End;
+        var edits = _edits.Select(x => new GifFrameEdit { Start = x.Start, End = x.End, Remove = x.Remove, DelayMs = x.DelayMs }).ToList();
         int quality = _settings.Quality;
         var cancel = new CancellationTokenSource();
         _export = cancel;
@@ -275,7 +435,7 @@ sealed class RecordEditorWindow : Window
             // Thread-pool threads are MTA, which Media Foundation needs
             await Task.Run(() =>
             {
-                if (gif) Exporter.Gif(_clip, path, start, end, gifFps, gifScale / 100.0, Report, cancel.Token);
+                if (gif) Exporter.Gif(_clip, path, start, end, gifFps, gifScale / 100.0, edits, Report, cancel.Token);
                 else Exporter.Mp4(_clip, path, start, end, quality, Report, cancel.Token);
             });
             _saved = true;
@@ -358,6 +518,26 @@ sealed class TrimBar : FrameworkElement
     public long Start => _start;
     public long End => _end;
 
+    static readonly Brush RemovedBrush = new SolidColorBrush(Color.FromArgb(200, 220, 70, 70));
+    static readonly Brush DelayBrush = new SolidColorBrush(Color.FromArgb(200, 240, 160, 40));
+    static readonly Brush SelectionBrush = new SolidColorBrush(Color.FromArgb(70, 30, 144, 255));
+
+    IReadOnlyList<GifFrameEdit>? _edits;
+    (long Start, long End)? _selection;
+
+    /// <summary>GIF frame edits to mark on the track, or null to hide them.</summary>
+    public IReadOnlyList<GifFrameEdit>? Edits
+    {
+        get => _edits;
+        set { _edits = value; InvalidateVisual(); }
+    }
+
+    public (long Start, long End)? Selection
+    {
+        get => _selection;
+        set { _selection = value; InvalidateVisual(); }
+    }
+
     public long Position
     {
         get => _position;
@@ -378,6 +558,13 @@ sealed class TrimBar : FrameworkElement
         dc.DrawRectangle(Brushes.Transparent, null, new Rect(0, 0, ActualWidth, h));
         dc.DrawRoundedRectangle(Track, null, new Rect(HandleWidth, top, Usable, bottom - top), 3, 3);
         dc.DrawRectangle(Kept, null, new Rect(X(_start), top, Math.Max(0, X(_end) - X(_start)), bottom - top));
+        if (_edits != null)
+        {
+            foreach (var e in _edits)
+                dc.DrawRectangle(e.Remove ? RemovedBrush : DelayBrush, null, new Rect(X(e.Start), bottom - 6, Math.Max(2, X(e.End) - X(e.Start)), 6));
+            if (_selection is { } s)
+                dc.DrawRectangle(SelectionBrush, null, new Rect(X(s.Start), top, Math.Max(2, X(s.End) - X(s.Start)), bottom - top));
+        }
         // Handles sit outside the kept range: left of start, right of end
         dc.DrawRoundedRectangle(HandleBrush, null, new Rect(X(_start) - HandleWidth, 0, HandleWidth, h), 3, 3);
         dc.DrawRoundedRectangle(HandleBrush, null, new Rect(X(_end), 0, HandleWidth, h), 3, 3);
