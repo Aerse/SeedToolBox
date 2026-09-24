@@ -306,6 +306,20 @@ public sealed class ClipboardHistory : IDisposable
         RequestSave();
     }
 
+    /// <summary>After sync added or changed entries: newest first, and no more than the limit.</summary>
+    public void SortAndTrim()
+    {
+        var sorted = Entries.OrderByDescending(e => e.Time).ToList();
+        for (int i = 0; i < sorted.Count; i++)
+        {
+            int at = Entries.IndexOf(sorted[i]);
+            if (at != i) Entries.Move(at, i);
+        }
+        foreach (var old in Entries.Where(e => !e.Pinned).Skip(Math.Max(10, Settings.MaxItems)).ToList()) Remove(old, save: false);
+        RequestSave();
+        EntryChanged?.Invoke();
+    }
+
     public void Remove(ClipboardEntry entry, bool save = true)
     {
         Entries.Remove(entry);

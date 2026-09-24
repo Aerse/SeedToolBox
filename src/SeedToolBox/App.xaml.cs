@@ -75,6 +75,7 @@ public partial class App : Application
         ListenForShowRequests();
         base.OnStartup(e);
 
+        Sync.SyncService.ApplyPending();
         var settings = new JsonSettingsStore(AppPaths.Data);
         var data = settings.Load<LauncherData>(LauncherData.SettingsName);
         if (data.Groups.Count == 0) data.Groups.Add(new ItemGroup { Name = "常用工具" });
@@ -159,6 +160,8 @@ public partial class App : Application
             OpenData = () => ProcessLauncher.OpenLocation(AppPaths.Data),
             OpenApp = () => ProcessLauncher.OpenLocation(ProcessLauncher.ExePath),
         };
+        var sync = new Sync.SyncService(settings, notes, clipboard, main.PrepareSave);
+        settingsOptions.Extra.Add(("同步", () => Sync.SyncSettingsSection.Create(sync, () => Restart("Restarting to apply synced settings"))));
         settingsOptions.Extra.Add(("截图与屏幕工具", () => ScreenToolsSettingsSection.Create(screen)));
         var ai = new Ai.AiService(settings) { OpenSettings = () => toolbox.ShowAndActivate("settings") };
         settingsOptions.Extra.Add(("AI 助手", () => Ai.AiSettingsSection.Create(ai)));
@@ -356,8 +359,15 @@ public partial class App : Application
         }
 
         // Nothing may be saved from here on, or the restored files would be overwritten with the old data
-        Log.Info($"Restored from {dialog.FileName}, restarting");
-        _main.PrepareExit(false);
+        Restart($"Restored from {dialog.FileName}, restarting", save: false);
+    }
+
+    /// <summary>Starts a new instance and exits; with save false nothing is written on the way out.</summary>
+    void Restart(string reason, bool save = true)
+    {
+        Log.Info(reason);
+        if (save) { _notes?.Flush(); _main?.PrepareSave(); }
+        _main?.PrepareExit(false);
         _toolbox?.PrepareExit();
         _mutex?.ReleaseMutex();
         _mutex?.Dispose();
