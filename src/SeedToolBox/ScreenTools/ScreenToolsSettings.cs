@@ -6,10 +6,10 @@ public class ScreenToolsSettings
 {
     public const string SettingsName = "screentools";
 
-    public string ScreenshotHotkey { get; set; } = "F1";
+    public string ScreenshotHotkey { get; set; } = "Alt+Shift+A";
     public string ColorPickerHotkey { get; set; } = "";
     public string RulerHotkey { get; set; } = "";
-    public string RecordHotkey { get; set; } = "Shift+F1";
+    public string RecordHotkey { get; set; } = "Alt+Shift+R";
     public string OcrHotkey { get; set; } = "";
     public string QrHotkey { get; set; } = "";
 

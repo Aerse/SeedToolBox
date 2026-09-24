@@ -60,7 +60,7 @@ sealed class SettingsPage : ScrollViewer
         _autoStart.Click += (_, _) => { _o.SetAutoStart(_autoStart.IsChecked == true); _autoStart.IsChecked = _o.AutoStart(); };
         root.Children.Add(Section("常规", _autoStart, _lock));
 
-        _hotkeyStatus.Text = "点击输入框后直接按下组合键（如 F1、Ctrl+Shift+S）";
+        _hotkeyStatus.Text = "点击输入框后直接按下组合键（如 Alt+Shift+A、F2）";
         root.Children.Add(Section("快捷键", _hotkeys, _hotkeyStatus));
 
         root.Children.Add(Section("录屏", RecordSection()));
