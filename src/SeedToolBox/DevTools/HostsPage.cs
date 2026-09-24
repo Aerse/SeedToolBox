@@ -19,15 +19,18 @@ sealed class HostEntry : ObservableObject
 {
     bool _enabled;
     public bool Enabled { get => _enabled; set => Set(ref _enabled, value); }
-    public string Ip { get; set; } = "";
-    public string Hosts { get; set; } = "";
-    public string Comment { get; set; } = "";
+    string _ip = "", _hosts = "", _comment = "", _warning = "";
+    public string Ip { get => _ip; set => Set(ref _ip, value.Trim()); }
+    public string Hosts { get => _hosts; set => Set(ref _hosts, Regex.Replace(value.Trim(), @"\s+", " ")); }
+    public string Comment { get => _comment; set => Set(ref _comment, value.Trim()); }
+    /// <summary>Duplicate or conflicting host names; not part of the file.</summary>
+    public string Warning { get => _warning; set => Set(ref _warning, value); }
     /// <summary>Line index in the file.</summary>
     public int Line { get; set; }
 }
 
 /// <summary>Views and edits the system hosts file. Saving copies the file in with an elevated command.</summary>
-sealed class HostsPage : DockPanel
+sealed partial class HostsPage : DockPanel
 {
     static readonly string HostsPath = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.System), @"drivers\etc\hosts");
     static readonly Regex EntryLine = new(@"^(?<off>\s*#\s*)?(?<ip>(?:\d{1,3}\.){3}\d{1,3}|[0-9a-fA-F:]*:[0-9a-fA-F:.%\w]*)\s+(?<hosts>[^#]+?)\s*(?:#\s*(?<comment>.*))?$");
@@ -57,7 +60,9 @@ sealed class HostsPage : DockPanel
             Ui.Button("保存", Save, accent: true),
             Ui.Button("重新载入", () => { if (ConfirmDiscard()) Load(); }),
             Ui.Button("打开所在文件夹", () => ProcessLauncher.OpenLocation(HostsPath)),
+            Ui.Button("从备份恢复…", RestoreBackup),
             Ui.Label("筛选"), _filter);
+        var profiles = BuildProfiles();
 
         var add = Ui.Row(Ui.Label("IP"), _ip, Ui.Label("", 12), Ui.Label("域名"), _host, Ui.Label("", 12), Ui.Label("备注"), _comment, Ui.Label("", 12),
             Ui.Button("添加", Add), Ui.Button("删除选中", Remove));
@@ -79,10 +84,14 @@ sealed class HostsPage : DockPanel
 
         SetDock(header, Dock.Top);
         SetDock(toolbar, Dock.Top);
+        SetDock(profiles, Dock.Top);
         SetDock(_status, Dock.Bottom);
+        SetDock(_warnings, Dock.Bottom);
         Children.Add(header);
         Children.Add(toolbar);
+        Children.Add(profiles);
         Children.Add(_status);
+        Children.Add(_warnings);
         Children.Add(_body);
         Load();
     }
@@ -107,10 +116,13 @@ sealed class HostsPage : DockPanel
         check.SetValue(FrameworkElement.MarginProperty, new Thickness(4, 0, 0, 0));
         var view = new GridView();
         view.Columns.Add(new GridViewColumn { Header = "启用", Width = 56, CellTemplate = new DataTemplate { VisualTree = check } });
-        view.Columns.Add(new GridViewColumn { Header = "IP", Width = 150, DisplayMemberBinding = new Binding(nameof(HostEntry.Ip)) });
-        view.Columns.Add(new GridViewColumn { Header = "域名", Width = 280, DisplayMemberBinding = new Binding(nameof(HostEntry.Hosts)) });
-        view.Columns.Add(new GridViewColumn { Header = "备注", Width = 200, DisplayMemberBinding = new Binding(nameof(HostEntry.Comment)) });
+        view.Columns.Add(new GridViewColumn { Header = "IP", Width = 150, CellTemplate = EditableCell(nameof(HostEntry.Ip)) });
+        view.Columns.Add(new GridViewColumn { Header = "域名", Width = 280, CellTemplate = EditableCell(nameof(HostEntry.Hosts)) });
+        view.Columns.Add(new GridViewColumn { Header = "备注", Width = 200, CellTemplate = EditableCell(nameof(HostEntry.Comment)) });
+        view.Columns.Add(new GridViewColumn { Header = "提示", Width = 220, DisplayMemberBinding = new Binding(nameof(HostEntry.Warning)) });
         _list.View = view;
+        _list.HorizontalContentAlignment = HorizontalAlignment.Stretch;
+        ListTools.Sortable(_list, ("启用", nameof(HostEntry.Enabled)), ("IP", nameof(HostEntry.Ip)), ("域名", nameof(HostEntry.Hosts)), ("备注", nameof(HostEntry.Comment)));
     }
 
     static readonly DependencyProperty ToggleButton_IsChecked = System.Windows.Controls.Primitives.ToggleButton.IsCheckedProperty;
@@ -145,21 +157,27 @@ sealed class HostsPage : DockPanel
             {
                 Enabled = !m.Groups["off"].Success,
                 Ip = m.Groups["ip"].Value,
-                Hosts = Regex.Replace(m.Groups["hosts"].Value.Trim(), @"\s+", " "),
-                Comment = m.Groups["comment"].Value.Trim(),
+                Hosts = m.Groups["hosts"].Value,
+                Comment = m.Groups["comment"].Value,
                 Line = i,
             };
             entry.PropertyChanged += OnEntryChanged;
             _entries.Add(entry);
         }
+        CheckConflicts();
     }
 
     void OnEntryChanged(object? sender, PropertyChangedEventArgs e)
     {
+        if (e.PropertyName == nameof(HostEntry.Warning)) return;
         var entry = (HostEntry)sender!;
+        if (e.PropertyName == nameof(HostEntry.Ip) && !EntryLine.IsMatch(entry.Ip + " x"))
+            Ui.SetStatus(_status, $"IP 地址格式不正确：{entry.Ip}，保存后这一行不再被识别为记录", true);
+        if (entry.Hosts.Contains('#')) entry.Hosts = entry.Hosts.Replace("#", "");
+        CheckConflicts();
         _lines[entry.Line] = Format(entry);
         _dirty = true;
-        Ui.SetStatus(_status, "有未保存的修改");
+        if (e.PropertyName != nameof(HostEntry.Ip) || EntryLine.IsMatch(entry.Ip + " x")) Ui.SetStatus(_status, "有未保存的修改");
     }
 
     static string Format(HostEntry e) =>
@@ -196,6 +214,7 @@ sealed class HostsPage : DockPanel
         _lines = lines.ToArray();
         entry.PropertyChanged += OnEntryChanged;
         _entries.Add(entry);
+        CheckConflicts();
         _list.ScrollIntoView(entry);
         _host.Clear();
         _comment.Clear();
