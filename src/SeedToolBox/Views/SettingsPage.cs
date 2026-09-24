@@ -181,7 +181,7 @@ sealed class SettingsPage : ScrollViewer
     FrameworkElement ClipboardSection()
     {
         var c = _o.Clipboard;
-        var enabled = Check("记录剪贴板历史");
+        var enabled = Check("记录剪贴板历史（取消勾选即暂停记录，也可在托盘菜单切换）");
         enabled.IsChecked = c.Enabled;
         enabled.Click += (_, _) => { c.Enabled = enabled.IsChecked == true; _o.SaveClipboard(); };
         var autoPaste = Check("选中记录后自动粘贴到之前的窗口");
@@ -194,7 +194,35 @@ sealed class SettingsPage : ScrollViewer
             if (int.TryParse(max.Text, out var n)) { c.MaxItems = Math.Max(10, Math.Min(5000, n)); _o.SaveClipboard(); }
             max.Text = c.MaxItems.ToString();
         };
-        return new StackPanel { Children = { enabled, autoPaste, Ui.Row(Ui.Label("最多保留"), max, Ui.Label("条（置顶的不计入）")) } };
+        var expire = Ui.Field(80);
+        expire.Text = c.ExpireDays.ToString();
+        expire.LostKeyboardFocus += (_, _) =>
+        {
+            if (int.TryParse(expire.Text, out var n)) { c.ExpireDays = Math.Max(0, Math.Min(3650, n)); _o.SaveClipboard(); }
+            expire.Text = c.ExpireDays.ToString();
+        };
+        var ignored = Ui.Field(420);
+        ignored.Text = c.IgnoredProcesses;
+        ignored.ToolTip = "从这些程序复制的内容不会被记录，多个用逗号分隔";
+        ignored.LostKeyboardFocus += (_, _) =>
+        {
+            if (ignored.Text == c.IgnoredProcesses) return;
+            c.IgnoredProcesses = ignored.Text.Trim();
+            _o.SaveClipboard();
+        };
+        // Recording can also be toggled from the tray or the popup while this page is open
+        IsVisibleChanged += (_, _) => { if (IsVisible) enabled.IsChecked = c.Enabled; };
+        return new StackPanel
+        {
+            Children =
+            {
+                enabled, autoPaste,
+                Ui.Row(Ui.Label("最多保留"), max, Ui.Label("条（置顶的不计入）")),
+                Ui.Row(Ui.Label("自动删除"), expire, Ui.Label("天前的未置顶记录（0 表示永不删除）")),
+                Ui.Row(Ui.Label("忽略程序"), ignored),
+                Hint("例如 KeePass.exe, 1Password.exe。标记了“不记录到剪贴板历史”的内容（多数密码管理器会这样做）也会被自动跳过"),
+            },
+        };
     }
 
     static CheckBox Check(string text) => new() { Content = text, Margin = new Thickness(0, 0, 0, 10) };

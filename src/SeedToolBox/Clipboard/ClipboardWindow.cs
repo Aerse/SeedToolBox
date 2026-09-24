@@ -53,20 +53,29 @@ sealed class ClipboardWindow : Window
 
         _list.BorderThickness = new Thickness(0);
         _list.Background = Brushes.Transparent;
+        _list.SelectionMode = SelectionMode.Extended;
         _list.ItemContainerStyle = (Style)FindResource("ListCard");
         ScrollViewer.SetHorizontalScrollBarVisibility(_list, ScrollBarVisibility.Disabled);
         VirtualizingPanel.SetScrollUnit(_list, ScrollUnit.Pixel);
         _list.MouseLeftButtonUp += (_, e) =>
         {
+            // Ctrl/Shift+click only builds a multi-selection for merging
+            if ((Keyboard.Modifiers & (ModifierKeys.Control | ModifierKeys.Shift)) != 0) return;
             if (ItemsControl.ContainerFromElement(_list, (DependencyObject)e.OriginalSource) is ListBoxItem { Tag: ClipboardEntry entry }) Choose(entry);
         };
         _list.PreviewKeyDown += (_, e) =>
         {
-            if (e.Key is Key.Enter or Key.Delete or Key.Escape) OnSearchKey(this, e);
+            if (e.Key is Key.Enter or Key.Delete or Key.Escape || NumberOf(e.Key) > 0) OnSearchKey(_list, e);
         };
 
         _enabled.IsChecked = history.Settings.Enabled;
-        _enabled.Click += (_, _) => { history.Settings.Enabled = _enabled.IsChecked == true; history.SaveSettings(); };
+        _enabled.Click += (_, _) => history.Recording = _enabled.IsChecked == true;
+        history.RecordingChanged += () => _enabled.IsChecked = history.Recording;
+        history.EntryChanged += () =>
+        {
+            if (IsVisible) Refresh();
+            else _dirty = true;
+        };
         _autoPaste.IsChecked = history.Settings.AutoPaste;
         _autoPaste.Click += (_, _) => { history.Settings.AutoPaste = _autoPaste.IsChecked == true; history.SaveSettings(); };
         var clear = new Button { Content = "清空", MinWidth = 60, ToolTip = "删除所有未置顶的记录" };
@@ -83,7 +92,8 @@ sealed class ClipboardWindow : Window
 
         var tips = new TextBlock
         {
-            Text = "Enter 粘贴 · Delete 删除 · Ctrl+P 置顶 · 右键更多",
+            Text = "Enter 粘贴 · Shift+Enter 纯文本 · 1-9 快速粘贴 · Ctrl+单击多选合并 · Delete 删除 · Ctrl+P 置顶",
+            TextWrapping = TextWrapping.Wrap,
             Foreground = DialogWindow.HintBrush,
             FontSize = 11,
             Margin = new Thickness(14, 0, 12, 0),
@@ -157,27 +167,51 @@ sealed class ClipboardWindow : Window
         _dirty = false;
         var query = _search.Text.Trim();
         var entries = _history.Entries
-            .Where(e => query.Length == 0 || (e.Text != null ? e.Text.IndexOf(query, StringComparison.OrdinalIgnoreCase) >= 0 : "图片".Contains(query)))
+            .Where(e => Matches(e, query))
             .OrderByDescending(e => e.Pinned)
             .ToList();
 
         var selected = (_list.SelectedItem as ListBoxItem)?.Tag;
         _list.Items.Clear();
-        foreach (var entry in entries) _list.Items.Add(CreateItem(entry));
+        for (int i = 0; i < entries.Count; i++) _list.Items.Add(CreateItem(entries[i], i + 1));
         _empty.Text = _history.Entries.Count == 0 ? "还没有记录，复制点东西试试" : "没有匹配的记录";
         _empty.Visibility = entries.Count == 0 ? Visibility.Visible : Visibility.Collapsed;
         var keep = _list.Items.Cast<ListBoxItem>().FirstOrDefault(i => i.Tag == selected);
         _list.SelectedItem = keep ?? (_list.Items.Count > 0 ? _list.Items[0] : null);
     }
 
-    ListBoxItem CreateItem(ClipboardEntry entry)
+    /// <summary>Search over the text and tags; "图片", "文件" and "#tag" pick kinds and tags.</summary>
+    internal static bool Matches(ClipboardEntry e, string query)
+    {
+        if (query.Length == 0) return true;
+        if (query.StartsWith("#") && query.Length > 1)
+            return e.Tags.Any(t => t.IndexOf(query.Substring(1), StringComparison.OrdinalIgnoreCase) >= 0);
+        if (e.Tags.Any(t => t.IndexOf(query, StringComparison.OrdinalIgnoreCase) >= 0)) return true;
+        if (e.IsImage) return "图片".Contains(query);
+        if (e.IsFiles && "文件".Contains(query)) return true;
+        return e.Text!.IndexOf(query, StringComparison.OrdinalIgnoreCase) >= 0;
+    }
+
+    /// <summary>One-line summary shown in the lists.</summary>
+    internal static string Preview(ClipboardEntry entry, int lines, int max)
+    {
+        var text = entry.Text ?? "";
+        if (entry.IsFiles)
+        {
+            var names = entry.Files!.Select(f => System.IO.Path.GetFileName(f.TrimEnd('\\')) is { Length: > 0 } n ? n : f);
+            text = $"[{entry.Files!.Count} 个文件] " + string.Join("、", names.Take(8));
+        }
+        var preview = string.Join(" ⏎ ", text.Trim().Split('\n').Select(l => l.Trim()).Where(l => l.Length > 0).Take(lines));
+        return preview.Length > max ? preview.Substring(0, max) : preview;
+    }
+
+    ListBoxItem CreateItem(ClipboardEntry entry, int number)
     {
         var hint = DialogWindow.HintBrush;
         FrameworkElement body;
         if (entry.Text != null)
         {
-            var preview = string.Join(" ⏎ ", entry.Text.Trim().Split('\n').Select(l => l.Trim()).Where(l => l.Length > 0).Take(4));
-            if (preview.Length > 300) preview = preview.Substring(0, 300);
+            var preview = Preview(entry, 4, 300);
             body = new TextBlock { Text = preview, TextWrapping = TextWrapping.Wrap, TextTrimming = TextTrimming.CharacterEllipsis, MaxHeight = 38 };
         }
         else
@@ -194,6 +228,10 @@ sealed class ClipboardWindow : Window
         }
 
         var meta = new StackPanel { Orientation = Orientation.Horizontal, HorizontalAlignment = HorizontalAlignment.Right, VerticalAlignment = VerticalAlignment.Top, Margin = new Thickness(8, 1, 0, 0) };
+        foreach (var tag in entry.Tags.Take(2))
+            meta.Children.Add(new TextBlock { Text = "#" + tag, Foreground = (Brush)FindResource("AccentBrush"), FontSize = 11, Margin = new Thickness(0, 0, 6, 0) });
+        if (entry.IsRich)
+            meta.Children.Add(new TextBlock { Text = "富文本", Foreground = hint, FontSize = 11, Margin = new Thickness(0, 0, 6, 0) });
         if (entry.Pinned)
             meta.Children.Add(new TextBlock { Text = "", FontFamily = (FontFamily)FindResource("IconFont"), FontSize = 11, Foreground = (Brush)FindResource("AccentBrush"), Margin = new Thickness(0, 2, 6, 0) });
         meta.Children.Add(new TextBlock { Text = FormatTime(entry.Time), Foreground = hint, FontSize = 11 });
@@ -201,12 +239,20 @@ sealed class ClipboardWindow : Window
         var grid = new DockPanel();
         DockPanel.SetDock(meta, Dock.Right);
         grid.Children.Add(meta);
+        if (number <= 9)
+        {
+            var badge = new TextBlock { Text = number.ToString(), Foreground = hint, FontSize = 11, Width = 14, Margin = new Thickness(0, 1, 4, 0), VerticalAlignment = VerticalAlignment.Top };
+            DockPanel.SetDock(badge, Dock.Left);
+            grid.Children.Add(badge);
+        }
         grid.Children.Add(body);
 
         var item = new ListBoxItem { Content = grid, Tag = entry, ToolTip = entry.Text is { Length: > 0 } t ? (t.Length > 2000 ? t.Substring(0, 2000) + "…" : t) : null };
         ToolTipService.SetInitialShowDelay(item, 800);
         var menu = new ContextMenu();
         menu.Items.Add(MenuItem("粘贴", () => Choose(entry)));
+        if (entry.Text != null && (entry.IsRich || entry.IsFiles)) menu.Items.Add(MenuItem("粘贴为纯文本", () => Choose(entry, plainText: true)));
+        menu.Items.Add(MenuItem("合并粘贴选中项", ChooseMerged));
         menu.Items.Add(MenuItem("仅复制", () => { _history.Copy(entry); Hide(); }));
         menu.Items.Add(MenuItem(entry.Pinned ? "取消置顶" : "置顶", () => { _history.TogglePin(entry); Refresh(); }));
         menu.Items.Add(new Separator());
@@ -247,8 +293,18 @@ sealed class ClipboardWindow : Window
                 _list.ScrollIntoView(_list.SelectedItem);
                 e.Handled = true;
                 break;
+            case Key.Enter when _list.SelectedItems.Count > 1:
+                ChooseMerged();
+                e.Handled = true;
+                break;
             case Key.Enter when entry != null:
-                Choose(entry);
+                Choose(entry, plainText: Keyboard.Modifiers == ModifierKeys.Shift);
+                e.Handled = true;
+                break;
+            case var key when NumberOf(key) is int n and > 0 && n <= _list.Items.Count
+                && (Keyboard.Modifiers == ModifierKeys.Control || (Keyboard.Modifiers == ModifierKeys.None && (sender != _search || _search.Text.Length == 0))):
+                // Plain digits while nothing is typed (or from the list), Ctrl+digit always
+                Choose((ClipboardEntry)((ListBoxItem)_list.Items[n - 1]).Tag);
                 e.Handled = true;
                 break;
             case Key.Delete when entry != null && (sender != _search || _search.Text.Length == 0):
@@ -265,13 +321,29 @@ sealed class ClipboardWindow : Window
         }
     }
 
-    void Choose(ClipboardEntry entry)
+    static int NumberOf(Key key) =>
+        key is >= Key.D1 and <= Key.D9 ? key - Key.D0 : key is >= Key.NumPad1 and <= Key.NumPad9 ? key - Key.NumPad0 : 0;
+
+    /// <summary>Pastes the selected entries, in list order, joined by new lines.</summary>
+    void ChooseMerged()
     {
-        if (!_history.Copy(entry))
+        var entries = _list.Items.Cast<ListBoxItem>().Where(i => i.IsSelected).Select(i => (ClipboardEntry)i.Tag).ToList();
+        if (entries.Count == 1) Choose(entries[0]);
+        else if (entries.Count > 1 && _history.CopyMerged(entries)) PasteIntoPrevious();
+    }
+
+    void Choose(ClipboardEntry entry, bool plainText = false)
+    {
+        if (!_history.Copy(entry, plainText))
         {
-            _history.Remove(entry);
+            if (!plainText) _history.Remove(entry);
             return;
         }
+        PasteIntoPrevious();
+    }
+
+    void PasteIntoPrevious()
+    {
         Hide();
         if (!_history.Settings.AutoPaste || _previous == IntPtr.Zero) return;
 

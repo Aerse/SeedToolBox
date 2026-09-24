@@ -107,6 +107,9 @@ public partial class App : Application
         var clipboard = _clipboard = new Clips.ClipboardHistory(settings);
         Action showClipboard = () => (_clipboardWindow ??= new Clips.ClipboardWindow(clipboard)).ShowAtCursor();
         _tray.AddCommand("clipboard", "剪贴板历史", showClipboard);
+        _tray.AddCommand("clipboardPause", "暂停记录剪贴板", () => clipboard.Recording = !clipboard.Recording);
+        clipboard.RecordingChanged += () => _tray.SetChecked("clipboardPause", !clipboard.Recording);
+        _tray.SetChecked("clipboardPause", !clipboard.Recording);
         _tray.AddCommand("toolbox", "工具箱", () => toolbox.ShowAndActivate());
         toolbox.AddPage("clipboard", "\uE77F", "剪贴板", () => new Clips.ClipboardPage(clipboard));
         var settingsOptions = new SettingsPage.Options

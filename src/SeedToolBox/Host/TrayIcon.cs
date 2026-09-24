@@ -82,6 +82,11 @@ public sealed class TrayIcon : IDisposable
         if (_commands.TryGetValue(id, out var item)) item.ShortcutKeyDisplayString = hotkey;
     }
 
+    public void SetChecked(string id, bool value)
+    {
+        if (_commands.TryGetValue(id, out var item)) item.Checked = value;
+    }
+
     public void ShowMessage(string text) =>
         _notifyIcon.ShowBalloonTip(5000, "SeedToolBox", text, WinForms.ToolTipIcon.Warning);
 
