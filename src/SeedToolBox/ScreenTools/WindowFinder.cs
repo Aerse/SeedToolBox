@@ -42,6 +42,24 @@ public sealed class WindowFinder
         return finder;
     }
 
+    /// <summary>Screen bounds of the foreground window, or null for the desktop, the taskbar or this app.</summary>
+    public static System.Drawing.Rectangle? ForegroundBounds()
+    {
+        var hwnd = GetForegroundWindow();
+        if (hwnd == IntPtr.Zero || !IsCandidate(hwnd)) return null;
+        GetWindowThreadProcessId(hwnd, out uint pid);
+        if (pid == (uint)System.Diagnostics.Process.GetCurrentProcess().Id) return null;
+        var name = new System.Text.StringBuilder(64);
+        GetClassName(hwnd, name, name.Capacity);
+        if (name.ToString() is "Progman" or "WorkerW" or "Shell_TrayWnd" or "Shell_SecondaryTrayWnd") return null;
+        var bounds = new WindowFinder(0, 0).FrameBounds(hwnd);
+        return bounds is { } b ? new System.Drawing.Rectangle(b.X, b.Y, b.Width, b.Height) : null;
+    }
+
+    [DllImport("user32.dll")] static extern IntPtr GetForegroundWindow();
+    [DllImport("user32.dll")] static extern uint GetWindowThreadProcessId(IntPtr hwnd, out uint pid);
+    [DllImport("user32.dll", CharSet = CharSet.Unicode)] static extern int GetClassName(IntPtr hwnd, System.Text.StringBuilder name, int count);
+
     /// <summary>The smallest known control or window under the point, or null.</summary>
     public Int32Rect? Hit(int x, int y)
     {

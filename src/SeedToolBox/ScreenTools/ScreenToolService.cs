@@ -15,7 +15,7 @@ using SeedToolBox.Recording;
 namespace SeedToolBox.ScreenTools;
 
 /// <summary>Entry points for screenshot, color picker, ruler, screen recording, OCR and QR codes, plus shared copy/save/pin helpers.</summary>
-public sealed class ScreenToolService
+public sealed partial class ScreenToolService
 {
     readonly ISettingsStore _store;
     readonly DispatcherTimer _trimTimer;

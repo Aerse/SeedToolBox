@@ -51,7 +51,14 @@ sealed class CaptureWindow : OverlayWindow
     Edge _resizeEdges;
     bool _moved;
 
-    public CaptureWindow(ScreenShot shot, WindowFinder finder, ScreenToolService service, CaptureMode mode = CaptureMode.Screenshot) : base(shot)
+    static readonly string[] Ratios = { "", "1:1", "4:3", "3:2", "16:9", "9:16" };
+
+    readonly Border _sizePanel;
+    readonly TextBox _sizeBox = new() { Width = 96, VerticalContentAlignment = VerticalAlignment.Center, Margin = new Thickness(4, 0, 4, 0) };
+    readonly List<(string Ratio, Border Button)> _ratioButtons = new();
+
+    /// <param name="initial">Region (in screenshot pixels) to start editing right away, skipping the selection.</param>
+    public CaptureWindow(ScreenShot shot, WindowFinder finder, ScreenToolService service, CaptureMode mode = CaptureMode.Screenshot, Rect? initial = null) : base(shot)
     {
         _service = service;
         _finder = finder;
@@ -85,12 +92,18 @@ sealed class CaptureWindow : OverlayWindow
             _handles[i] = new Rectangle { Width = 7, Height = 7, Fill = Brushes.White, Stroke = ToolbarUi.Accent, IsHitTestVisible = false, Visibility = Visibility.Collapsed };
             Ui.Children.Add(_handles[i]);
         }
+        _sizePanel = BuildSizePanel();
         BuildToolbar();
+        _toolbar.Children.Add(_sizePanel);
         Ui.Children.Add(_toolbar);
         _magnifier = new Magnifier(shot);
         Ui.Children.Add(_magnifier);
 
-        Loaded += (_, _) => Hover(Mouse.GetPosition(Surface));
+        Loaded += (_, _) =>
+        {
+            if (initial is { } region && Fit(region) is { } fitted) BeginEditing(fitted);
+            else Hover(Mouse.GetPosition(Surface));
+        };
         // Preview (tunneling) events, so no child element can swallow a selection drag
         PreviewMouseMove += OnMouseMove;
         PreviewMouseLeftButtonDown += OnMouseDown;
@@ -117,6 +130,7 @@ sealed class CaptureWindow : OverlayWindow
         var main = new StackPanel { Orientation = Orientation.Horizontal };
         _layer.AddToolButtons(main);
         main.Children.Add(Divider());
+        main.Children.Add(Button("⬚", "尺寸与比例（直接输入数字也可）", ToggleSizePanel));
         main.Children.Add(Button("文", "识别文字", RecognizeText));
         main.Children.Add(Button("码", "识别二维码", DecodeQrCodes));
         main.Children.Add(Divider());
@@ -145,6 +159,7 @@ sealed class CaptureWindow : OverlayWindow
             _service.RecordSettings(this);
             foreach (var update in _toggleUpdates) update();
         }));
+        main.Children.Add(Button("⬚", "尺寸与比例（直接输入数字也可）", ToggleSizePanel));
         main.Children.Add(Button("✕", "退出 (Esc)", Close));
         var start = Button("●", "开始录制 (Enter / 双击)", StartRecording, new SolidColorBrush(Color.FromRgb(230, 40, 40)));
         start.Width = 36;
@@ -244,6 +259,122 @@ sealed class CaptureWindow : OverlayWindow
 
     #endregion
 
+    #region Size and ratio
+
+    double Ratio => ParseRatio(_service.Settings.SelectionRatio);
+
+    static double ParseRatio(string text)
+    {
+        var parts = text.Split(':');
+        return parts.Length == 2 && double.TryParse(parts[0], out var w) && double.TryParse(parts[1], out var h) && w > 0 && h > 0 ? w / h : 0;
+    }
+
+    static int? Digit(Key key) =>
+        key is >= Key.D0 and <= Key.D9 ? key - Key.D0 : key is >= Key.NumPad0 and <= Key.NumPad9 ? key - Key.NumPad0 : null;
+
+    /// <summary>The drag end moved so the rectangle from the start keeps the locked ratio.</summary>
+    Point Constrain(Point start, Point p)
+    {
+        double dx = p.X - start.X, dy = p.Y - start.Y;
+        double w = Math.Abs(dx), h = Math.Abs(dy);
+        if (w / Math.Max(1, h) > Ratio) w = h * Ratio;
+        else h = w / Ratio;
+        return new Point(start.X + Math.Sign(dx) * Math.Round(w), start.Y + Math.Sign(dy) * Math.Round(h));
+    }
+
+    /// <summary>The region clipped to the screenshot, or null if nothing is left.</summary>
+    Rect? Fit(Rect region)
+    {
+        region.Intersect(new Rect(0, 0, Shot.Width, Shot.Height));
+        return region.IsEmpty || region.Width < 2 || region.Height < 2 ? null : region;
+    }
+
+    Border BuildSizePanel()
+    {
+        var row = new StackPanel { Orientation = Orientation.Horizontal };
+        row.Children.Add(new TextBlock { Text = "宽×高", FontSize = 12, VerticalAlignment = VerticalAlignment.Center, Margin = new Thickness(4, 0, 0, 0) });
+        _sizeBox.ToolTip = "如 800x600，回车应用";
+        row.Children.Add(_sizeBox);
+        row.Children.Add(ToolbarUi.TextButton("应用", "应用尺寸 (Enter)", ApplySize));
+        row.Children.Add(Divider());
+        foreach (var ratio in Ratios)
+        {
+            var value = ratio;
+            var button = ToolbarUi.TextButton(ratio.Length == 0 ? "自由" : ratio, ratio.Length == 0 ? "不限比例" : $"锁定 {ratio}，拖动和调整都保持比例", () => SetRatio(value));
+            _ratioButtons.Add((ratio, button));
+            row.Children.Add(button);
+        }
+        var card = Card(row);
+        card.Margin = new Thickness(0, 4, 0, 0);
+        card.HorizontalAlignment = HorizontalAlignment.Left;
+        card.Visibility = Visibility.Collapsed;
+        UpdateRatioButtons();
+        return card;
+    }
+
+    void UpdateRatioButtons()
+    {
+        foreach (var (ratio, button) in _ratioButtons) ToolbarUi.SetSelected(button, ratio == _service.Settings.SelectionRatio);
+    }
+
+    void ToggleSizePanel()
+    {
+        if (_sizePanel.Visibility == Visibility.Visible)
+        {
+            _sizePanel.Visibility = Visibility.Collapsed;
+            Focus();
+            PlaceToolbar();
+        }
+        else ShowSizePanel();
+    }
+
+    void ShowSizePanel()
+    {
+        _sizePanel.Visibility = Visibility.Visible;
+        _sizeBox.Text = $"{(int)_selection.Width}x{(int)_selection.Height}";
+        PlaceToolbar();
+        _sizeBox.Focus();
+        _sizeBox.SelectAll();
+    }
+
+    void ApplySize()
+    {
+        var m = System.Text.RegularExpressions.Regex.Match(_sizeBox.Text, @"(\d+)\s*[x×X*,，\s]\s*(\d+)");
+        if (!m.Success || !int.TryParse(m.Groups[1].Value, out int w) || !int.TryParse(m.Groups[2].Value, out int h) || w < 2 || h < 2)
+        {
+            _sizeBox.SelectAll();
+            return;
+        }
+        w = Math.Min(w, (int)Shot.Width);
+        h = Math.Min(h, (int)Shot.Height);
+        // Keep the top left corner unless the new size would run off the screen
+        double x = Math.Max(0, Math.Min(_selection.X, Shot.Width - w)), y = Math.Max(0, Math.Min(_selection.Y, Shot.Height - h));
+        ShowSelection(new Rect(x, y, w, h));
+        _sizePanel.Visibility = Visibility.Collapsed;
+        Focus();
+        UpdateHandles();
+        PlaceToolbar();
+    }
+
+    void SetRatio(string ratio)
+    {
+        _service.Settings.SelectionRatio = ratio;
+        _service.SaveSettings();
+        UpdateRatioButtons();
+        if (Ratio > 0 && !_selection.IsEmpty)
+        {
+            // Fit the current selection to the ratio, keeping its width where possible
+            double w = _selection.Width, h = Math.Round(w / Ratio);
+            if (_selection.Y + h > Shot.Height) { h = Shot.Height - _selection.Y; w = Math.Round(h * Ratio); }
+            ShowSelection(new Rect(_selection.X, _selection.Y, Math.Max(2, w), Math.Max(2, h)));
+        }
+        else if (!_selection.IsEmpty) ShowSelection(_selection);
+        UpdateHandles();
+        PlaceToolbar();
+    }
+
+    #endregion
+
     #region Selection
 
     /// <summary>Selecting phase: preview the window/control under the cursor.</summary>
@@ -301,7 +432,8 @@ sealed class CaptureWindow : OverlayWindow
 
         var ui = UiRect(r);
         var screen = MonitorOf(r);
-        ((TextBlock)_sizeLabel.Child).Text = $"{(int)r.Width} × {(int)r.Height}";
+        var ratio = _service.Settings.SelectionRatio;
+        ((TextBlock)_sizeLabel.Child).Text = $"{(int)r.Width} × {(int)r.Height}" + (Ratio > 0 ? $"  ·  {ratio}" : "");
         _sizeLabel.Visibility = Visibility.Visible;
         Canvas.SetLeft(_sizeLabel, ui.Left);
         Canvas.SetTop(_sizeLabel, ui.Top - 24 >= screen.Top ? ui.Top - 24 : ui.Top + 4);
@@ -389,7 +521,7 @@ sealed class CaptureWindow : OverlayWindow
         {
             case DragMode.Select:
                 if (!_moved && (Math.Abs(p.X - _dragStart.X) > 3 || Math.Abs(p.Y - _dragStart.Y) > 3)) _moved = true;
-                if (_moved) ShowSelection(Span(_dragStart, p));
+                if (_moved) ShowSelection(Span(_dragStart, Ratio > 0 ? Clamp(Constrain(_dragStart, p)) : p));
                 UpdateMagnifier(p);
                 return;
             case DragMode.Move:
@@ -439,6 +571,15 @@ sealed class CaptureWindow : OverlayWindow
 
         // Rect normalizes, so dragging an edge past the opposite one flips the selection
         var r = new Rect(new Point(left, top), new Point(right, bottom));
+        if (Ratio > 0)
+        {
+            // Horizontal edges drive the size; the opposite corner stays put
+            bool byWidth = _resizeEdges.HasFlag(Edge.Left) || _resizeEdges.HasFlag(Edge.Right);
+            double w = byWidth ? r.Width : Math.Round(r.Height * Ratio), h = byWidth ? Math.Round(r.Width / Ratio) : r.Height;
+            double x = _resizeEdges.HasFlag(Edge.Left) ? r.Right - w : r.Left;
+            double y = _resizeEdges.HasFlag(Edge.Top) ? r.Bottom - h : r.Top;
+            r = new Rect(x, y, w, h);
+        }
         r.Intersect(new Rect(0, 0, Shot.Width, Shot.Height));
         if (r.IsEmpty || r.Width < 1 || r.Height < 1) return;
         ShowSelection(r);
@@ -594,6 +735,22 @@ sealed class CaptureWindow : OverlayWindow
             _layer.HandleTextKey(e);
             return;
         }
+        if (_sizeBox.IsKeyboardFocused)
+        {
+            if (e.Key == Key.Enter)
+            {
+                ApplySize();
+                e.Handled = true;
+            }
+            else if (e.Key == Key.Escape)
+            {
+                _sizePanel.Visibility = Visibility.Collapsed;
+                Focus();
+                PlaceToolbar();
+                e.Handled = true;
+            }
+            return;
+        }
         if (_editing && !RecordMode && _layer.HandleKey(e))
         {
             e.Handled = true;
@@ -608,7 +765,12 @@ sealed class CaptureWindow : OverlayWindow
         }
         else if (!_editing)
         {
-            if (e.Key == Key.C)
+            if (e.Key == Key.R && _service.HasLastRegion)
+            {
+                var last = _service.Settings.LastRegion!;
+                if (Fit(new Rect(last[0] - Shot.X, last[1] - Shot.Y, last[2], last[3])) is { } region) BeginEditing(region);
+            }
+            else if (e.Key == Key.C)
             {
                 var p = Clamp(Mouse.GetPosition(Surface));
                 var text = ColorText.Format(Shot.GetColor((int)p.X, (int)p.Y), _service.Settings.ColorFormat);
@@ -621,6 +783,13 @@ sealed class CaptureWindow : OverlayWindow
             }
         }
         else if (e.Key == Key.Enter || (ctrl && e.Key == Key.C)) CopyAndClose();
+        else if (!ctrl && Digit(e.Key) is { } digit && _drag == DragMode.None && CurrentTool == AnnotationTool.None)
+        {
+            // Typing a number starts entering an exact size
+            ShowSizePanel();
+            _sizeBox.Text = digit.ToString();
+            _sizeBox.CaretIndex = 1;
+        }
         else if (ctrl && e.Key == Key.S && !RecordMode) Save();
         else if (e.Key is Key.Left or Key.Right or Key.Up or Key.Down && _drag == DragMode.None)
         {

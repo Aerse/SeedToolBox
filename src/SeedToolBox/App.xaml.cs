@@ -97,6 +97,14 @@ public partial class App : Application
         _tray.AddCommand("ocr", "识别文字", AfterTrayMenu(screen.RecognizeText));
         _tray.AddCommand("record", "录屏", AfterTrayMenu(screen.Record));
         toolbox.AddTool("screenshot", "\uE7A8", "截图", screen.Screenshot);
+        toolbox.AddTool("fullscreen", "\uE740", "全屏截图", screen.FullScreen);
+        toolbox.AddTool("activewindow", "\uE737", "窗口截图", screen.ActiveWindow);
+        toolbox.AddTool("lastregion", "\uE8B3", "上次区域", screen.RepeatLastRegion);
+        foreach (var delay in ScreenToolService.Delays)
+        {
+            int seconds = delay;
+            toolbox.AddTool($"delay{seconds}", "\uE916", $"{seconds} 秒后截图", () => screen.DelayedScreenshot(seconds));
+        }
         toolbox.AddTool("ocr", "\uE8D2", "识字", screen.RecognizeText);
         toolbox.AddTool("qr", "\uED14", "扫码", screen.RecognizeQrCodes);
         toolbox.AddTool("qrscreen", "\uE740", "全屏扫码", screen.ScanQrCodes);
@@ -130,6 +138,11 @@ public partial class App : Application
 
         _hotkeys.Add(new HotkeyBinding(TrayIcon.ShowWindowCommand, "呼出主窗口", () => data.Hotkey, v => data.Hotkey = v, main.ToggleFromHotkey));
         _hotkeys.Add(new HotkeyBinding("screenshot", "截图", () => screen.Settings.ScreenshotHotkey, v => screen.Settings.ScreenshotHotkey = v, () => RunHidden(screen.Screenshot)));
+        _hotkeys.Add(new HotkeyBinding("fullscreen", "全屏截图", () => screen.Settings.FullScreenHotkey, v => screen.Settings.FullScreenHotkey = v, () => RunHidden(screen.FullScreen)));
+        // Not hidden first: hiding our windows would change which window is in front
+        _hotkeys.Add(new HotkeyBinding("activewindow", "窗口截图", () => screen.Settings.ActiveWindowHotkey, v => screen.Settings.ActiveWindowHotkey = v, screen.ActiveWindow));
+        _hotkeys.Add(new HotkeyBinding("lastregion", "上次区域截图", () => screen.Settings.LastRegionHotkey, v => screen.Settings.LastRegionHotkey = v, () => RunHidden(screen.RepeatLastRegion)));
+        _hotkeys.Add(new HotkeyBinding("delayed", "延时截图", () => screen.Settings.DelayedScreenshotHotkey, v => screen.Settings.DelayedScreenshotHotkey = v, () => RunHidden(screen.DelayedScreenshot)));
         _hotkeys.Add(new HotkeyBinding("color", "取色", () => screen.Settings.ColorPickerHotkey, v => screen.Settings.ColorPickerHotkey = v, () => RunHidden(screen.PickColor)));
         _hotkeys.Add(new HotkeyBinding("ruler", "屏幕标尺", () => screen.Settings.RulerHotkey, v => screen.Settings.RulerHotkey = v, () => RunHidden(screen.Ruler)));
         _hotkeys.Add(new HotkeyBinding("record", "录屏", () => screen.Settings.RecordHotkey, v => screen.Settings.RecordHotkey = v, () => RunHidden(screen.Record)));
