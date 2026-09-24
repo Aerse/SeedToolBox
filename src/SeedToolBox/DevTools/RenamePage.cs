@@ -8,6 +8,8 @@ using System.Windows;
 using System.Windows.Controls;
 using System.Windows.Data;
 using System.Windows.Media;
+using Newtonsoft.Json;
+using SeedToolBox.Core;
 using SeedToolBox.Launcher;
 
 namespace SeedToolBox.DevTools;
@@ -22,6 +24,13 @@ sealed class RenameItem : ObservableObject
     public string State { get => _state; set => Set(ref _state, value); }
 }
 
+sealed class RenamePreset
+{
+    public string Find = "", Replace = "", Template = "*", Start = "1", Digits = "2", NewExt = "";
+    public bool Regex, WithExt, ExtOnly;
+    public int Case;
+}
+
 /// <summary>Batch renames files with replace, regex, sequence numbers and case rules, previewed before applying.</summary>
 sealed class RenamePage : DockPanel
 {
@@ -34,7 +43,13 @@ sealed class RenamePage : DockPanel
     readonly TextBox _template = Ui.Field(170);
     readonly TextBox _start = Ui.Field(50);
     readonly TextBox _digits = Ui.Field(50);
-    readonly ComboBox _case = new() { Width = 120, ItemsSource = new[] { "大小写不变", "全部小写", "全部大写" }, SelectedIndex = 0 };
+    readonly ComboBox _case = new() { Width = 120, ItemsSource = new[] { "大小写不变", "全部小写", "全部大写", "首字母大写" }, SelectedIndex = 0 };
+    readonly CheckBox _extOnly = new() { Content = "只改扩展名为", VerticalAlignment = VerticalAlignment.Center, Margin = new Thickness(0, 0, 8, 0) };
+    readonly TextBox _newExt = Ui.Field(70);
+    readonly CheckBox _recursive = new() { Content = "包含子文件夹", VerticalAlignment = VerticalAlignment.Center, Margin = new Thickness(0, 0, 16, 0) };
+    readonly ComboBox _presets = new() { Width = 150, IsEditable = true, Margin = new Thickness(0, 0, 8, 0) };
+    readonly Dictionary<string, (DateTime Modified, DateTime? Taken)> _dates = new(StringComparer.OrdinalIgnoreCase);
+    static readonly string PresetFile = Path.Combine(AppPaths.Data, "rename-presets.json");
     readonly ComboBox _sort = new() { Width = 110, ItemsSource = new[] { "按添加顺序", "按名称", "按修改时间" }, SelectedIndex = 0 };
     readonly TextBlock _status = Ui.Status();
     readonly List<(RenameItem Item, string From, string To)> _undo = new();
@@ -43,17 +58,22 @@ sealed class RenamePage : DockPanel
     {
         var header = Ui.Header("批量重命名", "替换、正则、序号模板与大小写规则，先预览再执行，可撤销上一次");
         _template.Text = "*";
-        _template.ToolTip = "* 原文件名，# 序号，例如：照片_#  或  *_#";
+        _template.ToolTip = "* 原文件名，# 序号，{date:yyyyMMdd} 修改日期，{exif:yyyyMMdd_HHmmss} 拍摄日期（无 EXIF 时用修改日期），例如：照片_#  或  {exif}_*";
+        _newExt.ToolTip = "新扩展名，如 jpg；留空表示去掉扩展名";
         _start.Text = "1";
         _digits.Text = "2";
         _digits.ToolTip = "序号位数，不足补 0";
 
-        var row1 = Ui.Row(Ui.Button("添加文件", Pick), Ui.Button("清空", () => { _items.Clear(); _undo.Clear(); _status.Text = ""; }), Ui.Label("", 8), Ui.Label("排序"), _sort, Ui.Label("", 16), Ui.Label("大小写"), _case, Ui.Label("", 16), ListTools.ExportButton(_list, _status, "重命名预览.csv"));
+        var row1 = Ui.Row(Ui.Button("添加文件", Pick), Ui.Button("添加文件夹", PickFolder), _recursive, Ui.Button("清空", () => { _items.Clear(); _undo.Clear(); _status.Text = ""; }), Ui.Label("", 8), Ui.Label("排序"), _sort, Ui.Label("", 16), Ui.Label("大小写"), _case, Ui.Label("", 16), ListTools.ExportButton(_list, _status, "重命名预览.csv"));
         var row2 = Ui.Row(Ui.Label("查找"), _find, Ui.Label("", 8), Ui.Label("替换为"), _replace, Ui.Label("", 12), _regex, _withExt);
-        var row3 = Ui.Row(Ui.Label("命名模板"), _template, Ui.Label("", 8), Ui.Label("起始"), _start, Ui.Label("", 8), Ui.Label("位数"), _digits, Ui.Label("", 16), Ui.Button("执行重命名", Apply, accent: true), Ui.Button("撤销", Undo));
+        var row3 = Ui.Row(Ui.Label("命名模板"), _template, Ui.Label("", 8), Ui.Label("起始"), _start, Ui.Label("", 8), Ui.Label("位数"), _digits, Ui.Label("", 16), _extOnly, _newExt);
+        var row4 = Ui.Row(Ui.Button("上移", () => Move(-1)), Ui.Button("下移", () => Move(1)), Ui.Label("", 8),
+            Ui.Label("预设"), _presets, Ui.Button("保存预设", SavePreset), Ui.Button("载入", LoadPreset), Ui.Button("删除预设", DeletePreset), Ui.Label("", 8),
+            Ui.Button("执行重命名", Apply, accent: true), Ui.Button("撤销", Undo));
+        LoadPresetNames();
 
-        foreach (var box in new[] { _find, _replace, _template, _start, _digits }) box.TextChanged += (_, _) => Preview();
-        foreach (var check in new[] { _regex, _withExt }) check.Click += (_, _) => Preview();
+        foreach (var box in new[] { _find, _replace, _template, _start, _digits, _newExt }) box.TextChanged += (_, _) => Preview();
+        foreach (var check in new[] { _regex, _withExt, _extOnly }) check.Click += (_, _) => Preview();
         _case.SelectionChanged += (_, _) => Preview();
         _sort.SelectionChanged += (_, _) => Sort();
 
@@ -80,11 +100,13 @@ sealed class RenamePage : DockPanel
         SetDock(row1, Dock.Top);
         SetDock(row2, Dock.Top);
         SetDock(row3, Dock.Top);
+        SetDock(row4, Dock.Top);
         SetDock(_status, Dock.Bottom);
         Children.Add(header);
         Children.Add(row1);
         Children.Add(row2);
         Children.Add(row3);
+        Children.Add(row4);
         Children.Add(_status);
         Children.Add(new Grid { Children = { _list, hint } });
     }
@@ -95,12 +117,139 @@ sealed class RenamePage : DockPanel
         if (dialog.ShowDialog(Window.GetWindow(this)) == true) AddPaths(dialog.FileNames);
     }
 
+    void PickFolder()
+    {
+        using var dialog = new System.Windows.Forms.FolderBrowserDialog();
+        if (dialog.ShowDialog() == System.Windows.Forms.DialogResult.OK) AddPaths(new[] { dialog.SelectedPath });
+    }
+
+    void Move(int delta)
+    {
+        var selected = _list.SelectedItems.Cast<RenameItem>().OrderBy(i => _items.IndexOf(i)).ToList();
+        if (selected.Count == 0) return;
+        if (delta > 0) selected.Reverse();
+        _sort.SelectedIndex = 0;
+        foreach (var item in selected)
+        {
+            int index = _items.IndexOf(item), target = index + delta;
+            if (target < 0 || target >= _items.Count || selected.Contains(_items[target])) continue;
+            _items.Move(index, target);
+        }
+        Preview();
+    }
+
+    Dictionary<string, RenamePreset> ReadPresets()
+    {
+        try
+        {
+            if (File.Exists(PresetFile))
+                return JsonConvert.DeserializeObject<Dictionary<string, RenamePreset>>(File.ReadAllText(PresetFile)) ?? new();
+        }
+        catch (Exception ex) { Ui.SetStatus(_status, "读取预设失败：" + ex.Message, true); }
+        return new();
+    }
+
+    bool WritePresets(Dictionary<string, RenamePreset> presets)
+    {
+        try
+        {
+            Directory.CreateDirectory(AppPaths.Data);
+            File.WriteAllText(PresetFile, JsonConvert.SerializeObject(presets, Formatting.Indented));
+            return true;
+        }
+        catch (Exception ex) { Ui.SetStatus(_status, "保存预设失败：" + ex.Message, true); return false; }
+    }
+
+    void LoadPresetNames()
+    {
+        var text = _presets.Text;
+        _presets.ItemsSource = ReadPresets().Keys.OrderBy(k => k, NaturalComparer.Instance).ToList();
+        _presets.Text = text;
+    }
+
+    void SavePreset()
+    {
+        var name = _presets.Text.Trim();
+        if (name.Length == 0) { Ui.SetStatus(_status, "请先在预设框里输入名称", true); return; }
+        var presets = ReadPresets();
+        presets[name] = new RenamePreset
+        {
+            Find = _find.Text, Replace = _replace.Text, Template = _template.Text, Start = _start.Text, Digits = _digits.Text, NewExt = _newExt.Text,
+            Regex = _regex.IsChecked == true, WithExt = _withExt.IsChecked == true, ExtOnly = _extOnly.IsChecked == true, Case = _case.SelectedIndex,
+        };
+        if (!WritePresets(presets)) return;
+        LoadPresetNames();
+        _presets.Text = name;
+        Ui.SetStatus(_status, $"已保存预设「{name}」");
+    }
+
+    void LoadPreset()
+    {
+        var name = _presets.Text.Trim();
+        if (!ReadPresets().TryGetValue(name, out var p)) { Ui.SetStatus(_status, "没有这个预设", true); return; }
+        _find.Text = p.Find;
+        _replace.Text = p.Replace;
+        _template.Text = p.Template;
+        _start.Text = p.Start;
+        _digits.Text = p.Digits;
+        _newExt.Text = p.NewExt;
+        _regex.IsChecked = p.Regex;
+        _withExt.IsChecked = p.WithExt;
+        _extOnly.IsChecked = p.ExtOnly;
+        _case.SelectedIndex = p.Case >= 0 && p.Case < _case.Items.Count ? p.Case : 0;
+        Preview();
+    }
+
+    void DeletePreset()
+    {
+        var name = _presets.Text.Trim();
+        var presets = ReadPresets();
+        if (!presets.Remove(name)) { Ui.SetStatus(_status, "没有这个预设", true); return; }
+        if (MessageBox.Show(Window.GetWindow(this), $"删除预设「{name}」？", "批量重命名", MessageBoxButton.OKCancel, MessageBoxImage.Question) != MessageBoxResult.OK) return;
+        if (!WritePresets(presets)) return;
+        _presets.Text = "";
+        LoadPresetNames();
+        Ui.SetStatus(_status, $"已删除预设「{name}」");
+    }
+
+    static readonly Regex DateToken = new(@"\{(date|exif)(?::([^}]*))?\}", RegexOptions.IgnoreCase);
+
+    (DateTime Modified, DateTime? Taken) Dates(string path)
+    {
+        if (_dates.TryGetValue(path, out var cached)) return cached;
+        DateTime modified = DateTime.MinValue;
+        DateTime? taken = null;
+        try { modified = File.GetLastWriteTime(path); } catch (Exception) { }
+        try
+        {
+            using var stream = File.OpenRead(path);
+            var decoder = System.Windows.Media.Imaging.BitmapDecoder.Create(stream, System.Windows.Media.Imaging.BitmapCreateOptions.DelayCreation, System.Windows.Media.Imaging.BitmapCacheOption.None);
+            if (decoder.Frames.Count > 0 && decoder.Frames[0].Metadata is System.Windows.Media.Imaging.BitmapMetadata meta && DateTime.TryParse(meta.DateTaken, out var d)) taken = d;
+        }
+        catch (Exception) { }
+        return _dates[path] = (modified, taken);
+    }
+
+    string ExpandDates(string template, string path)
+    {
+        if (template.IndexOf('{') < 0) return template;
+        return DateToken.Replace(template, m =>
+        {
+            var (modified, taken) = Dates(path);
+            var date = m.Groups[1].Value.ToLowerInvariant() == "exif" ? taken ?? modified : modified;
+            var format = m.Groups[2].Success && m.Groups[2].Value.Length > 0 ? m.Groups[2].Value : "yyyyMMdd";
+            try { return date.ToString(format); }
+            catch (FormatException) { return m.Value; }
+        });
+    }
+
     void AddPaths(IEnumerable<string> paths)
     {
         foreach (var path in paths)
         {
             IEnumerable<string> files;
-            try { files = Directory.Exists(path) ? Directory.EnumerateFiles(path).OrderBy(f => f, StringComparer.OrdinalIgnoreCase) : new[] { path }; }
+            var option = _recursive.IsChecked == true ? SearchOption.AllDirectories : SearchOption.TopDirectoryOnly;
+            try { files = Directory.Exists(path) ? Directory.EnumerateFiles(path, "*", option).OrderBy(f => f, StringComparer.OrdinalIgnoreCase) : new[] { path }; }
             catch (Exception ex) { Ui.SetStatus(_status, ex.Message, true); continue; }
             foreach (var file in files)
                 if (File.Exists(file) && !_items.Any(i => string.Equals(i.Path, file, StringComparison.OrdinalIgnoreCase)))
@@ -139,6 +288,12 @@ sealed class RenamePage : DockPanel
         {
             var item = _items[i];
             var name = item.Name;
+            if (_extOnly.IsChecked == true)
+            {
+                var newExt = _newExt.Text.Trim().TrimStart('.');
+                item.NewName = Path.GetFileNameWithoutExtension(name) + (newExt.Length > 0 ? "." + newExt : "");
+                continue;
+            }
             string stem = _withExt.IsChecked == true ? name : Path.GetFileNameWithoutExtension(name);
             string ext = _withExt.IsChecked == true ? "" : Path.GetExtension(name);
             if (_find.Text.Length > 0)
@@ -147,9 +302,15 @@ sealed class RenamePage : DockPanel
                 catch (RegexMatchTimeoutException) { }
             }
             var number = (start + i).ToString().PadLeft(digits, '0');
-            stem = template.Replace("#", number).Replace("*", stem);
+            stem = ExpandDates(template, item.Path).Replace("#", number).Replace("*", stem);
             var result = stem + ext;
-            result = _case.SelectedIndex switch { 1 => result.ToLowerInvariant(), 2 => result.ToUpperInvariant(), _ => result };
+            result = _case.SelectedIndex switch
+            {
+                1 => result.ToLowerInvariant(),
+                2 => result.ToUpperInvariant(),
+                3 => System.Globalization.CultureInfo.CurrentCulture.TextInfo.ToTitleCase(Path.GetFileNameWithoutExtension(result).ToLower()) + Path.GetExtension(result),
+                _ => result,
+            };
             item.NewName = result;
         }
 
