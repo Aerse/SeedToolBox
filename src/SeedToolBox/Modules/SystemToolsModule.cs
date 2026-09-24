@@ -42,6 +42,14 @@ sealed class SystemToolsModule : IModule
         host.AddHotkey("monitor", "显示/隐藏系统监控", "", _monitor.Toggle);
         host.AddHotkey("monitor-through", "切换系统监控鼠标穿透", "", _monitor.ToggleClickThrough);
 
+        host.AddPage("sound", Submenu, "\uE767", "声音与亮度", () => new SoundPage());
+        host.AddLauncherCommand("打开声音与亮度页面", () => host.OpenPage("sound"));
+        host.AddLauncherCommand("切换到下一个输出设备", SoundHotkeys.NextOutput);
+        host.AddLauncherCommand("麦克风静音（开/关）", SoundHotkeys.ToggleMicrophone);
+        host.AddHotkey("next-output", "切换到下一个输出设备", "", SoundHotkeys.NextOutput);
+        host.AddHotkey("mic-mute", "麦克风静音（开/关）", "", SoundHotkeys.ToggleMicrophone);
+        host.AddHotkey("brightness-up", "亮度 +10", "", () => SoundHotkeys.ChangeBrightness(10));
+        host.AddHotkey("brightness-down", "亮度 -10", "", () => SoundHotkeys.ChangeBrightness(-10));
     }
 
     static void Add(IAppHost host, string text, string file) =>
