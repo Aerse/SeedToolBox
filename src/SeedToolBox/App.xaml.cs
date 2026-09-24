@@ -118,6 +118,14 @@ public partial class App : Application
         var clipboard = _clipboard = new Clips.ClipboardHistory(settings);
         Action showClipboard = () => (_clipboardWindow ??= new Clips.ClipboardWindow(clipboard)).ShowAtCursor();
         _tray.AddCommand("clipboard", "剪贴板历史", showClipboard);
+        main.AddQuickButton("\uE7A8", "截图", () => RunHidden(screen.Screenshot), () => _hotkeys.FirstOrDefault(h => h.Command == "screenshot")?.Get() ?? "");
+        main.AddQuickButton("\uE7C8", "录屏", () => RunHidden(screen.Record), () => _hotkeys.FirstOrDefault(h => h.Command == "record")?.Get() ?? "");
+        main.AddQuickButton("\uE8D2", "识字", () => RunHidden(screen.RecognizeText), () => _hotkeys.FirstOrDefault(h => h.Command == "ocr")?.Get() ?? "");
+        main.AddQuickButton("\uEF3C", "取色", () => RunHidden(screen.PickColor), () => _hotkeys.FirstOrDefault(h => h.Command == "color")?.Get() ?? "");
+        main.AddQuickButton("\uE77F", "剪贴板", () => Dispatcher.BeginInvoke(showClipboard, DispatcherPriority.ApplicationIdle), () => _hotkeys.FirstOrDefault(h => h.Command == "clipboard")?.Get() ?? "");
+        main.AddQuickButton("\uE943", "开发工具", () => toolbox.ShowAndActivate("format"));
+        main.AddQuickButton("\uE8FD", "全部工具", () => toolbox.ShowAndActivate());
+        main.AddQuickButton("\uE713", "设置", () => toolbox.ShowAndActivate("settings"));
         _tray.AddCommand("clipboardPause", "暂停记录剪贴板", () => clipboard.Recording = !clipboard.Recording);
         clipboard.RecordingChanged += () => _tray.SetChecked("clipboardPause", !clipboard.Recording);
         _tray.SetChecked("clipboardPause", !clipboard.Recording);
@@ -229,6 +237,7 @@ public partial class App : Application
     /// <summary>Starts a screen tool, first hiding the app's windows so they stay out of the capture.</summary>
     void RunHidden(Action action)
     {
+        if (_screenTools?.Settings.HideWindowsOnCapture == false) { action(); return; }
         bool hid = false;
         foreach (var window in new Window?[] { _main, _toolbox })
         {

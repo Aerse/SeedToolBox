@@ -100,7 +100,13 @@ sealed class ClipboardWindow : Window
         };
 
         var root = new DockPanel();
-        var top = new Grid { Margin = new Thickness(12, 12, 12, 8), Children = { _search, hint } };
+        var close = new Button { Content = new TextBlock { Text = "", FontFamily = new FontFamily("Segoe Fluent Icons, Segoe MDL2 Assets"), FontSize = 12 }, Width = 36, Padding = new Thickness(0), HorizontalContentAlignment = HorizontalAlignment.Center, Margin = new Thickness(6, 0, 0, 0), ToolTip = "关闭（Esc）" };
+        close.Click += (_, _) => Hide();
+        var searchBox = new Grid { Children = { _search, hint } };
+        var top = new DockPanel { Margin = new Thickness(12, 12, 12, 8), Background = Brushes.Transparent };
+        DockPanel.SetDock(close, Dock.Right);
+        top.Children.Add(close);
+        top.Children.Add(searchBox);
         DockPanel.SetDock(top, Dock.Top);
         DockPanel.SetDock(footer, Dock.Bottom);
         DockPanel.SetDock(tips, Dock.Bottom);
@@ -125,7 +131,14 @@ sealed class ClipboardWindow : Window
             if (IsVisible) Refresh();
             else _dirty = true;
         };
-        Deactivated += (_, _) => Hide();
+        // Controls and list items handle their own clicks, so this only fires on blank areas
+        MouseLeftButtonDown += (_, _) => DragMove();
+        // Stays open when another window is clicked; the window clicked last becomes the paste target
+        Deactivated += (_, _) => Dispatcher.BeginInvoke(new Action(() =>
+        {
+            var foreground = GetForegroundWindow();
+            if (foreground != new WindowInteropHelper(this).Handle) _previous = foreground;
+        }), System.Windows.Threading.DispatcherPriority.Background);
     }
 
     /// <summary>Shows the popup at the cursor, remembering the window to paste into.</summary>

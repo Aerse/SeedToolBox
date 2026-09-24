@@ -36,8 +36,11 @@ static class ScreenToolsSettingsSection
         panel.Children.Add(Spaced(Ui.Row(Ui.Label("文件名模板"), template, preview)));
         panel.Children.Add(Spaced(Hint("{ } 中是时间格式，如 {yyyyMMdd_HHmmss}、{yyyy-MM-dd HH.mm.ss}")));
 
+        var hide = new CheckBox { Content = "截图时隐藏本程序窗口", IsChecked = s.HideWindowsOnCapture, Margin = new Thickness(0, 0, 0, 8) };
+        hide.Click += (_, _) => { s.HideWindowsOnCapture = hide.IsChecked == true; service.SaveSettings(); };
         var autoSave = new CheckBox { Content = "每次截图后自动保存 PNG 到文件夹", IsChecked = s.AutoSave, Margin = new Thickness(0, 0, 0, 8) };
         autoSave.Click += (_, _) => { s.AutoSave = autoSave.IsChecked == true; service.SaveSettings(); };
+        panel.Children.Add(hide);
         panel.Children.Add(autoSave);
         var folder = Ui.Field(320);
         folder.Text = service.AutoSaveFolder;

@@ -263,6 +263,7 @@
                 <RowDefinition Height="Auto" />
                 <RowDefinition Height="Auto" />
                 <RowDefinition Height="*" />
+                <RowDefinition Height="Auto" />
             </Grid.RowDefinitions>
             <!-- Search -->
             <Grid Margin="0,0,0,6" Height="34">
@@ -316,6 +317,9 @@
                     </ListBox.ContextMenu>
                 </ListBox>
             </DockPanel>
+
+            <!-- Quick tools -->
+            <WrapPanel x:Name="QuickBar" Grid.Row="3" Margin="0,10,0,0" HorizontalAlignment="Center" />
 
             <!-- Items -->
             <Border Grid.Row="2" CornerRadius="8"

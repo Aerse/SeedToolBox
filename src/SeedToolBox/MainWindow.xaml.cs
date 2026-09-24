@@ -209,6 +209,39 @@ public partial class MainWindow : Window
 
     void OnToolboxClick(object sender, RoutedEventArgs e) => ToolboxRequested?.Invoke();
 
+    /// <summary>Adds an icon button to the bar under the items.</summary>
+    public void AddQuickButton(string glyph, string label, Action action, Func<string>? hotkey = null)
+    {
+        var keys = new System.Windows.Controls.TextBlock { FontFamily = new System.Windows.Media.FontFamily("Microsoft YaHei UI, Segoe UI"), FontSize = 10, Opacity = 0.6, Margin = new Thickness(0, 1, 0, 0), HorizontalAlignment = HorizontalAlignment.Center };
+        if (hotkey != null)
+        {
+            void Refresh() { var k = hotkey(); keys.Text = k; keys.Visibility = k.Length > 0 ? Visibility.Visible : Visibility.Collapsed; }
+            Refresh();
+            Activated += (_, _) => Refresh();
+        }
+        else keys.Visibility = Visibility.Collapsed;
+        var button = new System.Windows.Controls.Button
+        {
+            Style = (Style)FindResource("IconButton"),
+            Width = 76,
+            Height = 62,
+            Margin = new Thickness(2, 0, 2, 0),
+            ToolTip = label,
+            Content = new System.Windows.Controls.StackPanel
+            {
+                Children =
+                {
+                    new System.Windows.Controls.TextBlock { Text = glyph, FontFamily = new System.Windows.Media.FontFamily("Segoe Fluent Icons, Segoe MDL2 Assets"), FontSize = 18, HorizontalAlignment = HorizontalAlignment.Center },
+                    new System.Windows.Controls.TextBlock { Text = label, FontFamily = new System.Windows.Media.FontFamily("Microsoft YaHei UI, Segoe UI"), FontSize = 11, Margin = new Thickness(0, 4, 0, 0), HorizontalAlignment = HorizontalAlignment.Center },
+                    keys,
+                },
+            },
+        };
+        System.Windows.Automation.AutomationProperties.SetName(button, label);
+        button.Click += (_, _) => action();
+        QuickBar.Children.Add(button);
+    }
+
     #region Views
 
     void UpdateViewButtons()

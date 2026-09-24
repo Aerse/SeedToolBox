@@ -6,6 +6,7 @@ public class ScreenToolsSettings
 {
     public const string SettingsName = "screentools";
 
+    public bool HideWindowsOnCapture { get; set; } = true;
     public string ScreenshotHotkey { get; set; } = "Alt+Shift+A";
     public string ColorPickerHotkey { get; set; } = "";
     public string RulerHotkey { get; set; } = "";
