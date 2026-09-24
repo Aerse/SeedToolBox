@@ -48,6 +48,7 @@ sealed class HashPage : DockPanel
     readonly TextBlock _status = Ui.Status();
     string? _path;
     CancellationTokenSource? _cancel;
+    readonly AsyncToken _textToken = new();
 
     readonly ObservableCollection<HashItem> _items = new();
     readonly ListView _list = new();
@@ -204,15 +205,26 @@ sealed class HashPage : DockPanel
     void ComputeText()
     {
         _cancel?.Cancel();
-        if (_input.Text.Length == 0) { Array.Clear(_values, 0, _values.Length); ShowValues(); Compare(); return; }
-        Show(Hashes.Compute(new MemoryStream(Encoding.UTF8.GetBytes(_input.Text)), Names, Key(), null, CancellationToken.None));
-        Ui.SetStatus(_status, $"UTF-8 文本，{Encoding.UTF8.GetByteCount(_input.Text)} 字节");
+        if (_input.Text.Length == 0) { _textToken.Current++; Array.Clear(_values, 0, _values.Length); ShowValues(); Compare(); return; }
+        var text = _input.Text;
+        var key = Key();
+        Ui.RunAsync(_textToken, () =>
+        {
+            var bytes = Encoding.UTF8.GetBytes(text);
+            return (Hashes.Compute(new MemoryStream(bytes), Names, key, null, CancellationToken.None), bytes.Length);
+        }, r =>
+        {
+            if (_path != null) return;
+            Show(r.Item1);
+            Ui.SetStatus(_status, $"UTF-8 文本，{r.Item2} 字节");
+        }, ex => Ui.SetStatus(_status, "计算失败：" + ex.Message, true));
     }
 
     byte[]? Key() => _key.Password.Length > 0 ? Encoding.UTF8.GetBytes(_key.Password) : null;
 
     async void ComputeFile(string path)
     {
+        _textToken.Current++;
         _cancel?.Cancel();
         var cancel = _cancel = new CancellationTokenSource();
         _path = path;
