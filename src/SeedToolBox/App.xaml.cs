@@ -143,6 +143,19 @@ public partial class App : Application
         toolbox.AddPage("clipboard", "\uE77F", "剪贴板", () => new Clips.ClipboardPage(clipboard));
         toolbox.AddPage("captures", "\uE91B", "截图历史", () => new CaptureHistoryPage(screen));
         toolbox.AddPage("colors", "\uE790", "颜色", () => new ColorPage(screen));
+        var reminders = new Reminders.ReminderService(settings);
+        toolbox.AddPage("reminders", "\uE823", "提醒", () => new Reminders.RemindersPage(reminders));
+        _tray.AddCommand("reminders", "提醒", () => toolbox.ShowAndActivate("reminders"));
+        main.TextCommand = text =>
+        {
+            if (!Reminders.ReminderParser.TryParse(text, DateTime.Now, out var reminder)) return null;
+            return new SearchCommand("\uE823", $"提醒：{reminder.Text}", reminder.DueText(DateTime.Now) + "　回车添加", () =>
+            {
+                reminders.Add(reminder);
+                main.SearchBox.Clear();
+                Toast.Show($"已添加提醒：{reminder.Text}，{reminder.DueText(DateTime.Now)}");
+            });
+        };
         var settingsOptions = new SettingsPage.Options
         {
             SizeLocked = () => data.Window.SizeLocked,

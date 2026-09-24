@@ -646,6 +646,9 @@ public partial class MainWindow : Window
     /// <summary>Asks the AI assistant a question, for the "ai " prefix; null when the assistant is off.</summary>
     public Action<string>? AskAi { get; set; }
 
+    /// <summary>A command read from the whole search text when no prefix matched, e.g. "10分钟后 喝水" for a reminder.</summary>
+    public Func<string, SearchCommand?>? TextCommand { get; set; }
+
     bool IsSearching => ItemSearch.Normalize(SearchBox.Text).Length > 0;
 
     void OnSearchTextChanged(object sender, TextChangedEventArgs e)
@@ -754,6 +757,7 @@ public partial class MainWindow : Window
                 }));
             }
         }
+        if (list.Count == 0 && TextCommand?.Invoke(text) is { } extra) list.Add(extra);
         return list;
     }
 
