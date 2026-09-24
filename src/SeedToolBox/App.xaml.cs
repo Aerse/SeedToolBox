@@ -27,6 +27,8 @@ public partial class App : Application
     ScreenToolService? _screenTools;
     Clips.ClipboardHistory? _clipboard;
     Clips.ClipboardWindow? _clipboardWindow;
+    Notes.NoteStore? _notes;
+    Notes.NoteWindows? _noteWindows;
     ModuleManager? _modules;
     const string ModuleHotkeysFile = "module-hotkeys";
     Action? _saveModuleHotkeys;
@@ -109,6 +111,7 @@ public partial class App : Application
             toolbox.AddTool($"delay{seconds}", "\uE916", $"{seconds} 秒后截图", () => screen.DelayedScreenshot(seconds));
         }
         toolbox.AddTool("ocr", "\uE8D2", "识字", screen.RecognizeText);
+        toolbox.AddTool("table", "\uE80A", "识别表格", screen.RecognizeTable);
         toolbox.AddTool("qr", "\uED14", "扫码", screen.RecognizeQrCodes);
         toolbox.AddTool("qrscreen", "\uE740", "全屏扫码", screen.ScanQrCodes);
         toolbox.AddTool("qrgen", "\uE72D", "生成二维码", screen.GenerateQrCode, hide: false);
@@ -118,18 +121,24 @@ public partial class App : Application
         var clipboard = _clipboard = new Clips.ClipboardHistory(settings);
         Action showClipboard = () => (_clipboardWindow ??= new Clips.ClipboardWindow(clipboard)).ShowAtCursor();
         _tray.AddCommand("clipboard", "剪贴板历史", showClipboard);
+        var notes = _notes = new Notes.NoteStore(settings);
+        var noteWindows = _noteWindows = new Notes.NoteWindows(notes);
         main.AddQuickButton("\uE7A8", "截图", () => RunHidden(screen.Screenshot), () => _hotkeys.FirstOrDefault(h => h.Command == "screenshot")?.Get() ?? "");
         main.AddQuickButton("\uE7C8", "录屏", () => RunHidden(screen.Record), () => _hotkeys.FirstOrDefault(h => h.Command == "record")?.Get() ?? "");
         main.AddQuickButton("\uE8D2", "识字", () => RunHidden(screen.RecognizeText), () => _hotkeys.FirstOrDefault(h => h.Command == "ocr")?.Get() ?? "");
         main.AddQuickButton("\uEF3C", "取色", () => RunHidden(screen.PickColor), () => _hotkeys.FirstOrDefault(h => h.Command == "color")?.Get() ?? "");
         main.AddQuickButton("\uE77F", "剪贴板", () => Dispatcher.BeginInvoke(showClipboard, DispatcherPriority.ApplicationIdle), () => _hotkeys.FirstOrDefault(h => h.Command == "clipboard")?.Get() ?? "");
+        main.AddQuickButton("\uE70B", "便签", noteWindows.New, () => _hotkeys.FirstOrDefault(h => h.Command == "notes")?.Get() ?? "");
         main.AddQuickButton("\uE943", "开发工具", () => toolbox.ShowAndActivate("format"));
         main.AddQuickButton("\uE8FD", "全部工具", () => toolbox.ShowAndActivate());
         main.AddQuickButton("\uE713", "设置", () => toolbox.ShowAndActivate("settings"));
         _tray.AddCommand("clipboardPause", "暂停记录剪贴板", () => clipboard.Recording = !clipboard.Recording);
         clipboard.RecordingChanged += () => _tray.SetChecked("clipboardPause", !clipboard.Recording);
         _tray.SetChecked("clipboardPause", !clipboard.Recording);
+        _tray.AddCommand("notes", "新建便签", noteWindows.New);
+        _tray.AddCommand("notesPage", "快速笔记", () => toolbox.ShowAndActivate("notes"));
         _tray.AddCommand("toolbox", "工具箱", () => toolbox.ShowAndActivate());
+        toolbox.AddPage("notes", "\uE70B", "快速笔记", () => new Notes.NotesPage(notes, noteWindows));
         toolbox.AddPage("clipboard", "\uE77F", "剪贴板", () => new Clips.ClipboardPage(clipboard));
         toolbox.AddPage("captures", "\uE91B", "截图历史", () => new CaptureHistoryPage(screen));
         toolbox.AddPage("colors", "\uE790", "颜色", () => new ColorPage(screen));
@@ -157,6 +166,8 @@ public partial class App : Application
         _hotkeys.Add(new HotkeyBinding("screenshot", "截图", () => screen.Settings.ScreenshotHotkey, v => screen.Settings.ScreenshotHotkey = v, () => RunHidden(screen.Screenshot)));
         _hotkeys.Add(new HotkeyBinding("record", "录屏", () => screen.Settings.RecordHotkey, v => screen.Settings.RecordHotkey = v, () => RunHidden(screen.Record)));
         _hotkeys.Add(new HotkeyBinding("clipboard", "剪贴板历史", () => clipboard.Settings.Hotkey, v => clipboard.Settings.Hotkey = v, showClipboard));
+        _hotkeys.Add(new HotkeyBinding("notes", "新建便签", () => notes.Data.Hotkey, v => { notes.Data.Hotkey = v; notes.Flush(); }, noteWindows.New));
+        _hotkeys.Add(new HotkeyBinding("notesPage", "打开快速笔记", () => notes.Data.PageHotkey, v => { notes.Data.PageHotkey = v; notes.Flush(); }, () => toolbox.ShowAndActivate("notes")));
         _hotkeys.Add(new HotkeyBinding("fullscreen", "全屏截图", () => screen.Settings.FullScreenHotkey, v => screen.Settings.FullScreenHotkey = v, () => RunHidden(screen.FullScreen)));
         // Not hidden first: hiding our windows would change which window is in front
         _hotkeys.Add(new HotkeyBinding("activewindow", "窗口截图", () => screen.Settings.ActiveWindowHotkey, v => screen.Settings.ActiveWindowHotkey = v, screen.ActiveWindow));
@@ -166,6 +177,7 @@ public partial class App : Application
         _hotkeys.Add(new HotkeyBinding("color", "取色", () => screen.Settings.ColorPickerHotkey, v => screen.Settings.ColorPickerHotkey = v, () => RunHidden(screen.PickColor)));
         _hotkeys.Add(new HotkeyBinding("ruler", "屏幕标尺", () => screen.Settings.RulerHotkey, v => screen.Settings.RulerHotkey = v, () => RunHidden(screen.Ruler)));
         _hotkeys.Add(new HotkeyBinding("ocr", "识别文字", () => screen.Settings.OcrHotkey, v => screen.Settings.OcrHotkey = v, () => RunHidden(screen.RecognizeText)));
+        _hotkeys.Add(new HotkeyBinding("table", "识别表格", () => screen.Settings.TableHotkey, v => screen.Settings.TableHotkey = v, () => RunHidden(screen.RecognizeTable)));
         _hotkeys.Add(new HotkeyBinding("qr", "识别二维码", () => screen.Settings.QrHotkey, v => screen.Settings.QrHotkey = v, () => RunHidden(screen.RecognizeQrCodes)));
 
         bool migrateHotkeys = data.HotkeyDefaults < CurrentHotkeyDefaults;
@@ -213,6 +225,8 @@ public partial class App : Application
 
         try { DataBackup.AutoBackup(); }
         catch (Exception ex) { Log.Error("Automatic backup failed", ex); }
+
+        noteWindows.RestoreOpen();
 
         if (!e.Args.Contains(AutoStart.BackgroundArg))
             _main.Show();
@@ -384,6 +398,8 @@ public partial class App : Application
         _modules?.ShutdownAll();
         foreach (var binding in _hotkeys) binding.Hotkey.Dispose();
         _clipboard?.Dispose();
+        _noteWindows?.CloseAllForExit();
+        _notes?.Flush();
         _tray?.Dispose();
         _mutex?.Dispose();
         Log.Info("Exited");

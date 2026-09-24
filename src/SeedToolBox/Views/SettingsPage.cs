@@ -94,8 +94,8 @@ sealed class SettingsPage : ScrollViewer
     {
         _hotkeys.Children.Clear();
         var entries = _o.Hotkeys();
-        // The first four are the main ones; the rest are off by default
-        const int mainCount = 4;
+        // The first five are the main ones; the rest are off by default
+        const int mainCount = 5;
         var more = new StackPanel();
         for (int i = 0; i < entries.Count; i++)
         {
