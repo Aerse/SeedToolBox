@@ -12,6 +12,7 @@ public class ScreenToolsSettings
     public string RulerHotkey { get; set; } = "";
     public string RecordHotkey { get; set; } = "Alt+Shift+E";
     public string OcrHotkey { get; set; } = "";
+    public string TableHotkey { get; set; } = "";
     public string QrHotkey { get; set; } = "";
 
     public ColorFormat ColorFormat { get; set; } = ColorFormat.Hex;

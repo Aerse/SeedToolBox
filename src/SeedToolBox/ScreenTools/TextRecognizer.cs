@@ -18,7 +18,7 @@ namespace SeedToolBox.ScreenTools;
 /// Text recognition: PaddleOCR when its runtime loads, otherwise the OCR engine built into Windows 10/11.
 /// Either way the pieces found are laid out again as lines of text.
 /// </summary>
-static class TextRecognizer
+static partial class TextRecognizer
 {
     static bool? _windowsAvailable;
 

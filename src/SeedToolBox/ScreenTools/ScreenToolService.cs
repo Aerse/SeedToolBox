@@ -108,6 +108,46 @@ public sealed partial class ScreenToolService
         }
     }
 
+    /// <summary>Selects a region and recognizes the table in it.</summary>
+    public void RecognizeTable()
+    {
+        if (!CheckOcr()) return;
+        Open(shot => new CaptureWindow(shot, WindowFinder.Snapshot(shot), this, CaptureMode.Table));
+    }
+
+    public async void RecognizeTable(BitmapSource image)
+    {
+        if (!CheckOcr()) return;
+        var window = new TextResultWindow("识别表格", image) { CopyAction = CopyTable };
+        window.Show();
+        try
+        {
+            var rows = await TextRecognizer.RecognizeTableAsync(image, Settings.OcrLanguage);
+            window.SetResult(TextRecognizer.ToTsv(rows), "未识别到文字");
+            if (rows.Count > 0) window.SetStatus($"{rows.Count} 行 × {rows[0].Length} 列，单元格之间用 Tab 分隔；复制后可直接粘贴到 Excel 或 Word");
+        }
+        catch (Exception ex)
+        {
+            Log.Error("Table OCR failed", ex);
+            window.SetError($"识别失败：{ex.Message}");
+        }
+    }
+
+    /// <summary>Copies tab-separated text as a table: plain text for Excel, HTML for Word.</summary>
+    public static void CopyTable(string tsv)
+    {
+        var rows = TextRecognizer.FromTsv(tsv);
+        var data = new DataObject();
+        data.SetData(DataFormats.UnicodeText, tsv);
+        data.SetData(DataFormats.Html, TextRecognizer.ToClipboardHtml(rows));
+        try { Clipboard.SetDataObject(data, true); }
+        catch (Exception ex)
+        {
+            Log.Error("Failed to copy table", ex);
+            CopyText(tsv);
+        }
+    }
+
     /// <summary>Selects a region and reads the QR codes and barcodes in it.</summary>
     public void RecognizeQrCodes() => Open(shot => new CaptureWindow(shot, WindowFinder.Snapshot(shot), this, CaptureMode.QrCode));
 

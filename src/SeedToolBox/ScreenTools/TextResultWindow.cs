@@ -68,13 +68,16 @@ sealed class TextResultWindow : Window
         _copy.Click += (_, _) =>
         {
             // The selection if there is one, otherwise everything
-            ScreenToolService.CopyText(_text.SelectionLength > 0 ? _text.SelectedText : _text.Text);
+            (CopyAction ?? ScreenToolService.CopyText)(_text.SelectionLength > 0 ? _text.SelectedText : _text.Text);
             _status.Text = "已复制";
         };
         _text.TextChanged += (_, _) => _status.Text = "";
         Loaded += (_, _) => { Activate(); _text.Focus(); };
         SetBusy("正在识别…");
     }
+
+    /// <summary>Replaces plain-text copying, e.g. to add a table format.</summary>
+    public Action<string>? CopyAction { get; set; }
 
     public void SetBusy(string message)
     {
@@ -111,6 +114,8 @@ sealed class TextResultWindow : Window
             _links.Children.Add(open);
         }
     }
+
+    public void SetStatus(string message) => _status.Text = message;
 
     public void SetError(string message)
     {

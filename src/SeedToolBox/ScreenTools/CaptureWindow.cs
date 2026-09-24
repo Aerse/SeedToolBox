@@ -16,7 +16,7 @@ namespace SeedToolBox.ScreenTools;
 /// In record mode the selection is only adjusted, then handed to the screen recorder;
 /// in text and QR code modes it goes straight to recognition.
 /// </summary>
-enum CaptureMode { Screenshot, Record, Text, QrCode }
+enum CaptureMode { Screenshot, Record, Text, QrCode, Table }
 
 sealed class CaptureWindow : OverlayWindow
 {
@@ -499,6 +499,7 @@ sealed class CaptureWindow : OverlayWindow
         // Recognition modes act on the first selection; deferred so the mouse-up finishes first
         if (_mode == CaptureMode.Text) Dispatcher.BeginInvoke(new Action(RecognizeText));
         else if (_mode == CaptureMode.QrCode) Dispatcher.BeginInvoke(new Action(DecodeQrCodes));
+        else if (_mode == CaptureMode.Table) Dispatcher.BeginInvoke(new Action(RecognizeTable));
     }
 
     void CancelEditing()
@@ -739,6 +740,15 @@ sealed class CaptureWindow : OverlayWindow
         _service.RememberRegion(region);
         Close();
         _service.StartScrollCapture(region, scale);
+    }
+
+    void RecognizeTable()
+    {
+        if (!_editing) return;
+        var image = Render();
+        _service.RememberRegion(ScreenRegion);
+        Close();
+        _service.RecognizeTable(image);
     }
 
     void DecodeQrCodes()
