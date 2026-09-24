@@ -50,6 +50,8 @@ sealed class ClipboardWindow : Window
             Refresh();
         };
         _search.PreviewKeyDown += OnSearchKey;
+        // The window doesn't take focus on click, so typing a search needs it activated explicitly
+        _search.PreviewMouseLeftButtonDown += (_, _) => { Activate(); SetForegroundWindow(new WindowInteropHelper(this).Handle); };
 
         _list.BorderThickness = new Thickness(0);
         _list.Background = Brushes.Transparent;
@@ -132,7 +134,18 @@ sealed class ClipboardWindow : Window
             else _dirty = true;
         };
         // Controls and list items handle their own clicks, so this only fires on blank areas
-        MouseLeftButtonDown += (_, _) => DragMove();
+        // Moved by hand: DragMove shows the system outline, which includes the transparent shadow margin
+        Point? grab = null;
+        MouseLeftButtonDown += (_, e) => { grab = e.GetPosition(this); CaptureMouse(); };
+        MouseMove += (_, e) =>
+        {
+            if (grab is not { } g) return;
+            var p = e.GetPosition(this);
+            Left += p.X - g.X;
+            Top += p.Y - g.Y;
+        };
+        MouseLeftButtonUp += (_, _) => { grab = null; ReleaseMouseCapture(); };
+        LostMouseCapture += (_, _) => grab = null;
         // Stays open when another window is clicked; the window clicked last becomes the paste target
         Deactivated += (_, _) => Dispatcher.BeginInvoke(new Action(() =>
         {
@@ -266,7 +279,7 @@ sealed class ClipboardWindow : Window
         menu.Items.Add(MenuItem("粘贴", () => Choose(entry)));
         if (entry.Text != null && (entry.IsRich || entry.IsFiles)) menu.Items.Add(MenuItem("粘贴为纯文本", () => Choose(entry, plainText: true)));
         menu.Items.Add(MenuItem("合并粘贴选中项", ChooseMerged));
-        menu.Items.Add(MenuItem("仅复制", () => { _history.Copy(entry); Hide(); }));
+        menu.Items.Add(MenuItem("仅复制", () => _history.Copy(entry)));
         menu.Items.Add(MenuItem(entry.Pinned ? "取消置顶" : "置顶", () => { _history.TogglePin(entry); Refresh(); }));
         menu.Items.Add(new Separator());
         menu.Items.Add(MenuItem("删除", () => _history.Remove(entry)));
@@ -357,10 +370,12 @@ sealed class ClipboardWindow : Window
 
     void PasteIntoPrevious()
     {
-        Hide();
-        if (!_history.Settings.AutoPaste || _previous == IntPtr.Zero) return;
-
-        var target = _previous;
+        // Stays open so several entries can be pasted in a row
+        if (!_history.Settings.AutoPaste) return;
+        // Clicks don't activate this window, so whatever is in front (e.g. the editor) is the target
+        var foreground = GetForegroundWindow();
+        var target = foreground != new WindowInteropHelper(this).Handle && foreground != IntPtr.Zero ? foreground : _previous;
+        if (target == IntPtr.Zero) return;
         SetForegroundWindow(target);
         // Give the target a moment to take focus before sending Ctrl+V
         var timer = new DispatcherTimer { Interval = TimeSpan.FromMilliseconds(120) };
@@ -385,6 +400,17 @@ sealed class ClipboardWindow : Window
         keybd_event(VK_CONTROL, 0, KEYUP, UIntPtr.Zero);
     }
 
+    protected override void OnSourceInitialized(EventArgs e)
+    {
+        base.OnSourceInitialized(e);
+        // Clicking an entry must not steal focus from the window being pasted into
+        var handle = new WindowInteropHelper(this).Handle;
+        SetWindowLong(handle, GwlExStyle, GetWindowLong(handle, GwlExStyle) | WsExNoActivate);
+    }
+
+    const int GwlExStyle = -20, WsExNoActivate = 0x08000000;
+    [DllImport("user32.dll")] static extern int GetWindowLong(IntPtr hwnd, int index);
+    [DllImport("user32.dll")] static extern int SetWindowLong(IntPtr hwnd, int index, int value);
     [DllImport("user32.dll")] static extern IntPtr GetForegroundWindow();
     [DllImport("user32.dll")] static extern bool SetForegroundWindow(IntPtr hwnd);
     [DllImport("user32.dll")] static extern short GetAsyncKeyState(int vk);

@@ -278,8 +278,16 @@ public sealed class ClipboardHistory : IDisposable
         Insert(entry);
     }
 
+    /// <summary>Entry just put back on the clipboard by <see cref="Copy"/>; it keeps its place when the change comes back.</summary>
+    string? _copiedHash;
+
     bool MoveToTop(string hash)
     {
+        if (hash == _copiedHash)
+        {
+            _copiedHash = null;
+            if (Entries.Any(e => e.Hash == hash)) return true;
+        }
         var existing = Entries.FirstOrDefault(e => e.Hash == hash);
         if (existing == null) return false;
         existing.Time = DateTime.Now;
@@ -406,10 +414,11 @@ public sealed class ClipboardHistory : IDisposable
 
     /// <summary>
     /// Puts the entry back on the clipboard with all its formats, or only its text when plainText is set.
-    /// It moves to the top when the change comes back to us.
+    /// It keeps its place in the list.
     /// </summary>
     public bool Copy(ClipboardEntry entry, bool plainText = false)
     {
+        _copiedHash = entry.Hash;
         if (entry.IsFiles && !plainText)
         {
             var list = new StringCollection();
