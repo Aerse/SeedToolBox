@@ -133,6 +133,7 @@ sealed class CaptureWindow : OverlayWindow
         main.Children.Add(Button("⬚", "尺寸与比例（直接输入数字也可）", ToggleSizePanel));
         main.Children.Add(Button("文", "识别文字", RecognizeText));
         main.Children.Add(Button("码", "识别二维码", DecodeQrCodes));
+        main.Children.Add(Button("⇕", "长截图（手动滚动区域内容）", ScrollCapture));
         main.Children.Add(Divider());
         main.Children.Add(Button("📌", "贴到屏幕", Pin));
         main.Children.Add(Button("💾", "保存 (Ctrl+S)", Save));
@@ -728,6 +729,16 @@ sealed class CaptureWindow : OverlayWindow
         _service.RememberRegion(ScreenRegion);
         Close();
         _service.RecognizeText(image);
+    }
+
+    void ScrollCapture()
+    {
+        if (!_editing) return;
+        var region = ScreenRegion;
+        double scale = Scale;
+        _service.RememberRegion(region);
+        Close();
+        _service.StartScrollCapture(region, scale);
     }
 
     void DecodeQrCodes()

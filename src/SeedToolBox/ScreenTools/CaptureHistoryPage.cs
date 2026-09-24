@@ -126,6 +126,7 @@ sealed class CaptureHistoryPage : DockPanel
                 var p = WinForms.Cursor.Position;
                 _service.Pin(image, p.X - image.PixelWidth / 2, p.Y - image.PixelHeight / 2);
             })),
+            ("编辑", () => Use(path, image => _service.Edit(image))),
             ("删除", () => _service.History.Delete(path)),
         })
         {
