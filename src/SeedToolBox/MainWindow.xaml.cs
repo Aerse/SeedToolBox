@@ -215,7 +215,7 @@ public partial class MainWindow : Window
     void OnSettingsClick(object sender, RoutedEventArgs e) => SettingsRequested?.Invoke();
 
     /// <summary>Tile colours for the quick buttons, in order.</summary>
-    static readonly string[] QuickColors = { "#0078D4", "#E74856", "#8764B8", "#00A67E", "#F7630C", "#E3A21A", "#0099BC", "#6B7280" };
+    static readonly string[] QuickColors = { "#0078D4", "#E74856", "#8764B8", "#00A67E", "#F7630C", "#E3A21A", "#0099BC", "#C239B3", "#2D7D9A", "#CA5010", "#6B7280" };
 
     /// <summary>Adds a coloured icon tile to the card under the items; the hotkey shows in its tooltip.</summary>
     public void AddQuickButton(string glyph, string label, Action action, Func<string>? hotkey = null)

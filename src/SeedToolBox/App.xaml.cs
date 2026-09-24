@@ -132,6 +132,9 @@ public partial class App : Application
         main.AddQuickButton("\uE77F", "剪贴板", () => Dispatcher.BeginInvoke(showClipboard, DispatcherPriority.ApplicationIdle), () => _hotkeys.FirstOrDefault(h => h.Command == "clipboard")?.Get() ?? "");
         main.AddQuickButton("\uE70B", "便签", noteWindows.New, () => _hotkeys.FirstOrDefault(h => h.Command == "notes")?.Get() ?? "");
         main.AddQuickButton("\uE943", "开发工具", () => toolbox.ShowAndActivate("format"));
+        main.AddQuickButton("\uE823", "提醒", () => toolbox.ShowAndActivate("reminders"));
+        main.AddQuickButton("\uE9D2", "系统监控", () => toolbox.ShowAndActivate("monitor"));
+        main.AddQuickButton("\uE767", "声音亮度", () => toolbox.ShowAndActivate("sound"));
         main.AddQuickButton("\uE8FD", "全部工具", () => toolbox.ShowAndActivate());
         _tray.AddCommand("clipboardPause", "暂停记录剪贴板", () => clipboard.Recording = !clipboard.Recording);
         clipboard.RecordingChanged += () => _tray.SetChecked("clipboardPause", !clipboard.Recording);
