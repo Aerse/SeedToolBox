@@ -37,7 +37,7 @@ public partial class ToolboxWindow : Window
         new("time", "格式与编码", "\uE823", "时间戳/进制", () => new TimePage()),
         new("regex", "开发调试", "\uE721", "正则测试", () => new RegexPage()),
         new("diff", "开发调试", "\uE7C3", "文本对比", () => new DiffPage()),
-        new("jwt", "开发调试", "\uE8EC", "JWT 解码", () => new JwtPage()),
+        new("jwt", "开发调试", "\uE8EC", "JWT 解码 / 校验", () => new JwtPage()),
         new("hash", "开发调试", "\uE73E", "哈希校验", () => new HashPage()),
         new("generator", "开发调试", "\uE8D7", "UUID/密码", () => new GeneratorPage()),
         new("image", "图片", "\uE8B9", "图片格式转换", () => new ImageConvertPage()),
