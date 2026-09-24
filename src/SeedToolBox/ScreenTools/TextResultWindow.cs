@@ -119,6 +119,25 @@ sealed class TextResultWindow : Window
         _status.Foreground = (Brush)Application.Current.Resources["DangerBrush"];
     }
 
+    /// <summary>Adds 翻译, which opens the template with {text} replaced by the selection or all text.</summary>
+    public void AddTranslate(string urlTemplate)
+    {
+        if (string.IsNullOrWhiteSpace(urlTemplate) || _copy.Parent is not StackPanel buttons) return;
+        var translate = new Button { Content = "翻译", MinWidth = 88, Margin = new Thickness(0, 0, 8, 0), ToolTip = urlTemplate };
+        translate.Click += (_, _) =>
+        {
+            var text = (_text.SelectionLength > 0 ? _text.SelectedText : _text.Text).Trim();
+            if (text.Length == 0) return;
+            // Browsers and servers reject very long URLs
+            if (text.Length > 1800) text = text.Substring(0, 1800);
+            var url = urlTemplate.Contains("{text}")
+                ? urlTemplate.Replace("{text}", Uri.EscapeDataString(text))
+                : urlTemplate + Uri.EscapeDataString(text);
+            ProcessLauncher.Start(url);
+        };
+        buttons.Children.Insert(0, translate);
+    }
+
     public static bool IsLink(string text) =>
         Uri.TryCreate(text.Trim(), UriKind.Absolute, out var uri) && (uri.Scheme == Uri.UriSchemeHttp || uri.Scheme == Uri.UriSchemeHttps);
 }

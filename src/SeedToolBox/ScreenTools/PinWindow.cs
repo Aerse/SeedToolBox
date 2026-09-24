@@ -176,34 +176,7 @@ sealed class PinWindow : Window
         if (enable && hint) ShowHint();
     }
 
-    static void ShowHint()
-    {
-        var hint = SeedToolBox.Recording.OverlayTools.Create(true, true);
-        hint.SizeToContent = SizeToContent.WidthAndHeight;
-        hint.Content = new Border
-        {
-            Background = new SolidColorBrush(Color.FromArgb(230, 32, 32, 32)),
-            CornerRadius = new CornerRadius(6),
-            Padding = new Thickness(14, 8, 14, 8),
-            Child = new TextBlock
-            {
-                Text = "贴图已开启鼠标穿透。用托盘菜单「恢复贴图点击」或贴图穿透快捷键恢复",
-                Foreground = Brushes.White,
-                FontSize = 14,
-            },
-        };
-        hint.Loaded += (_, _) =>
-        {
-            var area = System.Windows.Forms.Screen.FromPoint(System.Windows.Forms.Cursor.Position).WorkingArea;
-            double scale = SeedToolBox.Recording.OverlayTools.ScaleOf(hint);
-            int w = (int)(hint.ActualWidth * scale), h = (int)(hint.ActualHeight * scale);
-            SeedToolBox.Recording.OverlayTools.Place(hint, area.Left + (area.Width - w) / 2, area.Bottom - h - (int)(40 * scale), 0, 0);
-        };
-        hint.Show();
-        var timer = new System.Windows.Threading.DispatcherTimer { Interval = TimeSpan.FromSeconds(3) };
-        timer.Tick += (_, _) => { timer.Stop(); hint.Close(); };
-        timer.Start();
-    }
+    static void ShowHint() => Toast.Show("贴图已开启鼠标穿透。用托盘菜单「恢复贴图点击」或贴图穿透快捷键恢复", 4);
 
     const int GWL_EXSTYLE = -20, WS_EX_TRANSPARENT = 0x20;
 

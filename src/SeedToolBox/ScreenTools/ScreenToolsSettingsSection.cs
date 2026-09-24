@@ -67,6 +67,37 @@ static class ScreenToolsSettingsSection
             history.Text = s.HistoryCount.ToString();
         };
         panel.Children.Add(Spaced(Ui.Row(Ui.Label("截图历史保留"), history, Hint("  张（0 = 不记录），在工具箱「截图历史」中查看"))));
+
+        var language = new ComboBox { Width = 220 };
+        language.Items.Add("自动（PaddleOCR 或系统语言）");
+        var tags = new System.Collections.Generic.List<string> { "" };
+        foreach (var (tag, name) in TextRecognizer.WindowsLanguages())
+        {
+            tags.Add(tag);
+            language.Items.Add($"Windows OCR：{name}");
+        }
+        if (!tags.Contains(s.OcrLanguage))
+        {
+            tags.Add(s.OcrLanguage);
+            language.Items.Add($"{s.OcrLanguage}（未安装）");
+        }
+        language.SelectedIndex = tags.IndexOf(s.OcrLanguage);
+        language.SelectionChanged += (_, _) => { s.OcrLanguage = tags[language.SelectedIndex]; service.SaveSettings(); };
+        panel.Children.Add(Spaced(Ui.Row(Ui.Label("文字识别语言"), language, Hint("  其他语言需在 Windows 设置 → 时间和语言 → 语言中安装"))));
+
+        var copyDirectly = new CheckBox { Content = "识别文字后直接复制，不显示结果窗口", IsChecked = s.OcrCopyDirectly, Margin = new Thickness(0, 0, 0, 10) };
+        copyDirectly.Click += (_, _) => { s.OcrCopyDirectly = copyDirectly.IsChecked == true; service.SaveSettings(); };
+        panel.Children.Add(copyDirectly);
+
+        var translate = Ui.Field(360);
+        translate.Text = s.TranslateUrl;
+        translate.LostKeyboardFocus += (_, _) => { s.TranslateUrl = translate.Text.Trim(); service.SaveSettings(); };
+        panel.Children.Add(Spaced(Ui.Row(Ui.Label("翻译网址"), translate, Ui.Button("填入示例", () =>
+        {
+            translate.Text = s.TranslateUrl = "https://translate.google.com/?sl=auto&tl=zh-CN&text={text}";
+            service.SaveSettings();
+        }))));
+        panel.Children.Add(Spaced(Hint("留空则不显示「翻译」按钮；{text} 会替换为识别出的文字，文字会发送到该网站")));
         return panel;
     }
 

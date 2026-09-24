@@ -49,6 +49,13 @@ public class ScreenToolsSettings
     public List<string> ColorHistory { get; set; } = new();
     public List<string> FavoriteColors { get; set; } = new();
 
+    /// <summary>Windows OCR language tag; empty uses PaddleOCR or the profile language.</summary>
+    public string OcrLanguage { get; set; } = "";
+    /// <summary>Copy recognized text without showing the result window.</summary>
+    public bool OcrCopyDirectly { get; set; }
+    /// <summary>Translation page opened by 翻译, with {text} replaced; empty hides the button.</summary>
+    public string TranslateUrl { get; set; } = "";
+
     public RecordSettings Record { get; set; } = new();
 }
 

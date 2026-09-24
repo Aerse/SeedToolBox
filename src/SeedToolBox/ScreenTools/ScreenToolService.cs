@@ -78,11 +78,27 @@ public sealed partial class ScreenToolService
     public async void RecognizeText(BitmapSource image)
     {
         if (!CheckOcr()) return;
+        if (Settings.OcrCopyDirectly)
+        {
+            try
+            {
+                var text = await TextRecognizer.RecognizeAsync(image, Settings.OcrLanguage);
+                if (text.Length > 0) CopyText(text);
+                Toast.Show(text.Length > 0 ? $"已复制识别的文字（{text.Length} 字）" : "未识别到文字");
+            }
+            catch (Exception ex)
+            {
+                Log.Error("OCR failed", ex);
+                Toast.Show($"识别失败：{ex.Message}");
+            }
+            return;
+        }
         var window = new TextResultWindow("识别文字", image);
+        window.AddTranslate(Settings.TranslateUrl);
         window.Show();
         try
         {
-            var text = await TextRecognizer.RecognizeAsync(image);
+            var text = await TextRecognizer.RecognizeAsync(image, Settings.OcrLanguage);
             window.SetResult(text, "未识别到文字");
         }
         catch (Exception ex)
