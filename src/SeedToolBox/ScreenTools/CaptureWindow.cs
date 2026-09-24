@@ -196,6 +196,7 @@ sealed class CaptureWindow : OverlayWindow
         int width = Math.Max(2, (int)_selection.Width & ~1), height = Math.Max(2, (int)_selection.Height & ~1);
         var region = new System.Drawing.Rectangle((int)_selection.X + Shot.X, (int)_selection.Y + Shot.Y, width, height);
         double scale = Scale;
+        _service.RememberRegion(region);
         Close();
         _service.StartRecording(region, scale);
     }
@@ -682,6 +683,19 @@ sealed class CaptureWindow : OverlayWindow
 
     #region Output
 
+    System.Drawing.Rectangle ScreenRegion =>
+        new((int)_selection.X + Shot.X, (int)_selection.Y + Shot.Y, (int)_selection.Width, (int)_selection.Height);
+
+    bool _captured;
+
+    /// <summary>History, auto-save and the last region; once per overlay.</summary>
+    void Captured(BitmapSource image)
+    {
+        if (_captured) return;
+        _captured = true;
+        _service.OnCaptured(image, ScreenRegion);
+    }
+
     BitmapSource Render() =>
         _layer.Render(Shot.Image, new Int32Rect((int)_selection.X, (int)_selection.Y, (int)_selection.Width, (int)_selection.Height));
 
@@ -694,19 +708,24 @@ sealed class CaptureWindow : OverlayWindow
             return;
         }
         var image = Render();
+        Captured(image);
         Close();
         ScreenToolService.CopyImage(image);
     }
 
     void Save()
     {
-        if (_service.SaveImage(Render(), this)) Close();
+        var image = Render();
+        if (!_service.SaveImage(image, this)) return;
+        Captured(image);
+        Close();
     }
 
     void RecognizeText()
     {
         if (!_editing) return;
         var image = Render();
+        _service.RememberRegion(ScreenRegion);
         Close();
         _service.RecognizeText(image);
     }
@@ -715,6 +734,7 @@ sealed class CaptureWindow : OverlayWindow
     {
         if (!_editing) return;
         var image = Render();
+        _service.RememberRegion(ScreenRegion);
         Close();
         _service.DecodeQrCodes(image);
     }
@@ -722,6 +742,7 @@ sealed class CaptureWindow : OverlayWindow
     void Pin()
     {
         var image = Render();
+        Captured(image);
         _service.Pin(image, (int)_selection.X + Shot.X, (int)_selection.Y + Shot.Y);
         Close();
     }

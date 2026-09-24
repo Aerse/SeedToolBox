@@ -117,6 +117,7 @@ public partial class App : Application
         _tray.AddCommand("clipboard", "剪贴板历史", showClipboard);
         _tray.AddCommand("toolbox", "工具箱", () => toolbox.ShowAndActivate());
         toolbox.AddPage("clipboard", "\uE77F", "剪贴板", () => new Clips.ClipboardPage(clipboard));
+        toolbox.AddPage("captures", "\uE91B", "截图历史", () => new CaptureHistoryPage(screen));
         var settingsOptions = new SettingsPage.Options
         {
             SizeLocked = () => data.Window.SizeLocked,
@@ -134,6 +135,7 @@ public partial class App : Application
             OpenData = () => ProcessLauncher.OpenLocation(AppPaths.Data),
             OpenApp = () => ProcessLauncher.OpenLocation(ProcessLauncher.ExePath),
         };
+        settingsOptions.Extra.Add(("截图与屏幕工具", () => ScreenToolsSettingsSection.Create(screen)));
         toolbox.AddFooterPage("settings", "\uE713", "设置", () => new SettingsPage(settingsOptions));
 
         _hotkeys.Add(new HotkeyBinding(TrayIcon.ShowWindowCommand, "呼出主窗口", () => data.Hotkey, v => data.Hotkey = v, main.ToggleFromHotkey));

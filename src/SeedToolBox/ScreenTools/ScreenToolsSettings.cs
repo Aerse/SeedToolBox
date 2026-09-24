@@ -32,6 +32,15 @@ public class ScreenToolsSettings
     public string ActiveWindowHotkey { get; set; } = "";
     public string LastRegionHotkey { get; set; } = "";
 
+    /// <summary>Default file name; {format} parts are replaced by the current time.</summary>
+    public string FileNameTemplate { get; set; } = "截图_{yyyyMMdd_HHmmss}";
+    /// <summary>Also write every screenshot to <see cref="AutoSaveFolder"/>.</summary>
+    public bool AutoSave { get; set; }
+    /// <summary>Empty = Pictures\SeedToolBox.</summary>
+    public string AutoSaveFolder { get; set; } = "";
+    /// <summary>How many screenshots to keep in Data\captures; 0 turns the history off.</summary>
+    public int HistoryCount { get; set; } = 50;
+
     public RecordSettings Record { get; set; } = new();
 }
 

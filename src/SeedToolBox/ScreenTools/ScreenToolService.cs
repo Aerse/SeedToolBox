@@ -299,7 +299,7 @@ public sealed partial class ScreenToolService
         var dialog = new SaveFileDialog
         {
             Title = title,
-            FileName = $"{name}_{DateTime.Now:yyyyMMdd_HHmmss}",
+            FileName = name == "截图" ? FileName() : $"{name}_{DateTime.Now:yyyyMMdd_HHmmss}",
             Filter = "PNG 图片|*.png|JPEG 图片|*.jpg|BMP 图片|*.bmp",
             InitialDirectory = folder,
         };
