@@ -21,11 +21,11 @@ sealed class SystemToolsModule : IModule
         Add(host, "注册表编辑器", "regedit.exe");
         Add(host, "命令提示符", "cmd.exe");
 
-        host.AddPage("keep-awake", Submenu, "", "保持唤醒", () => new KeepAwakePage());
-        host.AddPage("topmost", Submenu, "", "窗口置顶", () => new TopmostPage());
-        host.AddPage("env-vars", Submenu, "", "环境变量", () => new EnvVarsPage());
-        host.AddPage("startup", Submenu, "", "启动项", () => new StartupPage());
-        host.AddPage("processes", Submenu, "", "进程", () => new ProcessPage());
+        host.AddPage("keep-awake", Submenu, "\uE7E8", "保持唤醒", () => new KeepAwakePage());
+        host.AddPage("topmost", Submenu, "\uE718", "窗口置顶", () => new TopmostPage());
+        host.AddPage("env-vars", Submenu, "\uE943", "环境变量", () => new EnvVarsPage());
+        host.AddPage("startup", Submenu, "\uE768", "启动项", () => new StartupPage());
+        host.AddPage("processes", Submenu, "\uE9D9", "进程", () => new ProcessPage());
 
         host.AddTrayMenuItem("保持唤醒（开/关）", KeepAwake.Toggle);
         host.AddHotkey("topmost", "切换当前窗口置顶", "Ctrl+Alt+T", () => Topmost.ToggleForeground());
