@@ -621,6 +621,8 @@ public partial class MainWindow : Window
 
     /// <summary>Lists toolbox tools and pages matching a name, for the "t " prefix.</summary>
     public Func<string, IReadOnlyList<(string Name, Action Open)>>? ToolSearch { get; set; }
+    /// <summary>Asks the AI assistant a question, for the "ai " prefix; null when the assistant is off.</summary>
+    public Action<string>? AskAi { get; set; }
 
     bool IsSearching => ItemSearch.Normalize(SearchBox.Text).Length > 0;
 
@@ -700,6 +702,17 @@ public partial class MainWindow : Window
             var (prefix, rest) = split;
             if (string.Equals(prefix, "f", StringComparison.OrdinalIgnoreCase))
                 list.AddRange(FileCommands(rest));
+            else if (string.Equals(prefix, "ai", StringComparison.OrdinalIgnoreCase) && AskAi != null)
+            {
+                var ask = AskAi;
+                list.Add(rest.Length == 0
+                    ? new SearchCommand("\uE99A", "问 AI", "输入问题，回车在 AI 助手里回答", null)
+                    : new SearchCommand("\uE99A", $"问 AI：{rest}", "回车在 AI 助手里回答", () =>
+                    {
+                        Hide();
+                        ask(rest);
+                    }));
+            }
             else if (string.Equals(prefix, "t", StringComparison.OrdinalIgnoreCase) && ToolSearch != null)
             {
                 foreach (var (name, open) in ToolSearch(rest))

@@ -160,6 +160,14 @@ public partial class App : Application
             OpenApp = () => ProcessLauncher.OpenLocation(ProcessLauncher.ExePath),
         };
         settingsOptions.Extra.Add(("截图与屏幕工具", () => ScreenToolsSettingsSection.Create(screen)));
+        var ai = new Ai.AiService(settings) { OpenSettings = () => toolbox.ShowAndActivate("settings") };
+        settingsOptions.Extra.Add(("AI 助手", () => Ai.AiSettingsSection.Create(ai)));
+        screen.AskAiHandler = image => ai.AskImage(image);
+        ai.StartCapture = screen.AskAi;
+        main.AskAi = ai.Ask;
+        toolbox.AddTool("ai", "\uE99A", "AI 助手", () => ai.Open(), hide: false);
+        toolbox.AddTool("aiScreenshot", "\uE722", "截图问 AI", () => { if (ai.Ready()) screen.AskAi(); });
+        _tray.AddCommand("ai", "AI 助手", () => ai.Open());
         toolbox.AddFooterPage("settings", "\uE713", "设置", () => new SettingsPage(settingsOptions));
 
         _hotkeys.Add(new HotkeyBinding(TrayIcon.ShowWindowCommand, "呼出主窗口", () => data.Hotkey, v => data.Hotkey = v, main.ToggleFromHotkey));
@@ -178,6 +186,8 @@ public partial class App : Application
         _hotkeys.Add(new HotkeyBinding("ruler", "屏幕标尺", () => screen.Settings.RulerHotkey, v => screen.Settings.RulerHotkey = v, () => RunHidden(screen.Ruler)));
         _hotkeys.Add(new HotkeyBinding("ocr", "识别文字", () => screen.Settings.OcrHotkey, v => screen.Settings.OcrHotkey = v, () => RunHidden(screen.RecognizeText)));
         _hotkeys.Add(new HotkeyBinding("table", "识别表格", () => screen.Settings.TableHotkey, v => screen.Settings.TableHotkey = v, () => RunHidden(screen.RecognizeTable)));
+        _hotkeys.Add(new HotkeyBinding("aiSelection", "AI 处理选中文字", () => ai.Settings.SelectionHotkey, v => { ai.Settings.SelectionHotkey = v; ai.Save(); }, ai.FromSelection));
+        _hotkeys.Add(new HotkeyBinding("aiScreenshot", "截图问 AI", () => ai.Settings.ScreenshotHotkey, v => { ai.Settings.ScreenshotHotkey = v; ai.Save(); }, () => { if (ai.Ready()) RunHidden(screen.AskAi); }));
         _hotkeys.Add(new HotkeyBinding("qr", "识别二维码", () => screen.Settings.QrHotkey, v => screen.Settings.QrHotkey = v, () => RunHidden(screen.RecognizeQrCodes)));
 
         bool migrateHotkeys = data.HotkeyDefaults < CurrentHotkeyDefaults;

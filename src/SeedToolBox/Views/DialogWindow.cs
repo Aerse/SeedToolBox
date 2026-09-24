@@ -9,6 +9,7 @@ namespace SeedToolBox.Views;
 static class DialogWindow
 {
     public static Style TextBoxStyle => (Style)Application.Current.FindResource("FluentTextBox");
+    public static Style PasswordBoxStyle => (Style)Application.Current.FindResource("FluentPasswordBox");
 
     public static Button OkButton(string text = "确定") => new() { Content = text, IsDefault = true, MinWidth = 88, Margin = new Thickness(8, 0, 0, 0) };
     public static Button CancelButton(string text = "取消") => new() { Content = text, IsCancel = true, MinWidth = 88, Margin = new Thickness(8, 0, 0, 0) };

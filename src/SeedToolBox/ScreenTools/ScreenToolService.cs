@@ -108,6 +108,14 @@ public sealed partial class ScreenToolService
         }
     }
 
+    /// <summary>Set by the app when the AI assistant is available; receives the selected region.</summary>
+    public Action<BitmapSource>? AskAiHandler { get; set; }
+
+    /// <summary>Selects a region and asks the AI assistant about it.</summary>
+    public void AskAi() => Open(shot => new CaptureWindow(shot, WindowFinder.Snapshot(shot), this, CaptureMode.Ask));
+
+    public void AskAi(BitmapSource image) => AskAiHandler?.Invoke(image);
+
     /// <summary>Selects a region and recognizes the table in it.</summary>
     public void RecognizeTable()
     {
