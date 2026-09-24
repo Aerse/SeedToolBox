@@ -275,8 +275,57 @@ static class AiSettingsSection
             if (install == null) { Ui.SetStatus(state, "请先安装 pi", true); return; }
             PiRuntime.OpenTerminal(install, s);
         }), Hint("  用 Claude、ChatGPT、Copilot 等订阅：在终端里输入 /login"))));
+        body.Children.Add(AutomationSection(service));
         body.Children.Add(new Expander { Header = "高级", Content = advanced, Margin = new Thickness(0, 4, 0, 0) });
         return panel;
+    }
+
+    /// <summary>What the automation mode may touch.</summary>
+    static FrameworkElement AutomationSection(AiService service)
+    {
+        var s = service.Settings;
+        var panel = new StackPanel { Margin = new Thickness(0, 8, 0, 0) };
+        CheckBox Option(string text, bool value, Action<bool> set)
+        {
+            var box = new CheckBox { Content = text, IsChecked = value, Margin = new Thickness(0, 0, 0, 8) };
+            box.Click += (_, _) => { set(box.IsChecked == true); service.Save(); };
+            return box;
+        }
+        panel.Children.Add(Option("打开 AI 助手时默认进入自动化模式", s.AutomationDefault, v => s.AutomationDefault = v));
+
+        panel.Children.Add(Hint("允许 AI 改动的文件夹（每行一个，包括子文件夹；留空表示桌面、文档和下载）。查看和读取不受限制，改动每次都会先问你。"));
+        var folders = Ui.Area(wrap: false);
+        folders.Height = 84;
+        folders.Margin = new Thickness(0, 6, 0, 4);
+        folders.Text = string.Join("\r\n", s.AutomationFolders);
+        var folderStatus = Ui.Status();
+        folders.LostFocus += (_, _) =>
+        {
+            var list = folders.Text.Split('\n').Select(f => f.Trim().Trim('"')).Where(f => f.Length > 0).Distinct(StringComparer.OrdinalIgnoreCase).ToList();
+            var bad = list.Select(f => (f, Automation.FileActions.Forbidden(f))).Where(p => p.Item2 != null).ToList();
+            s.AutomationFolders = list.Where(f => Automation.FileActions.Forbidden(f) == null).ToList();
+            service.Save();
+            Ui.SetStatus(folderStatus, bad.Count == 0 ? (list.Count == 0 ? "使用默认：" + string.Join("；", Automation.FileActions.Folders(s)) : "已保存")
+                : "这些不能添加：" + string.Join("；", bad.Select(p => $"{p.f}（{p.Item2}）")), bad.Count > 0);
+        };
+        var add = Ui.Button("添加文件夹…", () =>
+        {
+            using var dialog = new System.Windows.Forms.FolderBrowserDialog();
+            if (dialog.ShowDialog() != System.Windows.Forms.DialogResult.OK) return;
+            var why = Automation.FileActions.Forbidden(dialog.SelectedPath);
+            if (why != null) { Ui.SetStatus(folderStatus, dialog.SelectedPath + "：" + why, true); return; }
+            s.AutomationFolders.Add(dialog.SelectedPath);
+            service.Save();
+            folders.Text = string.Join("\r\n", s.AutomationFolders);
+            Ui.SetStatus(folderStatus, "已添加");
+        });
+        panel.Children.Add(folders);
+        panel.Children.Add(Spaced(Ui.Row(add, Spacer(), folderStatus)));
+
+        panel.Children.Add(Option("允许 AI 运行 PowerShell 命令（每条都要你确认；命令能做任何事，看不懂的别点允许）", s.AllowCommands, v => s.AllowCommands = v));
+        panel.Children.Add(Option("自动化模式加载已安装的 pi 插件和技能（插件工具每次调用也会先问你）", s.LoadPlugins, v => s.LoadPlugins = v));
+        panel.Children.Add(Spaced(Ui.Row(Ui.Button("管理插件和技能…", service.OpenPlugins), Hint("  改动在新开的对话里生效"))));
+        return new Expander { Header = "自动化模式", Content = panel, Margin = new Thickness(0, 4, 0, 4) };
     }
 
     static TextBlock Label(string text) { var l = Ui.Label(text); l.Width = 96; return l; }

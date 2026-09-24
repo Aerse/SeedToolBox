@@ -143,6 +143,21 @@ sealed class TextResultWindow : Window
         buttons.Children.Insert(0, translate);
     }
 
+    /// <summary>Adds 交给 AI, which opens the automation mode with the recognized text.</summary>
+    public void AddAi(Action<string> automate)
+    {
+        if (_copy.Parent is not StackPanel buttons) return;
+        var ai = new Button { Content = "交给 AI", MinWidth = 88, Margin = new Thickness(0, 0, 8, 0), ToolTip = "在 AI 自动化模式里处理这些文字，比如存成文档、建提醒" };
+        ai.Click += (_, _) =>
+        {
+            var text = (_text.SelectionLength > 0 ? _text.SelectedText : _text.Text).Trim();
+            if (text.Length == 0) return;
+            automate("下面是从截图里识别出的文字：\n\n" + text + "\n\n请帮我：");
+            Close();
+        };
+        buttons.Children.Insert(0, ai);
+    }
+
     public static bool IsLink(string text) =>
         Uri.TryCreate(text.Trim(), UriKind.Absolute, out var uri) && (uri.Scheme == Uri.UriSchemeHttp || uri.Scheme == Uri.UriSchemeHttps);
 }

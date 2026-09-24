@@ -1,5 +1,7 @@
 using System;
 using System.Collections.Generic;
+using System.Linq;
+using SeedToolBox.Reminders;
 using System.Runtime.InteropServices;
 using System.Windows;
 using System.Windows.Media.Imaging;
@@ -21,6 +23,10 @@ sealed class AiService
     }
 
     public AiSettings Settings { get; }
+    /// <summary>What the automation mode changed; set by the app.</summary>
+    public Automation.OperationLog Operations { get; set; } = null!;
+    public Reminders.ReminderService? Reminders { get; set; }
+    public Notes.NoteStore? Notes { get; set; }
     /// <summary>Opens the AI section of the settings page.</summary>
     public Action OpenSettings { get; set; } = () => { };
 
@@ -43,6 +49,89 @@ sealed class AiService
         if (!Ready()) return;
         var window = new AiWindow(this, text, null);
         window.Show();
+    }
+
+    /// <summary>Opens the automation mode and hands it the task.</summary>
+    public void Automate(string task, BitmapSource? image = null)
+    {
+        if (!Ready()) return;
+        var window = new AiWindow(this, "", image, automation: true);
+        window.Show();
+        if (task.Trim().Length > 0) window.Send(task);
+    }
+
+    /// <summary>Opens the automation mode with the text in the input box, for the user to say what to do with it.</summary>
+    public void AutomateDraft(string text, BitmapSource? image = null)
+    {
+        if (!Ready()) return;
+        new AiWindow(this, text, image, automation: true).Show();
+    }
+
+    /// <summary>Opens the page listing what the automation mode changed.</summary>
+    public Action OpenLog { get; set; } = () => { };
+    /// <summary>Opens the page for pi plugins and skills.</summary>
+    public Action OpenPlugins { get; set; } = () => { };
+
+    public void RemoveTask(QuickTask task)
+    {
+        Settings.QuickTasks.RemoveAll(t => t.Id == task.Id);
+        Unschedule(task);
+        Save();
+    }
+
+    void Unschedule(QuickTask task)
+    {
+        if (Reminders == null) return;
+        foreach (var r in Reminders.Items.Where(r => r.AiTask == task.Id).ToList()) Reminders.Remove(r);
+        task.Schedule = "";
+    }
+
+    /// <summary>Asks when to run the task, in the same words as reminders; an empty answer turns the schedule off.</summary>
+    public void ScheduleTask(QuickTask task, Window owner)
+    {
+        if (Reminders == null) return;
+        var input = AskText(owner, "定时运行「" + task.Name + "」", "什么时候运行？例如「每天9点」「工作日18:00」「明天上午10点」；留空表示取消定时。\n到时间会打开自动化窗口运行，改动仍然要你确认。", task.Schedule);
+        if (input == null) return;
+        Unschedule(task);
+        if (input.Trim().Length > 0)
+        {
+            if (!ReminderParser.TryParse(input.Trim() + " " + task.Name, DateTime.Now, out var reminder) || reminder.Due <= DateTime.Now)
+            {
+                MessageBox.Show(owner, "看不懂这个时间：" + input, "定时运行", MessageBoxButton.OK, MessageBoxImage.Information);
+                return;
+            }
+            reminder.Text = "AI 任务：" + task.Name;
+            reminder.AiTask = task.Id;
+            Reminders.Add(reminder);
+            task.Schedule = input.Trim();
+        }
+        Save();
+    }
+
+    /// <summary>A scheduled task came due.</summary>
+    public void RunScheduled(Reminder reminder)
+    {
+        var task = Settings.QuickTasks.FirstOrDefault(t => t.Id == reminder.AiTask);
+        if (task == null) return;
+        if (!Settings.Enabled || PiRuntime.Find(Settings) == null) return;
+        Automate(task.Prompt);
+    }
+
+    public static string? AskText(Window? owner, string title, string hint, string initial)
+    {
+        var box = new System.Windows.Controls.TextBox { Text = initial, Style = Views.DialogWindow.TextBoxStyle, Width = 380, Margin = new Thickness(0, 10, 0, 0) };
+        var body = new System.Windows.Controls.StackPanel
+        {
+            Margin = new Thickness(16),
+            Children = { new System.Windows.Controls.TextBlock { Text = hint, TextWrapping = TextWrapping.Wrap, MaxWidth = 380 }, box },
+        };
+        var ok = Views.DialogWindow.OkButton();
+        var window = Views.DialogWindow.Create(title, body, ok, Views.DialogWindow.CancelButton());
+        if (owner != null) { window.Owner = owner; window.WindowStartupLocation = WindowStartupLocation.CenterOwner; }
+        else window.WindowStartupLocation = WindowStartupLocation.CenterScreen;
+        ok.Click += (_, _) => window.DialogResult = true;
+        window.Loaded += (_, _) => { box.Focus(); box.SelectAll(); };
+        return window.ShowDialog() == true ? box.Text : null;
     }
 
     public void Ask(string question)

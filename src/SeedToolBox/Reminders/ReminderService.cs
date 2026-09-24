@@ -21,6 +21,8 @@ public sealed class Reminder
     public string Text { get; set; } = "";
     public DateTime Due { get; set; }
     public ReminderRepeat Repeat { get; set; }
+    /// <summary>A quick task for the AI to run instead of showing a popup.</summary>
+    public string? AiTask { get; set; }
 
     /// <summary>The first repeat after <paramref name="after"/>.</summary>
     public static DateTime Next(DateTime due, ReminderRepeat repeat, DateTime after)
@@ -78,6 +80,8 @@ sealed class ReminderService
     readonly List<ReminderPopup> _popups = new();
 
     public event Action? Changed;
+    /// <summary>Runs reminders that carry an AI task.</summary>
+    public Action<Reminder>? RunTask { get; set; }
 
     public ReminderService(ISettingsStore store)
     {
@@ -122,10 +126,12 @@ sealed class ReminderService
         foreach (var reminder in due)
         {
             bool late = missed || now - reminder.Due > TimeSpan.FromMinutes(2);
-            var shown = new Reminder { Text = reminder.Text, Due = reminder.Due };
+            var shown = new Reminder { Text = reminder.Text, Due = reminder.Due, AiTask = reminder.AiTask };
             if (reminder.Repeat == ReminderRepeat.None) _data.Items.Remove(reminder);
             else reminder.Due = Reminder.Next(reminder.Due, reminder.Repeat, now);
-            ShowPopup(shown, late);
+            // A task missed while the app was closed is not run late; it waits for the next time
+            if (shown.AiTask != null) { if (!late && RunTask != null) RunTask(shown); }
+            else ShowPopup(shown, late);
         }
         Save();
     }

@@ -95,6 +95,7 @@ public sealed partial class ScreenToolService
         }
         var window = new TextResultWindow("识别文字", image);
         window.AddTranslate(Settings.TranslateUrl);
+        if (AutomateHandler != null) window.AddAi(AutomateHandler);
         window.Show();
         try
         {
@@ -110,6 +111,9 @@ public sealed partial class ScreenToolService
 
     /// <summary>Set by the app when the AI assistant is available; receives the selected region.</summary>
     public Action<BitmapSource>? AskAiHandler { get; set; }
+
+    /// <summary>Set by the app; opens the AI automation mode with recognized text.</summary>
+    public Action<string>? AutomateHandler { get; set; }
 
     /// <summary>Selects a region and asks the AI assistant about it.</summary>
     public void AskAi() => Open(shot => new CaptureWindow(shot, WindowFinder.Snapshot(shot), this, CaptureMode.Ask));
@@ -127,6 +131,7 @@ public sealed partial class ScreenToolService
     {
         if (!CheckOcr()) return;
         var window = new TextResultWindow("识别表格", image) { CopyAction = CopyTable };
+        if (AutomateHandler != null) window.AddAi(AutomateHandler);
         window.Show();
         try
         {

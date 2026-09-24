@@ -8,6 +8,7 @@ using System.Threading;
 using System.Threading.Tasks;
 using Newtonsoft.Json;
 using Newtonsoft.Json.Linq;
+using SeedToolBox.Core;
 using SeedToolBox.Core.Services;
 
 namespace SeedToolBox.Ai;
@@ -38,6 +39,14 @@ sealed class PiClient : IDisposable
     public event Action<string?>? Finished;
     /// <summary>The process ended on its own; the argument is its last error output.</summary>
     public event Action<string>? Exited;
+    /// <summary>A tool started: call id, tool name, arguments.</summary>
+    public event Action<string, string, JObject>? ToolStarted;
+    /// <summary>A tool finished: call id, result text, whether it failed.</summary>
+    public event Action<string, string, bool>? ToolEnded;
+    /// <summary>An extension asks the user something (select / confirm / input / editor); answer with <see cref="RespondUi"/>.</summary>
+    public event Action<JObject>? UiRequest;
+    /// <summary>A notification from an extension.</summary>
+    public event Action<string>? Notice;
 
     PiClient(Process process)
     {
@@ -45,18 +54,51 @@ sealed class PiClient : IDisposable
         _context = SynchronizationContext.Current ?? new SynchronizationContext();
     }
 
-    public static PiClient Start(AiSettings settings)
+    public const string AutomationPrompt =
+        "你是 SeedToolBox 桌面工具箱里的自动化助手，运行在用户的 Windows 电脑上，可以用工具帮用户查看和整理文件、查看系统状态、" +
+        "调音量亮度、加提醒和笔记等。先用只读工具弄清楚情况，再动手；批量操作一次调用传入所有项目。" +
+        "改动类工具会先请用户确认，用户拒绝后不要换别的办法绕过去。只能改动用户允许的文件夹，被拒绝时告诉用户去 AI 设置里添加。" +
+        "完成后用一两句话说明做了什么。直接给出结果，不要寒暄。";
+
+    public static PiClient Start(AiSettings settings) => Launch(settings, new List<string>
     {
-        var install = PiRuntime.Find(settings) ?? throw new InvalidOperationException("还没有安装 pi，请先在设置里安装");
+        "--mode", "rpc", "--no-session",
+        "--no-tools", "--no-extensions", "--no-skills", "--no-prompt-templates", "--no-context-files", "--no-themes", "--no-approve",
+        "--system-prompt", SystemPrompt,
+    }, null);
+
+    /// <summary>
+    /// pi with only the SeedToolBox tools (served by <paramref name="server"/>) and, when allowed, the installed
+    /// plugins and skills; pi's own file and shell tools stay off.
+    /// </summary>
+    public static PiClient StartAutomation(AiSettings settings, Automation.ToolServer server)
+    {
         var args = new List<string>
         {
-            "--mode", "rpc", "--no-session",
-            "--no-tools", "--no-extensions", "--no-skills", "--no-prompt-templates", "--no-context-files", "--no-themes", "--no-approve",
-            "--system-prompt", SystemPrompt,
+            "--mode", "rpc", "--no-session", "--no-builtin-tools", "--no-context-files", "--no-themes",
+            "-e", Path.Combine(AppPaths.Base, "Pi", "seedtoolbox.ts"),
         };
+        if (!settings.LoadPlugins) args.AddRange(new[] { "--no-extensions", "--no-skills", "--no-prompt-templates" });
+        var skills = Path.Combine(AppPaths.Base, "Pi", "skills");
+        if (Directory.Exists(skills)) args.AddRange(new[] { "--skill", skills });
+        var prompts = Path.Combine(AppPaths.Base, "Pi", "prompts");
+        if (Directory.Exists(prompts)) args.AddRange(new[] { "--prompt-template", prompts });
+        args.AddRange(new[] { "--system-prompt", AutomationPrompt + "\n\n今天是 " + DateTime.Now.ToString("yyyy-MM-dd dddd HH:mm") + "。允许改动的文件夹：" + string.Join("；", Automation.FileActions.Folders(settings)) });
+        return Launch(settings, args, new Dictionary<string, string>
+        {
+            ["STB_PIPE"] = @"\\.\pipe\" + server.PipeName,
+            ["STB_TOKEN"] = server.Token,
+            ["STB_TOOLS"] = server.ManifestPath,
+        });
+    }
+
+    static PiClient Launch(AiSettings settings, List<string> args, Dictionary<string, string>? env)
+    {
+        var install = PiRuntime.Find(settings) ?? throw new InvalidOperationException("还没有安装 pi，请先在设置里安装");
         if (settings.Model.Length > 0) args.AddRange(new[] { "--model", settings.Model });
         if (settings.Thinking.Length > 0) args.AddRange(new[] { "--thinking", settings.Thinking });
         var info = PiRuntime.StartInfo(install, settings, args);
+        if (env != null) foreach (var pair in env) info.EnvironmentVariables[pair.Key] = pair.Value;
         info.RedirectStandardInput = true;
         info.RedirectStandardOutput = true;
         info.RedirectStandardError = true;
@@ -115,6 +157,38 @@ sealed class PiClient : IDisposable
         return model == null || model.Type == JTokenType.Null ? "" : $"{model["provider"]}/{model["id"]}";
     }
 
+    /// <summary>Skills and prompt templates pi found, as (name, description, source).</summary>
+    public async Task<List<(string Name, string Description, string Source)>> GetCommandsAsync()
+    {
+        var response = await SendAsync(new JObject { ["type"] = "get_commands" });
+        return (response["data"]?["commands"] as JArray ?? new JArray()).OfType<JObject>()
+            .Select(c => ((string?)c["name"] ?? "", (string?)c["description"] ?? "", (string?)c["source"] ?? ""))
+            .ToList();
+    }
+
+    /// <summary>Answers an extension_ui_request: a value, confirmed, or cancelled when both are null.</summary>
+    public void RespondUi(string id, string? value = null, bool? confirmed = null)
+    {
+        var response = new JObject { ["type"] = "extension_ui_response", ["id"] = id };
+        if (value != null) response["value"] = value;
+        else if (confirmed != null) response["confirmed"] = confirmed.Value;
+        else response["cancelled"] = true;
+        try { Write(response); }
+        catch (Exception ex) when (ex is IOException or InvalidOperationException or ObjectDisposedException) { }
+    }
+
+    void Write(JObject record)
+    {
+        // Strict JSONL: one record per line, \n only, UTF-8 without BOM
+        var bytes = new UTF8Encoding(false).GetBytes(record.ToString(Formatting.None) + "\n");
+        var stdin = _process.StandardInput.BaseStream;
+        lock (stdin)
+        {
+            stdin.Write(bytes, 0, bytes.Length);
+            stdin.Flush();
+        }
+    }
+
     /// <summary>Resolves with the command's response; faults when pi reports failure.</summary>
     Task<JObject> SendAsync(JObject command)
     {
@@ -124,14 +198,7 @@ sealed class PiClient : IDisposable
         lock (_pending) _pending[id] = done;
         try
         {
-            // Strict JSONL: one record per line, \n only, UTF-8 without BOM
-            var bytes = new UTF8Encoding(false).GetBytes(command.ToString(Formatting.None) + "\n");
-            var stdin = _process.StandardInput.BaseStream;
-            lock (stdin)
-            {
-                stdin.Write(bytes, 0, bytes.Length);
-                stdin.Flush();
-            }
+            Write(command);
         }
         catch (Exception ex) when (ex is IOException or InvalidOperationException or ObjectDisposedException)
         {
@@ -215,6 +282,24 @@ sealed class PiClient : IDisposable
                 var error = _lastError;
                 _lastError = null;
                 Post(() => Finished?.Invoke(error));
+                break;
+            case "tool_execution_start":
+                var startId = (string?)message["toolCallId"] ?? "";
+                var toolName = (string?)message["toolName"] ?? "";
+                var toolArgs = message["args"] as JObject ?? new JObject();
+                Post(() => ToolStarted?.Invoke(startId, toolName, toolArgs));
+                break;
+            case "tool_execution_end":
+                var endId = (string?)message["toolCallId"] ?? "";
+                var output = string.Join("\n", (message["result"]?["content"] as JArray ?? new JArray()).OfType<JObject>()
+                    .Where(c => (string?)c["type"] == "text").Select(c => (string?)c["text"]));
+                var failed = (bool?)message["isError"] == true;
+                Post(() => ToolEnded?.Invoke(endId, output, failed));
+                break;
+            case "extension_ui_request":
+                var method = (string?)message["method"];
+                if (method is "select" or "confirm" or "input" or "editor") Post(() => UiRequest?.Invoke(message));
+                else if (method == "notify" && (string?)message["message"] is { } notice) Post(() => Notice?.Invoke(notice));
                 break;
             case "extension_error":
                 Log.Info("pi extension error: " + text);

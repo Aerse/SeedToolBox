@@ -180,10 +180,24 @@ public partial class App : Application
         settingsOptions.Extra.Add(("同步", () => Sync.SyncSettingsSection.Create(sync, () => Restart("Restarting to apply synced settings"))));
         settingsOptions.Extra.Add(("截图与屏幕工具", () => ScreenToolsSettingsSection.Create(screen)));
         var ai = new Ai.AiService(settings) { OpenSettings = () => toolbox.ShowAndActivate("settings") };
+        ai.Reminders = reminders;
+        reminders.RunTask = ai.RunScheduled;
+        ai.OpenLog = () => toolbox.ShowAndActivate("aiLog");
+        ai.OpenPlugins = () => toolbox.ShowAndActivate("aiPlugins");
+        ai.Notes = notes;
+        ai.Operations = new Ai.Automation.OperationLog(settings)
+        {
+            RemoveReminder = id => { var r = reminders.Items.FirstOrDefault(x => x.Id == id); if (r == null) return false; reminders.Remove(r); return true; },
+            RemoveNote = id => { var n = notes.Data.Notes.FirstOrDefault(x => x.Id == id); if (n == null) return false; notes.Remove(n); return true; },
+        };
         settingsOptions.Extra.Add(("AI 助手", () => Ai.AiSettingsSection.Create(ai)));
         screen.AskAiHandler = image => ai.AskImage(image);
+        screen.AutomateHandler = text => ai.AutomateDraft(text);
         ai.StartCapture = screen.AskAi;
         main.AskAi = ai.Ask;
+        main.AutomateAi = task => ai.Automate(task);
+        toolbox.AddPage("aiLog", "\uE81C", "AI 操作记录", () => new Ai.Automation.OperationLogPage(ai.Operations));
+        toolbox.AddPage("aiPlugins", "\uEA86", "AI 插件和技能", () => new Ai.Automation.PluginsPage(ai));
         toolbox.AddTool("ai", "\uE99A", "AI 助手", () => ai.Open(), hide: false);
         toolbox.AddTool("aiScreenshot", "\uE722", "截图问 AI", () => { if (ai.Ready()) screen.AskAi(); });
         _tray.AddCommand("ai", "AI 助手", () => ai.Open());

@@ -22,4 +22,24 @@ public sealed class AiSettings
     /// <summary>Copies the selection in the foreground window and opens the assistant with it.</summary>
     public string SelectionHotkey { get; set; } = "";
     public string ScreenshotHotkey { get; set; } = "";
+
+    /// <summary>Folders the automation mode may change files in; empty means Desktop, Documents and Downloads.</summary>
+    public List<string> AutomationFolders { get; set; } = new();
+    /// <summary>Lets the automation mode run PowerShell commands, each one confirmed.</summary>
+    public bool AllowCommands { get; set; }
+    /// <summary>Installed pi packages (plugins) are loaded in automation mode.</summary>
+    public bool LoadPlugins { get; set; } = true;
+    /// <summary>Opens new windows in automation mode.</summary>
+    public bool AutomationDefault { get; set; }
+    public List<QuickTask> QuickTasks { get; set; } = new();
+}
+
+/// <summary>A saved request the automation mode can run again with one click.</summary>
+public sealed class QuickTask
+{
+    public string Id { get; set; } = System.Guid.NewGuid().ToString("N");
+    public string Name { get; set; } = "";
+    public string Prompt { get; set; } = "";
+    /// <summary>When it runs on its own, in the words the user typed; empty when not scheduled.</summary>
+    public string Schedule { get; set; } = "";
 }

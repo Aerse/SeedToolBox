@@ -37,6 +37,7 @@
   <!-- PaddleOCR (PP-OCRv4) models go to Ocr, the ONNX Runtime that runs them to Native\x64 and Native\x86 -->
   <ItemGroup>
     <None Include="Assets\Ocr\*" Link="Ocr\%(Filename)%(Extension)" CopyToOutputDirectory="PreserveNewest" />
+    <None Include="Ai\Pi\**\*" Link="Pi\%(RecursiveDir)%(Filename)%(Extension)" CopyToOutputDirectory="PreserveNewest" />
     <None Include="$(PkgMicrosoft_ML_OnnxRuntime)\runtimes\win-x64\native\onnxruntime.dll" Link="Native\x64\onnxruntime.dll" CopyToOutputDirectory="PreserveNewest" Visible="false" />
     <None Include="$(PkgMicrosoft_ML_OnnxRuntime)\runtimes\win-x86\native\onnxruntime.dll" Link="Native\x86\onnxruntime.dll" CopyToOutputDirectory="PreserveNewest" Visible="false" />
   </ItemGroup>
