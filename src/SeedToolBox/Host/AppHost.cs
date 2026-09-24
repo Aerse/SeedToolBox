@@ -18,6 +18,8 @@ sealed class AppHost : IAppHost
         public Action<string, string, string, string, Func<FrameworkElement>> AddPage { get; set; } = (_, _, _, _, _) => { };
         public Action<string, string, string, Action> AddHotkey { get; set; } = (_, _, _, _) => { };
         public Action<string, Func<FrameworkElement>> AddSettingsSection { get; set; } = (_, _) => { };
+        public Action<string, Action> AddLauncherCommand { get; set; } = (_, _) => { };
+        public Action<string> OpenPage { get; set; } = _ => { };
     }
 
     public AppHost(TrayIcon tray, ISettingsStore settings, Dispatcher dispatcher, Callbacks app)
@@ -36,6 +38,11 @@ sealed class AppHost : IAppHost
 
     public void AddSettingsSection(string title, Func<object> create) =>
         _app.AddSettingsSection(title, () => create() as FrameworkElement ?? new System.Windows.Controls.TextBlock());
+
+    public void AddLauncherCommand(string name, Action run) =>
+        _app.AddLauncherCommand(name, () => Guard(name, run));
+
+    public void OpenPage(string id) => _app.OpenPage(id);
 
     static void Guard(string text, Action action)
     {

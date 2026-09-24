@@ -243,12 +243,18 @@ public partial class ToolboxWindow : Window
         System.Windows.Automation.AutomationProperties.SetName(CollapseButton, (string)CollapseButton.ToolTip);
     }
 
-    /// <summary>Tools and pages whose name matches <paramref name="query"/>, best first; all of them for an empty query.</summary>
+    readonly List<(string Name, Action Run)> _commands = new();
+
+    /// <summary>Adds a module command that shows up in <see cref="SearchTools"/>.</summary>
+    public void AddCommand(string name, Action run) => _commands.Add((name, run));
+
+    /// <summary>Tools, pages and module commands whose name matches <paramref name="query"/>, best first; all of them for an empty query.</summary>
     public IReadOnlyList<(string Name, Action Open)> SearchTools(string query)
     {
         var q = ItemSearch.Normalize(query);
         return _tools.Select(t => (Name: t.Label, Open: t.Action))
             .Concat(_pages.Select(p => (Name: p.Name, Open: (Action)(() => ShowAndActivate(p.Id)))))
+            .Concat(_commands.Select(c => (Name: c.Name, Open: c.Run)))
             .Select(x => (x, score: q.Length == 0 ? 0 : ItemSearch.Match(x.Name, q)))
             .Where(x => x.score >= 0)
             .OrderBy(x => x.score)

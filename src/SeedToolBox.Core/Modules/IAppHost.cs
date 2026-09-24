@@ -29,6 +29,14 @@ public interface IAppHost
     /// <summary>Adds a section to the settings page; <paramref name="create"/> returns a WPF element.</summary>
     void AddSettingsSection(string title, Func<object> create);
 
+    /// <summary>
+    /// Adds a command to the launcher's tool search ("t " prefix). Exceptions thrown by <paramref name="run"/> are logged and shown.
+    /// </summary>
+    void AddLauncherCommand(string name, Action run);
+
+    /// <summary>Shows the toolbox window on the page added with <paramref name="id"/>.</summary>
+    void OpenPage(string id);
+
     /// <summary>Marshals work from background threads back to the UI thread.</summary>
     void RunOnUiThread(Action action);
 }

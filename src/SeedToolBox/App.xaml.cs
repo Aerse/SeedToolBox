@@ -178,6 +178,8 @@ public partial class App : Application
         {
             AddPage = toolbox.AddGroupPage,
             AddSettingsSection = (title, create) => settingsOptions.Extra.Add((title, create)),
+            AddLauncherCommand = toolbox.AddCommand,
+            OpenPage = id => toolbox.ShowAndActivate(id),
             AddHotkey = (id, label, fallback, pressed) =>
             {
                 var binding = new HotkeyBinding("module:" + id, label,
