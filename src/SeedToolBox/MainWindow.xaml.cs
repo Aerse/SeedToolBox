@@ -74,6 +74,9 @@ public partial class MainWindow : Window
             if (IsVisible) _trimTimer.Stop();
             else { _trimTimer.Start(); SearchBox.Clear(); }
         };
+
+        AppIndex.Loaded += () => Dispatcher.BeginInvoke(new Action(() => { if (IsSearching) UpdateSearch(); }));
+        AppIndex.StartLoading();
     }
 
     ItemGroup? CurrentGroup => GroupList.SelectedItem as ItemGroup;
@@ -148,6 +151,8 @@ public partial class MainWindow : Window
     public void PrepareExit(bool save = true)
     {
         _exiting = true;
+        foreach (var hotkey in _itemHotkeys.Values) hotkey.Dispose();
+        _itemHotkeys.Clear();
         if (save) SaveNow();
         else _saveTimer.Stop();
     }
@@ -311,7 +316,7 @@ public partial class MainWindow : Window
         if (IsSearching)
         {
             EmptyHint.Text = "没有找到匹配的项目";
-            EmptyHint.Visibility = _results.Count > 0 ? Visibility.Collapsed : Visibility.Visible;
+            EmptyHint.Visibility = _entries.Count > 0 ? Visibility.Collapsed : Visibility.Visible;
         }
         else
         {
@@ -339,6 +344,7 @@ public partial class MainWindow : Window
     {
         if (!ProcessLauncher.Launch(item, asAdmin)) return;
         item.RunCount++;
+        item.LastRun = DateTime.Now;
         RequestSave();
         // A search is a one-shot: get out of the way once something is launched
         if (IsSearching) Hide();
@@ -379,6 +385,7 @@ public partial class MainWindow : Window
                 MessageBoxButton.OKCancel, MessageBoxImage.Question) != MessageBoxResult.OK) return;
 
         GroupOf(item)?.Items.Remove(item);
+        if (!AllItems.Contains(item)) UnregisterItemHotkey(item);
         if (IsSearching) UpdateSearch();
         UpdateEmptyHint();
         RequestSave();
@@ -422,6 +429,7 @@ public partial class MainWindow : Window
 
         int index = GroupList.SelectedIndex;
         _data.Groups.Remove(group);
+        foreach (var item in group.Items.Except(AllItems).ToList()) UnregisterItemHotkey(item);
         GroupList.SelectedIndex = Math.Min(index, _data.Groups.Count - 1);
         RequestSave();
     }
@@ -571,6 +579,16 @@ public partial class MainWindow : Window
 
     #region Search
 
+    const int MaxApps = 8;
+    const string CalcGlyph = "\uE8EF", ConsoleGlyph = "\uE756", ToolGlyph = "\uE8FD", WebGlyph = "\uE774";
+    List<SearchCommand> _commands = new();
+    List<SystemApp> _apps = new();
+    /// <summary>Commands, then items, then system apps: the keyboard selection runs through all three.</summary>
+    readonly List<ObservableObject> _entries = new();
+
+    /// <summary>Lists toolbox tools and pages matching a name, for the "t " prefix.</summary>
+    public Func<string, IReadOnlyList<(string Name, Action Open)>>? ToolSearch { get; set; }
+
     bool IsSearching => ItemSearch.Normalize(SearchBox.Text).Length > 0;
 
     void OnSearchTextChanged(object sender, TextChangedEventArgs e)
@@ -583,24 +601,151 @@ public partial class MainWindow : Window
     {
         SetHighlight(-1);
         var query = ItemSearch.Normalize(SearchBox.Text);
-        _results = ItemSearch.Find(_data.Groups, query);
+        _commands = ParseCommand(SearchBox.Text.TrimStart());
+        if (_commands.Count > 0)
+        {
+            // A prefix command takes over the results
+            _results = new List<LaunchItem>();
+            _apps = new List<SystemApp>();
+        }
+        else
+        {
+            _results = ItemSearch.Find(_data.Groups, query);
+            var known = new HashSet<string>(_data.Groups.SelectMany(g => g.Items).Select(i => i.Path), StringComparer.OrdinalIgnoreCase);
+            _apps = AppIndex.Find(query, known, MaxApps);
+        }
+        _entries.Clear();
+        _entries.AddRange(_commands);
+        _entries.AddRange(_results);
+        _entries.AddRange(_apps);
 
         bool searching = query.Length > 0;
+        CommandResults.ItemsSource = searching ? _commands : null;
         SearchResults.ItemsSource = searching ? _results : null;
+        AppResults.ItemsSource = searching ? _apps : null;
+        CommandResults.Visibility = searching && _commands.Count > 0 ? Visibility.Visible : Visibility.Collapsed;
         SearchResults.Visibility = searching ? Visibility.Visible : Visibility.Collapsed;
+        AppResults.Visibility = AppCaption.Visibility = searching && _apps.Count > 0 ? Visibility.Visible : Visibility.Collapsed;
         GroupItems.Visibility = searching ? Visibility.Collapsed : Visibility.Visible;
-        if (_results.Count > 0) SetHighlight(0);
+        if (_entries.Count > 0) SetHighlight(0);
         UpdateEmptyHint();
+    }
+
+    List<SearchCommand> ParseCommand(string text)
+    {
+        var list = new List<SearchCommand>();
+        if (text.StartsWith("=", StringComparison.Ordinal))
+        {
+            var expression = text.Substring(1).Trim();
+            if (expression.Length == 0)
+                list.Add(new SearchCommand("\uE8EF", "计算器", "输入算式，如 =2^10+sqrt(9)*(1-3)", null));
+            else if (Calculator.TryEvaluate(expression, out var value, out var error))
+            {
+                var result = Calculator.Format(value);
+                SearchCommand? command = null;
+                command = new SearchCommand("\uE8EF", "= " + result, $"{expression}　回车复制结果", () =>
+                {
+                    if (TryCopy(result)) command!.Subtitle = $"已复制 {result}";
+                });
+                list.Add(command);
+            }
+            else
+                list.Add(new SearchCommand("\uE8EF", "= …", error, null));
+        }
+        else if (text.StartsWith(">", StringComparison.Ordinal))
+        {
+            var command = text.Substring(1).Trim();
+            list.Add(command.Length == 0
+                ? new SearchCommand("\uE756", "运行命令", "输入命令，回车在新的命令行窗口中运行", null)
+                : new SearchCommand("\uE756", command, "回车在新的命令行窗口中运行（cmd /k）", () =>
+                {
+                    if (ProcessLauncher.RunInConsole(command)) Hide();
+                }));
+        }
+        else if (SplitPrefix(text) is { } split)
+        {
+            var (prefix, rest) = split;
+            if (string.Equals(prefix, "t", StringComparison.OrdinalIgnoreCase) && ToolSearch != null)
+            {
+                foreach (var (name, open) in ToolSearch(rest))
+                    list.Add(new SearchCommand("\uE8FD", name, "工具箱", () =>
+                    {
+                        open();
+                        if (IsVisible) Hide();
+                    }));
+                if (list.Count == 0) list.Add(new SearchCommand("\uE8FD", "工具箱", "没有找到匹配的工具", null));
+            }
+            else if (_data.SearchEngines.FirstOrDefault(s => string.Equals(s.Prefix, prefix, StringComparison.OrdinalIgnoreCase)) is { } engine
+                     && rest.Length > 0)
+            {
+                var url = engine.Url.Replace("{0}", Uri.EscapeDataString(rest));
+                list.Add(new SearchCommand("\uE774", $"在{engine.Name}中搜索「{rest}」", url, () =>
+                {
+                    if (ProcessLauncher.Start(url, displayName: engine.Name)) Hide();
+                }));
+            }
+        }
+        return list;
+    }
+
+    /// <summary>"g hello" gives ("g", "hello"); text without a space gives null.</summary>
+    static (string Prefix, string Query)? SplitPrefix(string text)
+    {
+        int space = text.IndexOf(' ');
+        if (space <= 0) return null;
+        return (text.Substring(0, space), text.Substring(space + 1).Trim());
+    }
+
+    static bool TryCopy(string text)
+    {
+        try
+        {
+            Clipboard.SetText(text);
+            return true;
+        }
+        catch (Exception ex)
+        {
+            // The clipboard may be locked by another program
+            Log.Error("Failed to copy calculator result", ex);
+            return false;
+        }
     }
 
     void SetHighlight(int index)
     {
-        if (_highlight >= 0 && _highlight < _results.Count) _results[_highlight].IsHighlighted = false;
+        if (_highlight >= 0 && _highlight < _entries.Count) SetHighlighted(_entries[_highlight], false);
         _highlight = index;
-        if (index < 0 || index >= _results.Count) return;
+        if (index < 0 || index >= _entries.Count) return;
 
-        _results[index].IsHighlighted = true;
-        (SearchResults.ItemContainerGenerator.ContainerFromIndex(index) as FrameworkElement)?.BringIntoView();
+        var entry = _entries[index];
+        SetHighlighted(entry, true);
+        var (list, offset) = entry switch
+        {
+            SearchCommand => (CommandResults, 0),
+            LaunchItem => (SearchResults, _commands.Count),
+            _ => (AppResults, _commands.Count + _results.Count),
+        };
+        (list.ItemContainerGenerator.ContainerFromIndex(index - offset) as FrameworkElement)?.BringIntoView();
+    }
+
+    static void SetHighlighted(ObservableObject entry, bool value)
+    {
+        switch (entry)
+        {
+            case LaunchItem item: item.IsHighlighted = value; break;
+            case SystemApp app: app.IsHighlighted = value; break;
+            case SearchCommand command: command.IsHighlighted = value; break;
+        }
+    }
+
+    void RunEntry(ObservableObject entry)
+    {
+        switch (entry)
+        {
+            case LaunchItem item: Launch(item); break;
+            case SystemApp app: LaunchApp(app); break;
+            case SearchCommand command: command.Run?.Invoke(); break;
+        }
     }
 
     void OnSearchKeyDown(object sender, KeyEventArgs e)
@@ -613,29 +758,45 @@ public partial class MainWindow : Window
             e.Handled = true;
             return;
         }
-        if (!IsSearching || _results.Count == 0) return;
-
-        int columns = Math.Max(1, (int)((SearchResults.ActualWidth) / TileSlotWidth));
-        int next = e.Key switch
-        {
-            Key.Left => _highlight - 1,
-            Key.Right => _highlight + 1,
-            Key.Up => _highlight - columns,
-            Key.Down => _highlight + columns,
-            _ => int.MinValue,
-        };
+        if (!IsSearching || _entries.Count == 0) return;
 
         if (e.Key == Key.Enter)
         {
-            if (_highlight >= 0) Launch(_results[_highlight]);
+            if (_highlight >= 0 && _highlight < _entries.Count) RunEntry(_entries[_highlight]);
             e.Handled = true;
+            return;
         }
-        else if (next != int.MinValue)
+
+        int tileStart = _commands.Count, tileEnd = tileStart + _results.Count;
+        bool onTile = _highlight >= tileStart && _highlight < tileEnd;
+        int next = int.MinValue;
+        if (onTile)
         {
-            SetHighlight(Math.Max(0, Math.Min(_results.Count - 1, next)));
+            int columns = Math.Max(1, (int)(SearchResults.ActualWidth / TileSlotWidth));
+            next = e.Key switch
+            {
+                Key.Left => _highlight - 1,
+                Key.Right => _highlight + 1,
+                // Leaving the tiles upwards or downwards lands on the neighbouring rows
+                Key.Up => _highlight - columns >= tileStart ? _highlight - columns : tileStart > 0 ? tileStart - 1 : _highlight,
+                Key.Down => _highlight + columns >= tileEnd ? (tileEnd < _entries.Count ? tileEnd : tileEnd - 1) : _highlight + columns,
+                _ => int.MinValue,
+            };
+        }
+        else if (e.Key is Key.Up or Key.Down)
+        {
+            next = _highlight + (e.Key == Key.Up ? -1 : 1);
+        }
+
+        if (next != int.MinValue)
+        {
+            SetHighlight(Math.Max(0, Math.Min(_entries.Count - 1, next)));
             e.Handled = true;
         }
     }
+
+    void OnCommandClick(object sender, MouseButtonEventArgs e) =>
+        ((SearchCommand)((FrameworkElement)sender).DataContext).Run?.Invoke();
 
     /// <summary>Typing anywhere in the window goes to the search box.</summary>
     void OnPreviewTextInput(object sender, TextCompositionEventArgs e)
@@ -645,6 +806,103 @@ public partial class MainWindow : Window
         SearchBox.AppendText(e.Text);
         SearchBox.CaretIndex = SearchBox.Text.Length;
         e.Handled = true;
+    }
+
+    #endregion
+
+    #region System apps
+
+    static SystemApp AppOf(object sender) => (SystemApp)((FrameworkElement)sender).DataContext;
+
+    void LaunchApp(SystemApp app, bool asAdmin = false)
+    {
+        if (ProcessLauncher.Start(app.Path, displayName: app.Name, asAdmin: asAdmin)) Hide();
+    }
+
+    void OnAppMouseDown(object sender, MouseButtonEventArgs e)
+    {
+        if (e.ClickCount == 2) LaunchApp(AppOf(sender));
+    }
+
+    void OnAppOpen(object sender, RoutedEventArgs e) => LaunchApp(AppOf(sender));
+
+    void OnAppRunAsAdmin(object sender, RoutedEventArgs e) => LaunchApp(AppOf(sender), asAdmin: true);
+
+    void OnAppOpenLocation(object sender, RoutedEventArgs e) => ProcessLauncher.OpenLocation(AppOf(sender).Path);
+
+    void OnAppAdd(object sender, RoutedEventArgs e)
+    {
+        var app = AppOf(sender);
+        if (CurrentGroup is not { } group) return;
+        group.Items.Add(new LaunchItem { Name = app.Name, Path = app.Path });
+        RequestSave();
+        UpdateSearch();
+    }
+
+    #endregion
+
+    #region Item hotkeys
+
+    readonly Dictionary<LaunchItem, GlobalHotkey> _itemHotkeys = new();
+
+    /// <summary>Label of the app hotkey using a combination, or null; wired to the app's own hotkeys.</summary>
+    public Func<string, string?>? AppHotkeyOwner { get; set; }
+
+    IEnumerable<LaunchItem> AllItems => _data.Groups.SelectMany(g => g.Items).Distinct();
+
+    /// <summary>Name of the launcher item using a combination, or null.</summary>
+    public string? ItemHotkeyOwner(string hotkey) =>
+        hotkey.Length == 0 ? null : AllItems.FirstOrDefault(i => i.Hotkey == hotkey)?.Name;
+
+    /// <summary>Registers every item's hotkey; returns the ones that are taken.</summary>
+    public IReadOnlyList<string> RegisterItemHotkeys()
+    {
+        var taken = new List<string>();
+        foreach (var item in AllItems.Where(i => i.Hotkey.Length > 0))
+            if (!RegisterItemHotkey(item, item.Hotkey)) taken.Add($"{item.Name} {item.Hotkey}");
+        return taken;
+    }
+
+    bool RegisterItemHotkey(LaunchItem item, string text)
+    {
+        UnregisterItemHotkey(item);
+        if (!Hotkey.TryParse(text, out var key)) return text.Length == 0;
+        var hotkey = new GlobalHotkey();
+        if (!hotkey.Register(key))
+        {
+            hotkey.Dispose();
+            return false;
+        }
+        hotkey.Pressed += () => Launch(item);
+        _itemHotkeys[item] = hotkey;
+        return true;
+    }
+
+    void UnregisterItemHotkey(LaunchItem item)
+    {
+        if (!_itemHotkeys.TryGetValue(item, out var hotkey)) return;
+        hotkey.Dispose();
+        _itemHotkeys.Remove(item);
+    }
+
+    void OnItemSetHotkey(object sender, RoutedEventArgs e)
+    {
+        var item = ItemOf(sender);
+        if (HotkeyDialog.Show(this, $"设置快捷键 - {item.Name}", item.Hotkey) is not { } value || value == item.Hotkey) return;
+
+        if (value.Length > 0 && (AllItems.FirstOrDefault(i => i != item && i.Hotkey == value)?.Name ?? AppHotkeyOwner?.Invoke(value)) is { } owner)
+        {
+            MessageBox.Show($"{value} 已用于「{owner}」，未更改", "SeedToolBox", MessageBoxButton.OK, MessageBoxImage.Warning);
+            return;
+        }
+        if (!RegisterItemHotkey(item, value))
+        {
+            RegisterItemHotkey(item, item.Hotkey);
+            MessageBox.Show($"{value} 已被其他程序占用，未更改", "SeedToolBox", MessageBoxButton.OK, MessageBoxImage.Warning);
+            return;
+        }
+        item.Hotkey = value;
+        RequestSave();
     }
 
     #endregion

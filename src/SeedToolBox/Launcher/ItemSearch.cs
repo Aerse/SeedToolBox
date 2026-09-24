@@ -23,6 +23,7 @@ public static class ItemSearch
             .Where(x => x.score >= 0)
             .OrderBy(x => x.score)
             .ThenByDescending(x => x.item.RunCount)
+            .ThenByDescending(x => x.item.LastRun ?? DateTime.MinValue)
             .ThenBy(x => x.item.Name, StringComparer.CurrentCulture)
             .Select(x => x.item)
             .ToList();

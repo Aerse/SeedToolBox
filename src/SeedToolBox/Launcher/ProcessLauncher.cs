@@ -50,6 +50,10 @@ public static class ProcessLauncher
         }
     }
 
+    /// <summary>Runs a command line in a new console window that stays open.</summary>
+    public static bool RunInConsole(string command) =>
+        Start("cmd.exe", "/k " + command, command, workingDirectory: Environment.GetFolderPath(Environment.SpecialFolder.UserProfile));
+
     public static void OpenLocation(string path)
     {
         path = Environment.ExpandEnvironmentVariables(path);

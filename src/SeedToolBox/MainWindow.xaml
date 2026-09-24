@@ -23,8 +23,64 @@
             <MenuItem Header="重命名" Click="OnItemRename" />
             <MenuItem Header="删除" Click="OnItemDelete" />
             <Separator />
+            <MenuItem Header="设置快捷键…" Click="OnItemSetHotkey" />
             <MenuItem Header="属性..." Click="OnItemProperties" />
         </ContextMenu>
+
+        <ContextMenu x:Key="AppMenu" x:Shared="False">
+            <MenuItem Header="打开" FontWeight="SemiBold" Click="OnAppOpen" />
+            <MenuItem Header="以管理员身份运行" Click="OnAppRunAsAdmin" />
+            <MenuItem Header="打开文件位置" Click="OnAppOpenLocation" />
+            <Separator />
+            <MenuItem Header="添加到启动器" Click="OnAppAdd" />
+        </ContextMenu>
+
+        <!-- Command and system app rows in search results -->
+        <Style x:Key="ResultRowStyle" TargetType="Border">
+            <Setter Property="Background" Value="Transparent" />
+            <Setter Property="BorderBrush" Value="Transparent" />
+            <Setter Property="BorderThickness" Value="1" />
+            <Setter Property="CornerRadius" Value="6" />
+            <Setter Property="Margin" Value="2" />
+            <Setter Property="Height" Value="44" />
+            <Style.Triggers>
+                <Trigger Property="IsMouseOver" Value="True">
+                    <Setter Property="Background" Value="{StaticResource HoverBrush}" />
+                </Trigger>
+                <DataTrigger Binding="{Binding IsHighlighted}" Value="True">
+                    <Setter Property="Background" Value="{StaticResource SelectedBrush}" />
+                    <Setter Property="BorderBrush" Value="{StaticResource SelectedBorderBrush}" />
+                </DataTrigger>
+            </Style.Triggers>
+        </Style>
+
+        <DataTemplate x:Key="CommandRowTemplate">
+            <Border Style="{StaticResource ResultRowStyle}" MouseLeftButtonUp="OnCommandClick" ToolTip="{Binding Subtitle}">
+                <DockPanel Margin="10,0">
+                    <TextBlock Text="{Binding Glyph}" FontFamily="{StaticResource IconFont}" FontSize="18" Width="24"
+                               TextAlignment="Center" VerticalAlignment="Center" Foreground="{StaticResource AccentBrush}" />
+                    <StackPanel VerticalAlignment="Center" Margin="10,0,0,0">
+                        <TextBlock Text="{Binding Title}" TextTrimming="CharacterEllipsis" FontWeight="SemiBold" />
+                        <TextBlock Text="{Binding Subtitle}" TextTrimming="CharacterEllipsis" FontSize="11"
+                                   Foreground="{StaticResource HintTextBrush}" Margin="0,1,0,0" />
+                    </StackPanel>
+                </DockPanel>
+            </Border>
+        </DataTemplate>
+
+        <DataTemplate x:Key="AppRowTemplate">
+            <Border Style="{StaticResource ResultRowStyle}" MouseLeftButtonDown="OnAppMouseDown"
+                    ContextMenu="{StaticResource AppMenu}" ToolTip="{Binding Path}" ToolTipService.InitialShowDelay="600">
+                <DockPanel Margin="10,0">
+                    <Image Source="{Binding Icon}" Width="24" Height="24" RenderOptions.BitmapScalingMode="HighQuality" />
+                    <StackPanel VerticalAlignment="Center" Margin="10,0,0,0">
+                        <TextBlock Text="{Binding Name}" TextTrimming="CharacterEllipsis" />
+                        <TextBlock Text="{Binding Path}" TextTrimming="CharacterEllipsis" FontSize="11"
+                                   Foreground="{StaticResource HintTextBrush}" Margin="0,1,0,0" />
+                    </StackPanel>
+                </DockPanel>
+            </Border>
+        </DataTemplate>
 
         <!-- Shared by the three item views -->
         <Style x:Key="TileStyle" TargetType="Border">
@@ -211,10 +267,11 @@
             <!-- Search -->
             <Grid Margin="0,0,0,6" Height="34">
                 <TextBox x:Name="SearchBox" Style="{StaticResource FluentTextBox}" Padding="30,0,8,0"
-                         TextChanged="OnSearchTextChanged" PreviewKeyDown="OnSearchKeyDown" />
+                         TextChanged="OnSearchTextChanged" PreviewKeyDown="OnSearchKeyDown"
+                         ToolTip="=算式 计算，&gt;命令 在命令行运行，g/bd/bing 关键词 搜索网页，t 名称 查找工具箱" />
                 <TextBlock Text="&#xE721;" FontFamily="{StaticResource IconFont}" FontSize="13" Foreground="{StaticResource HintTextBrush}"
                            VerticalAlignment="Center" Margin="11,0,0,0" IsHitTestVisible="False" />
-                <TextBlock x:Name="SearchPlaceholder" Text="搜索启动项（支持拼音首字母）" Foreground="{StaticResource HintTextBrush}"
+                <TextBlock x:Name="SearchPlaceholder" Text="搜索启动项和应用（支持拼音），= 计算，&gt; 命令" Foreground="{StaticResource HintTextBrush}"
                            VerticalAlignment="Center" Margin="33,0,0,0" IsHitTestVisible="False" />
             </Grid>
 
@@ -274,6 +331,8 @@
                         <ItemsControl x:Name="GroupItems" ItemsSource="{Binding SelectedItem.Items, ElementName=GroupList}"
                                       Style="{StaticResource GroupItemsStyle}" Margin="4,0" />
                         <StackPanel>
+                            <ItemsControl x:Name="CommandResults" ItemTemplate="{StaticResource CommandRowTemplate}" Margin="4,0"
+                                          Visibility="Collapsed" />
                             <ItemsControl x:Name="SearchResults" ItemTemplate="{StaticResource LargeTileTemplate}" Margin="4,0"
                                           Visibility="Collapsed">
                                 <ItemsControl.ItemsPanel>
@@ -282,6 +341,10 @@
                                     </ItemsPanelTemplate>
                                 </ItemsControl.ItemsPanel>
                             </ItemsControl>
+                            <TextBlock x:Name="AppCaption" Text="系统应用" FontSize="12" Foreground="{StaticResource HintTextBrush}"
+                                       Margin="10,8,0,2" Visibility="Collapsed" />
+                            <ItemsControl x:Name="AppResults" ItemTemplate="{StaticResource AppRowTemplate}" Margin="4,0"
+                                          Visibility="Collapsed" />
                         </StackPanel>
                         <StackPanel Visibility="{Binding Visibility, ElementName=EmptyHint}" VerticalAlignment="Top"
                                     Margin="0,90,0,0" IsHitTestVisible="False">
