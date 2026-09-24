@@ -242,4 +242,17 @@ public partial class ToolboxWindow : Window
         CollapseButton.ToolTip = collapsed ? "展开侧边栏" : "收起侧边栏";
         System.Windows.Automation.AutomationProperties.SetName(CollapseButton, (string)CollapseButton.ToolTip);
     }
+
+    /// <summary>Tools and pages whose name matches <paramref name="query"/>, best first; all of them for an empty query.</summary>
+    public IReadOnlyList<(string Name, Action Open)> SearchTools(string query)
+    {
+        var q = ItemSearch.Normalize(query);
+        return _tools.Select(t => (Name: t.Label, Open: t.Action))
+            .Concat(_pages.Select(p => (Name: p.Name, Open: (Action)(() => ShowAndActivate(p.Id)))))
+            .Select(x => (x, score: q.Length == 0 ? 0 : ItemSearch.Match(x.Name, q)))
+            .Where(x => x.score >= 0)
+            .OrderBy(x => x.score)
+            .Select(x => x.x)
+            .ToList();
+    }
 }

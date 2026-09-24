@@ -82,6 +82,8 @@ public partial class App : Application
         var main = _main;
         var toolbox = _toolbox = new ToolboxWindow(data, main.RequestSave, RunHidden);
         main.ToolboxRequested += () => toolbox.ShowAndActivate();
+        main.ToolSearch = toolbox.SearchTools;
+        main.AppHotkeyOwner = v => _hotkeys.FirstOrDefault(h => h.Get() == v)?.Label;
 
         try { AutoStart.Refresh(); }
         catch (Exception ex) { Log.Error("Failed to refresh autostart entry", ex); }
@@ -149,6 +151,8 @@ public partial class App : Application
         }
         if (taken.Count > 0)
             _tray.ShowMessage($"热键已被其他程序占用：{string.Join("、", taken)}。可在「设置」页中更换");
+        if (main.RegisterItemHotkeys() is { Count: > 0 } itemTaken)
+            _tray.ShowMessage($"启动项快捷键已被占用：{string.Join("、", itemTaken)}");
 
         var moduleHotkeys = settings.Load<Dictionary<string, string>>(ModuleHotkeysFile);
         _saveModuleHotkeys = () => settings.Save(ModuleHotkeysFile, moduleHotkeys);
@@ -205,6 +209,7 @@ public partial class App : Application
         var binding = _hotkeys[index];
         var clash = value.Length > 0 ? _hotkeys.FirstOrDefault(h => h != binding && h.Get() == value) : null;
         if (clash != null) return $"{value} 已用于「{clash.Label}」";
+        if (_main!.ItemHotkeyOwner(value) is { } item) return $"{value} 已用于启动项「{item}」";
         var old = binding.Get();
         if (!binding.Register(value))
         {

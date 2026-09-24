@@ -1,3 +1,4 @@
+using System;
 using System.Collections.Generic;
 using System.Collections.ObjectModel;
 using System.ComponentModel;
@@ -42,6 +43,10 @@ public class LaunchItem : ObservableObject
     public string Remarks { get => _remarks; set { if (Set(ref _remarks, value)) Raise(nameof(ToolTip)); } }
     /// <summary>Launch count, used to rank search results.</summary>
     public int RunCount { get; set; }
+    /// <summary>Last launch time, the tie-breaker after <see cref="RunCount"/>.</summary>
+    public DateTime? LastRun { get; set; }
+    /// <summary>Global hotkey that launches this item, e.g. "Ctrl+Alt+N". Empty means none.</summary>
+    public string Hotkey { get; set; } = "";
 
     [JsonIgnore]
     public ImageSource? Icon => _icon ??= IconHelper.GetIcon(Path, IconPath);
@@ -119,4 +124,19 @@ public class LauncherData
     public WindowSettings Window { get; set; } = new();
     /// <summary>Global hotkey that shows/hides the main window, e.g. "Ctrl+Q". Empty disables it.</summary>
     public string Hotkey { get; set; } = "Ctrl+Q";
+    /// <summary>Search box prefixes for web searches, e.g. "g hello".</summary>
+    public List<WebSearchEngine> SearchEngines { get; set; } = new()
+    {
+        new() { Prefix = "g", Name = "Google", Url = "https://www.google.com/search?q={0}" },
+        new() { Prefix = "bd", Name = "百度", Url = "https://www.baidu.com/s?wd={0}" },
+        new() { Prefix = "bing", Name = "必应", Url = "https://www.bing.com/search?q={0}" },
+    };
+}
+
+public class WebSearchEngine
+{
+    public string Prefix { get; set; } = "";
+    public string Name { get; set; } = "";
+    /// <summary>{0} is replaced by the URL-encoded query.</summary>
+    public string Url { get; set; } = "";
 }
