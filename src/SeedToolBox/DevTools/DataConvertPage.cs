@@ -24,6 +24,7 @@ sealed class DataConvertPage : DockPanel
 
     readonly TextBox _input = Ui.Area();
     readonly TextBox _output = Ui.Area();
+    readonly AsyncToken _busy = new();
     readonly ComboBox _from = new() { Width = 100, ItemsSource = Sources, SelectedIndex = 0 };
     readonly ComboBox _to = new() { Width = 100, ItemsSource = Targets, SelectedIndex = 2 };
     readonly TextBlock _status = Ui.Status();
@@ -73,16 +74,19 @@ sealed class DataConvertPage : DockPanel
     {
         var text = _input.Text;
         if (text.Trim().Length == 0) { Ui.SetStatus(_status, "请先输入内容", true); return; }
-        try
+        int from = _from.SelectedIndex, to = _to.SelectedIndex;
+        var label = $"{_from.SelectedItem} → {_to.SelectedItem} 完成";
+        Ui.SetStatus(_status, "转换中…");
+        Ui.RunAsync(_busy, () =>
         {
-            var token = _from.SelectedIndex switch
+            var token = from switch
             {
                 1 => FromXml(text),
                 2 => FromYaml(text),
                 3 => FromCsv(text),
                 _ => JToken.Parse(text),
             };
-            _output.Text = _to.SelectedIndex switch
+            return to switch
             {
                 1 => ToXml(token),
                 2 => ToYaml(token),
@@ -90,12 +94,11 @@ sealed class DataConvertPage : DockPanel
                 4 => CSharpGenerator.Generate(token),
                 _ => token.ToString(Newtonsoft.Json.Formatting.Indented),
             };
-            Ui.SetStatus(_status, $"{_from.SelectedItem} → {_to.SelectedItem} 完成");
-        }
-        catch (Exception ex)
+        }, result =>
         {
-            Ui.SetStatus(_status, "转换失败：" + ex.Message.Replace("\r", " ").Replace("\n", " "), true);
-        }
+            _output.Text = result;
+            Ui.SetStatus(_status, label);
+        }, ex => Ui.SetStatus(_status, "转换失败：" + ex.Message.Replace("\r", " ").Replace("\n", " "), true));
     }
 
     // XML

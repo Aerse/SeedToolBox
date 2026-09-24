@@ -83,7 +83,14 @@ public partial class ToolboxWindow : Window
         Activate();
     }
 
-    public void PrepareExit() => _exiting = true;
+    /// <summary>Pages whose inputs are not remembered: they hold secrets, live data or their own files.</summary>
+    static readonly HashSet<string> Unsaved = new() { "clipboard", "settings", "generator", "hosts", "network", "jwt", "imagebase64" };
+
+    public void PrepareExit()
+    {
+        _exiting = true;
+        PageState.Flush();
+    }
 
     void OnClosing(object? sender, CancelEventArgs e)
     {
@@ -190,7 +197,11 @@ public partial class ToolboxWindow : Window
         PageHost.Visibility = page.Create != null ? Visibility.Visible : Visibility.Collapsed;
         if (page.Create != null)
         {
-            if (!_created.TryGetValue(page.Id, out var content)) _created[page.Id] = content = page.Create();
+            if (!_created.TryGetValue(page.Id, out var content))
+            {
+                _created[page.Id] = content = page.Create();
+                if (content is FrameworkElement element && !Unsaved.Contains(page.Id)) PageState.Attach(element, page.Id);
+            }
             PageHost.Content = content;
         }
         else PageHost.Content = null;

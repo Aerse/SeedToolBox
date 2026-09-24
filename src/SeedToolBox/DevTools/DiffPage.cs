@@ -13,6 +13,7 @@ sealed class DiffPage : DockPanel
 {
     readonly TextBox _left = Ui.Area();
     readonly TextBox _right = Ui.Area();
+    readonly AsyncToken _busy = new();
     readonly RichTextBox _result = new() { IsReadOnly = true, FontFamily = Ui.Mono, FontSize = 13, VerticalScrollBarVisibility = ScrollBarVisibility.Auto, HorizontalScrollBarVisibility = ScrollBarVisibility.Auto };
     readonly CheckBox _trim = new() { Content = "忽略行首尾空白", VerticalAlignment = VerticalAlignment.Center, Margin = new Thickness(0, 0, 12, 0) };
     readonly CheckBox _case = new() { Content = "忽略大小写", VerticalAlignment = VerticalAlignment.Center, Margin = new Thickness(0, 0, 12, 0) };
@@ -56,15 +57,18 @@ sealed class DiffPage : DockPanel
     {
         var a = Lines(_left.Text);
         var b = Lines(_right.Text);
+        bool trim = _trim.IsChecked == true, ignoreCase = _case.IsChecked == true;
         Func<string, string> key = s =>
         {
-            if (_trim.IsChecked == true) s = s.Trim();
-            return _case.IsChecked == true ? s.ToLowerInvariant() : s;
+            if (trim) s = s.Trim();
+            return ignoreCase ? s.ToLowerInvariant() : s;
         };
-        List<DiffLine> diff;
-        try { diff = LineDiff.Compute(a, b, key); }
-        catch (InvalidOperationException ex) { Ui.SetStatus(_status, ex.Message, true); return; }
+        Ui.SetStatus(_status, "对比中…");
+        Ui.RunAsync(_busy, () => LineDiff.Compute(a, b, key), diff => Show(a, b, diff), ex => Ui.SetStatus(_status, ex.Message, true));
+    }
 
+    void Show(List<string> a, List<string> b, List<DiffLine> diff)
+    {
         var paragraph = new Paragraph { LineHeight = 18 };
         var added = new SolidColorBrush(Color.FromArgb(0x40, 0x2E, 0xC2, 0x5A));
         var removed = new SolidColorBrush(Color.FromArgb(0x40, 0xF0, 0x4A, 0x4A));
