@@ -33,6 +33,8 @@ public class ScreenToolsSettings
     public string FullScreenHotkey { get; set; } = "";
     public string ActiveWindowHotkey { get; set; } = "";
     public string LastRegionHotkey { get; set; } = "";
+    /// <summary>Toggles click-through on all pinned screenshots.</summary>
+    public string PinClickThroughHotkey { get; set; } = "";
 
     /// <summary>Default file name; {format} parts are replaced by the current time.</summary>
     public string FileNameTemplate { get; set; } = "截图_{yyyyMMdd_HHmmss}";

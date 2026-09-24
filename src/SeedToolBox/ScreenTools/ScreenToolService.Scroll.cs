@@ -26,4 +26,7 @@ public sealed partial class ScreenToolService
         };
         _scroll.Start();
     }
+
+    /// <summary>Makes all pins click-through, or clickable again when any already is.</summary>
+    public void TogglePinClickThrough() => PinWindow.ToggleClickThroughAll();
 }
