@@ -20,7 +20,10 @@ sealed class ImageBase64Page : DockPanel
         VerticalAlignment = VerticalAlignment.Center,
     };
     readonly TextBox _base64 = Ui.Area(wrap: true);
-    readonly CheckBox _dataUri = new() { Content = "带 data: 前缀", IsChecked = true, VerticalAlignment = VerticalAlignment.Center, Margin = new Thickness(0, 0, 16, 0) };
+    readonly ComboBox _output = new() { Width = 110, ItemsSource = new[] { "纯 Base64", "Data URI", "CSS url()", "HTML <img>" }, SelectedIndex = 1, Margin = new Thickness(0, 0, 16, 0) };
+    readonly TextBox _maxSide = Ui.Field(60);
+    readonly CheckBox _jpeg = new() { Content = "转为 JPEG", VerticalAlignment = VerticalAlignment.Center, Margin = new Thickness(0, 0, 8, 0) };
+    readonly TextBox _quality = Ui.Field(50);
     readonly TextBlock _status = Ui.Status();
 
     byte[]? _bytes;
@@ -33,11 +36,18 @@ sealed class ImageBase64Page : DockPanel
         var toolbar = Ui.Row(
             Ui.Button("选择图片", Pick, accent: true),
             Ui.Button("粘贴图片", Paste),
-            _dataUri,
+            Ui.Label("输出"), _output,
             Ui.Button("Base64 → 图片", Decode),
             Ui.Button("保存图片", Save),
             Ui.Button("清空", Clear));
-        _dataUri.Click += (_, _) => { if (_bytes != null) ShowBase64(); };
+        _output.SelectionChanged += (_, _) => { if (_bytes != null) ShowBase64(); };
+        _quality.Text = "85";
+        _maxSide.ToolTip = "留空表示不缩小";
+        _jpeg.Click += (_, _) => { if (_bytes != null) ShowBase64(); };
+        var options = Ui.Row(
+            Ui.Label("编码前缩小到最长边"), _maxSide, Ui.Label("px", 16),
+            _jpeg, Ui.Label("质量"), _quality, Ui.Label("", 16),
+            Ui.Button("重新生成", () => { if (_bytes != null) ShowBase64(); }));
 
         var drop = new Border
         {
@@ -56,9 +66,11 @@ sealed class ImageBase64Page : DockPanel
 
         SetDock(header, Dock.Top);
         SetDock(toolbar, Dock.Top);
+        SetDock(options, Dock.Top);
         SetDock(_status, Dock.Bottom);
         Children.Add(header);
         Children.Add(toolbar);
+        Children.Add(options);
         Children.Add(_status);
         Children.Add(body);
 
@@ -156,8 +168,81 @@ sealed class ImageBase64Page : DockPanel
     void ShowBase64()
     {
         if (_bytes == null) return;
-        var s = Convert.ToBase64String(_bytes);
-        _base64.Text = _dataUri.IsChecked == true ? $"data:{_mime};base64,{s}" : s;
+        var bytes = _bytes;
+        var mime = _mime;
+        try
+        {
+            if (!Prepare(ref bytes, ref mime)) return;
+        }
+        catch (Exception ex)
+        {
+            Ui.SetStatus(_status, "处理失败：" + ex.Message, true);
+            return;
+        }
+        var s = Convert.ToBase64String(bytes);
+        var uri = $"data:{mime};base64,{s}";
+        _base64.Text = _output.SelectedIndex switch
+        {
+            0 => s,
+            2 => $"background-image: url(\"{uri}\");",
+            3 => $"<img src=\"{uri}\" alt=\"\">",
+            _ => uri,
+        };
+        if (!ReferenceEquals(bytes, _bytes))
+            Ui.SetStatus(_status, $"已处理：{mime}，{Ui.FormatSize(_bytes.Length)} → {Ui.FormatSize(bytes.Length)}");
+    }
+
+    /// <summary>Downscales and/or re-encodes as JPEG before encoding; false when the options are invalid.</summary>
+    bool Prepare(ref byte[] bytes, ref string mime)
+    {
+        int maxSide = 0;
+        if (_maxSide.Text.Trim().Length > 0 && (!int.TryParse(_maxSide.Text, out maxSide) || maxSide < 1)) { Ui.SetStatus(_status, "最长边应为正整数，或留空", true); return false; }
+        bool jpeg = _jpeg.IsChecked == true;
+        int quality = 85;
+        if (jpeg && (!int.TryParse(_quality.Text, out quality) || quality < 1 || quality > 100)) { Ui.SetStatus(_status, "JPEG 质量应为 1–100", true); return false; }
+        if (maxSide == 0 && !jpeg) return true;
+        if (_preview.Source is not BitmapSource source) return true;
+
+        BitmapSource image = source;
+        bool scaled = false;
+        if (maxSide > 0 && Math.Max(image.PixelWidth, image.PixelHeight) > maxSide)
+        {
+            double f = (double)maxSide / Math.Max(image.PixelWidth, image.PixelHeight);
+            image = new TransformedBitmap(image, new ScaleTransform(f, f));
+            scaled = true;
+        }
+        if (!scaled && !jpeg) return true;
+        BitmapEncoder encoder;
+        if (jpeg || mime == "image/jpeg")
+        {
+            encoder = new JpegBitmapEncoder { QualityLevel = quality };
+            image = OnWhite(image);
+            mime = "image/jpeg";
+        }
+        else
+        {
+            encoder = new PngBitmapEncoder();
+            mime = "image/png";
+        }
+        encoder.Frames.Add(BitmapFrame.Create(image));
+        using var ms = new MemoryStream();
+        encoder.Save(ms);
+        bytes = ms.ToArray();
+        return true;
+    }
+
+    static BitmapSource OnWhite(BitmapSource image)
+    {
+        var visual = new DrawingVisual();
+        using (var dc = visual.RenderOpen())
+        {
+            var rect = new Rect(0, 0, image.PixelWidth, image.PixelHeight);
+            dc.DrawRectangle(Brushes.White, null, rect);
+            dc.DrawImage(image, rect);
+        }
+        var target = new RenderTargetBitmap(image.PixelWidth, image.PixelHeight, 96, 96, PixelFormats.Pbgra32);
+        target.Render(visual);
+        return target;
     }
 
     void Save()

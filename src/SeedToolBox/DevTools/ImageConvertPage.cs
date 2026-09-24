@@ -25,7 +25,21 @@ sealed class ImageConvertItem : ObservableObject
     public string? Output { get; set; }
 }
 
-/// <summary>Batch converts images between PNG, JPG, BMP, GIF, TIFF and ICO, optionally resizing.</summary>
+sealed class ConvertOptions
+{
+    public string Format = "JPG";
+    public int Quality = 90;
+    public int ResizeMode; // 0 none, 1 longest side, 2 percent, 3 width x height
+    public int MaxSide;
+    public double Percent = 100;
+    public int Width, Height;
+    public bool KeepRatio = true;
+    public int Rotate;
+    public bool FlipH, FlipV, AutoOrient = true, StripMetadata = true;
+    public string? Folder;
+}
+
+/// <summary>Batch converts images between PNG, JPG, BMP, GIF, TIFF and ICO, optionally resizing, rotating and flipping.</summary>
 sealed class ImageConvertPage : DockPanel
 {
     static readonly string[] InputExtensions = { ".png", ".jpg", ".jpeg", ".bmp", ".gif", ".tif", ".tiff", ".ico", ".webp", ".jfif", ".heic" };
@@ -35,7 +49,17 @@ sealed class ImageConvertPage : DockPanel
     readonly ListView _list = new();
     readonly ComboBox _format = new() { Width = 90, ItemsSource = Formats, SelectedIndex = 1 };
     readonly TextBox _quality = Ui.Field(56);
-    readonly TextBox _maxSide = Ui.Field(70);
+    readonly ComboBox _resize = new() { Width = 90, ItemsSource = new[] { "不缩放", "最长边", "百分比", "宽×高" }, SelectedIndex = 0 };
+    readonly TextBox _maxSide = Ui.Field(60);
+    readonly TextBox _percent = Ui.Field(50);
+    readonly TextBox _width = Ui.Field(60);
+    readonly TextBox _height = Ui.Field(60);
+    readonly CheckBox _keepRatio = new() { Content = "保持比例", IsChecked = true, VerticalAlignment = VerticalAlignment.Center, Margin = new Thickness(0, 0, 16, 0) };
+    readonly ComboBox _rotate = new() { Width = 80, ItemsSource = new[] { "不旋转", "90°", "180°", "270°" }, SelectedIndex = 0, Margin = new Thickness(0, 0, 16, 0) };
+    readonly CheckBox _flipH = new() { Content = "水平翻转", VerticalAlignment = VerticalAlignment.Center, Margin = new Thickness(0, 0, 12, 0) };
+    readonly CheckBox _flipV = new() { Content = "垂直翻转", VerticalAlignment = VerticalAlignment.Center, Margin = new Thickness(0, 0, 16, 0) };
+    readonly CheckBox _autoOrient = new() { Content = "按 EXIF 自动转正", IsChecked = true, VerticalAlignment = VerticalAlignment.Center, Margin = new Thickness(0, 0, 12, 0) };
+    readonly CheckBox _strip = new() { Content = "去除元数据", IsChecked = true, VerticalAlignment = VerticalAlignment.Center, ToolTip = "不勾选时，JPG 转 JPG 会保留 EXIF 等元数据" };
     readonly TextBox _folder = Ui.Field(260);
     readonly TextBlock _status = Ui.Status();
     readonly Button _start;
@@ -43,22 +67,39 @@ sealed class ImageConvertPage : DockPanel
 
     public ImageConvertPage()
     {
-        var header = Ui.Header("图片格式转换", "批量转换 PNG / JPG / BMP / GIF / TIFF / ICO，可限制最长边；转 JPG 时透明部分填充白色");
+        var header = Ui.Header("图片格式转换", "批量转换 PNG / JPG / BMP / GIF / TIFF / ICO，可缩放、旋转、翻转；转 JPG 时透明部分填充白色");
         _quality.Text = "90";
-        _maxSide.ToolTip = "留空表示不缩放";
+        _maxSide.Text = "1920";
+        _percent.Text = "50";
+        _width.ToolTip = "宽度，保持比例时可留空";
+        _height.ToolTip = "高度，保持比例时可留空";
         _folder.ToolTip = "留空表示输出到原图所在文件夹";
         _start = Ui.Button("开始转换", Start, accent: true);
         var toolbar = Ui.Row(
             Ui.Button("添加图片", Pick),
             Ui.Label("转为"), _format, Ui.Label("", 16),
             Ui.Label("JPG 质量"), _quality, Ui.Label("", 16),
-            Ui.Label("最长边"), _maxSide, Ui.Label("px", 16),
             _start,
             Ui.Button("清空列表", () => { if (!_running) { _items.Clear(); _status.Text = ""; } }));
         var browse = Ui.Button("浏览…", Browse);
         browse.Margin = new Thickness(8, 0, 0, 0);
         var folderRow = Ui.Row(Ui.Label("输出文件夹"), _folder, browse, new TextBlock { Text = "（留空则放在原图旁边，重名时自动加序号）", Foreground = Views.DialogWindow.HintBrush, VerticalAlignment = VerticalAlignment.Center, Margin = new Thickness(8, 0, 0, 0) });
         _format.SelectionChanged += (_, _) => _quality.IsEnabled = _format.SelectedIndex == 1;
+        _resize.Margin = new Thickness(0, 0, 8, 0);
+        var sizePanel = Ui.Row(_maxSide, Ui.Label("px"));
+        var percentPanel = Ui.Row(_percent, Ui.Label("%"));
+        var boxPanel = Ui.Row(_width, Ui.Label("×", 4), _height, Ui.Label("px"), _keepRatio);
+        foreach (var p in new[] { sizePanel, percentPanel, boxPanel }) p.Margin = new Thickness(0, 0, 8, 0);
+        void UpdateResize()
+        {
+            sizePanel.Visibility = _resize.SelectedIndex == 1 ? Visibility.Visible : Visibility.Collapsed;
+            percentPanel.Visibility = _resize.SelectedIndex == 2 ? Visibility.Visible : Visibility.Collapsed;
+            boxPanel.Visibility = _resize.SelectedIndex == 3 ? Visibility.Visible : Visibility.Collapsed;
+        }
+        _resize.SelectionChanged += (_, _) => UpdateResize();
+        UpdateResize();
+        var transformRow = Ui.Row(Ui.Label("缩放"), _resize, sizePanel, percentPanel, boxPanel, Ui.Label("", 8),
+            Ui.Label("旋转"), _rotate, _flipH, _flipV, _autoOrient, _strip);
 
         _list.ItemsSource = _items;
         _list.BorderBrush = (Brush)Application.Current.Resources["ControlBorderBrush"];
@@ -87,10 +128,12 @@ sealed class ImageConvertPage : DockPanel
 
         SetDock(header, Dock.Top);
         SetDock(toolbar, Dock.Top);
+        SetDock(transformRow, Dock.Top);
         SetDock(folderRow, Dock.Top);
         SetDock(_status, Dock.Bottom);
         Children.Add(header);
         Children.Add(toolbar);
+        Children.Add(transformRow);
         Children.Add(folderRow);
         Children.Add(_status);
         Children.Add(new Grid { Children = { _list, hint } });
@@ -138,27 +181,44 @@ sealed class ImageConvertPage : DockPanel
         var pending = _items.Where(i => i.State == "等待" || i.State.StartsWith("失败")).ToList();
         if (pending.Count == 0) { Ui.SetStatus(_status, _items.Count == 0 ? "请先添加图片" : "列表中的图片都已处理"); return; }
         if (!int.TryParse(_quality.Text, out var quality) || quality < 1 || quality > 100) { Ui.SetStatus(_status, "JPG 质量应为 1–100", true); return; }
-        int maxSide = 0;
-        if (_maxSide.Text.Trim().Length > 0 && (!int.TryParse(_maxSide.Text, out maxSide) || maxSide < 1)) { Ui.SetStatus(_status, "最长边应为正整数，或留空", true); return; }
+        var options = new ConvertOptions { Format = (string)_format.SelectedItem, Quality = quality, ResizeMode = _resize.SelectedIndex };
+        if (options.ResizeMode == 1 && (!int.TryParse(_maxSide.Text, out options.MaxSide) || options.MaxSide < 1)) { Ui.SetStatus(_status, "最长边应为正整数", true); return; }
+        if (options.ResizeMode == 2 && (!double.TryParse(_percent.Text, out options.Percent) || options.Percent <= 0 || options.Percent > 1000)) { Ui.SetStatus(_status, "百分比应在 0–1000 之间", true); return; }
+        if (options.ResizeMode == 3)
+        {
+            options.KeepRatio = _keepRatio.IsChecked == true;
+            bool okW = int.TryParse(_width.Text, out options.Width) && options.Width > 0;
+            bool okH = int.TryParse(_height.Text, out options.Height) && options.Height > 0;
+            if (!okW) options.Width = 0;
+            if (!okH) options.Height = 0;
+            if (options.KeepRatio ? !okW && !okH : !okW || !okH) { Ui.SetStatus(_status, options.KeepRatio ? "请至少填写宽度或高度" : "请填写宽度和高度", true); return; }
+        }
+        options.Rotate = _rotate.SelectedIndex * 90;
+        options.FlipH = _flipH.IsChecked == true;
+        options.FlipV = _flipV.IsChecked == true;
+        options.AutoOrient = _autoOrient.IsChecked == true;
+        options.StripMetadata = _strip.IsChecked == true;
         var folder = _folder.Text.Trim();
         if (folder.Length > 0 && !Directory.Exists(folder))
         {
             try { Directory.CreateDirectory(folder); }
             catch (Exception ex) { Ui.SetStatus(_status, "输出文件夹无效：" + ex.Message, true); return; }
         }
-        var format = (string)_format.SelectedItem;
+        options.Folder = folder.Length > 0 ? folder : null;
 
         _running = true;
         _start.IsEnabled = false;
         int done = 0;
+        using var gate = new System.Threading.SemaphoreSlim(Math.Max(1, Math.Min(Environment.ProcessorCount, 4)));
         try
         {
-            foreach (var item in pending)
+            await Task.WhenAll(pending.Select(async item =>
             {
-                item.State = "转换中…";
+                await gate.WaitAsync();
                 try
                 {
-                    var (output, info, result) = await Task.Run(() => ImageConverter.Convert(item.Path, format, quality, maxSide, folder.Length > 0 ? folder : null));
+                    item.State = "转换中…";
+                    var (output, info, result) = await Task.Run(() => ImageConverter.Convert(item.Path, options));
                     item.Output = output;
                     item.Info = info;
                     item.Result = result;
@@ -166,7 +226,8 @@ sealed class ImageConvertPage : DockPanel
                     done++;
                 }
                 catch (Exception ex) { item.State = "失败：" + ex.Message; }
-            }
+                finally { gate.Release(); }
+            }));
         }
         finally
         {
@@ -179,32 +240,110 @@ sealed class ImageConvertPage : DockPanel
 
 static class ImageConverter
 {
+    const string OrientationJpeg = "/app1/ifd/{ushort=274}";
+    const string OrientationTiff = "/ifd/{ushort=274}";
+    static readonly object OutputLock = new();
+
     /// <returns>Output path, and "size, dimensions" descriptions of the source and result.</returns>
-    public static (string Output, string Info, string Result) Convert(string path, string format, int quality, int maxSide, string? folder)
+    public static (string Output, string Info, string Result) Convert(string path, ConvertOptions o)
     {
         var bytes = File.ReadAllBytes(path);
-        var source = Load(bytes);
+        var (source, metadata, isJpeg) = Load(bytes);
         var info = $"{source.PixelWidth}×{source.PixelHeight}，{Ui.FormatSize(bytes.Length)}";
 
         BitmapSource image = source;
-        if (maxSide > 0 && Math.Max(image.PixelWidth, image.PixelHeight) > maxSide)
-            image = Scale(image, (double)maxSide / Math.Max(image.PixelWidth, image.PixelHeight));
+        if (o.AutoOrient) image = Orient(image, Orientation(metadata));
+        if (o.Rotate != 0) image = Apply(image, new RotateTransform(o.Rotate));
+        if (o.FlipH || o.FlipV) image = Apply(image, new ScaleTransform(o.FlipH ? -1 : 1, o.FlipV ? -1 : 1));
+        image = Resize(image, o);
 
-        var ext = format switch { "JPG" => ".jpg", "TIFF" => ".tif", _ => "." + format.ToLowerInvariant() };
-        var output = OutputPath(path, ext, folder);
-        byte[] data = format == "ICO" ? EncodeIco(image) : Encode(image, format, quality);
+        var ext = o.Format switch { "JPG" => ".jpg", "TIFF" => ".tif", _ => "." + o.Format.ToLowerInvariant() };
+        BitmapMetadata? keep = null;
+        if (!o.StripMetadata && isJpeg && o.Format == "JPG" && metadata != null)
+        {
+            keep = metadata.Clone();
+            if (o.AutoOrient || o.Rotate != 0 || o.FlipH || o.FlipV)
+                try { keep.SetQuery(OrientationJpeg, (ushort)1); } catch { }
+        }
+        byte[] data = o.Format == "ICO" ? EncodeIco(image) : Encode(image, o.Format, o.Quality, keep);
+        string output;
+        // Reserve the name so parallel conversions of same-named files do not collide
+        lock (OutputLock)
+        {
+            output = OutputPath(path, ext, o.Folder);
+            File.WriteAllBytes(output, new byte[0]);
+        }
         File.WriteAllBytes(output, data);
         return (output, info, $"{image.PixelWidth}×{image.PixelHeight}，{Ui.FormatSize(data.Length)}");
     }
 
-    static BitmapSource Load(byte[] bytes)
+    static (BitmapSource Image, BitmapMetadata? Metadata, bool IsJpeg) Load(byte[] bytes)
     {
         // Pick the largest frame, which matters for .ico files
         var decoder = BitmapDecoder.Create(new MemoryStream(bytes), BitmapCreateOptions.PreservePixelFormat | BitmapCreateOptions.IgnoreColorProfile, BitmapCacheOption.OnLoad);
         var frame = decoder.Frames.OrderByDescending(f => f.PixelWidth * f.PixelHeight).First();
+        BitmapMetadata? metadata = null;
+        try { metadata = frame.Metadata as BitmapMetadata; } catch { }
         var bgra = new FormatConvertedBitmap(frame, PixelFormats.Bgra32, null, 0);
         bgra.Freeze();
-        return bgra;
+        return (bgra, metadata, decoder is JpegBitmapDecoder);
+    }
+
+    static int Orientation(BitmapMetadata? metadata)
+    {
+        if (metadata == null) return 1;
+        foreach (var query in new[] { OrientationJpeg, OrientationTiff })
+        {
+            try
+            {
+                if (metadata.ContainsQuery(query) && metadata.GetQuery(query) is ushort value) return value;
+            }
+            catch { }
+        }
+        return 1;
+    }
+
+    static BitmapSource Orient(BitmapSource image, int orientation) => orientation switch
+    {
+        2 => Apply(image, new ScaleTransform(-1, 1)),
+        3 => Apply(image, new RotateTransform(180)),
+        4 => Apply(image, new ScaleTransform(1, -1)),
+        5 => Apply(Apply(image, new RotateTransform(90)), new ScaleTransform(-1, 1)),
+        6 => Apply(image, new RotateTransform(90)),
+        7 => Apply(Apply(image, new RotateTransform(270)), new ScaleTransform(-1, 1)),
+        8 => Apply(image, new RotateTransform(270)),
+        _ => image,
+    };
+
+    static BitmapSource Resize(BitmapSource image, ConvertOptions o)
+    {
+        int w = image.PixelWidth, h = image.PixelHeight;
+        switch (o.ResizeMode)
+        {
+            case 1 when Math.Max(w, h) > o.MaxSide:
+                return Scale(image, (double)o.MaxSide / Math.Max(w, h));
+            case 2 when Math.Abs(o.Percent - 100) > 1e-6:
+                return Scale(image, o.Percent / 100);
+            case 3:
+                double sx = o.Width > 0 ? (double)o.Width / w : 0, sy = o.Height > 0 ? (double)o.Height / h : 0;
+                if (o.KeepRatio)
+                {
+                    double f = sx > 0 && sy > 0 ? Math.Min(sx, sy) : Math.Max(sx, sy);
+                    sx = sy = f;
+                }
+                if (Math.Abs(sx - 1) < 1e-6 && Math.Abs(sy - 1) < 1e-6) return image;
+                return Apply(image, new ScaleTransform(sx, sy));
+            default:
+                return image;
+        }
+    }
+
+    static BitmapSource Apply(BitmapSource image, Transform transform)
+    {
+        var transformed = new TransformedBitmap(image, transform);
+        var copy = new WriteableBitmap(transformed);
+        copy.Freeze();
+        return copy;
     }
 
     static BitmapSource Scale(BitmapSource image, double factor)
@@ -225,7 +364,7 @@ static class ImageConverter
         return output;
     }
 
-    static byte[] Encode(BitmapSource image, string format, int quality)
+    static byte[] Encode(BitmapSource image, string format, int quality, BitmapMetadata? metadata = null)
     {
         BitmapEncoder encoder = format switch
         {
@@ -237,7 +376,7 @@ static class ImageConverter
         };
         // JPG and BMP have no alpha channel: blend onto white instead of letting transparent pixels go black
         if (format is "JPG" or "BMP") image = FlattenOnWhite(image);
-        encoder.Frames.Add(BitmapFrame.Create(image));
+        encoder.Frames.Add(metadata != null ? BitmapFrame.Create(image, null, metadata, null) : BitmapFrame.Create(image));
         using var ms = new MemoryStream();
         encoder.Save(ms);
         return ms.ToArray();
