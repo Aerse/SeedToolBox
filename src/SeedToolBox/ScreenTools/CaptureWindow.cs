@@ -4,7 +4,6 @@ using System.Windows;
 using System.Windows.Controls;
 using System.Windows.Input;
 using System.Windows.Media;
-using System.Windows.Media.Effects;
 using System.Windows.Media.Imaging;
 using System.Windows.Shapes;
 using WinForms = System.Windows.Forms;
@@ -21,25 +20,10 @@ enum CaptureMode { Screenshot, Record, Text, QrCode }
 
 sealed class CaptureWindow : OverlayWindow
 {
-    enum Tool { None, Rectangle, Ellipse, Arrow, Pen, Text, Mosaic }
-
     enum DragMode { None, Select, Move, Resize, Draw }
 
     [Flags]
     enum Edge { None = 0, Left = 1, Top = 2, Right = 4, Bottom = 8 }
-
-    static readonly Color[] Palette =
-    {
-        Color.FromRgb(255, 59, 48), Color.FromRgb(255, 204, 0), Color.FromRgb(52, 199, 89),
-        Color.FromRgb(0, 122, 255), Colors.Black, Colors.White,
-    };
-    // Per size choice, in DIPs
-    static readonly double[] StrokeSizes = { 2, 4, 7 };
-    static readonly double[] MosaicSizes = { 14, 24, 40 };
-    static readonly double[] FontSizes = { 16, 22, 30 };
-    static readonly Brush Accent = new SolidColorBrush(Color.FromRgb(30, 144, 255));
-    static readonly Brush ButtonHover = new SolidColorBrush(Color.FromRgb(229, 229, 229));
-    static readonly Brush ButtonSelected = new SolidColorBrush(Color.FromRgb(204, 228, 247));
 
     readonly ScreenToolService _service;
     readonly WindowFinder _finder;
@@ -49,30 +33,23 @@ sealed class CaptureWindow : OverlayWindow
     // Surface (pixel) layer
     readonly RectangleGeometry _selectionGeometry = new();
     readonly RectangleGeometry _clipGeometry = new();
-    readonly Canvas _annotations;
-    readonly Rectangle _frame = new() { Stroke = Accent, IsHitTestVisible = false, Visibility = Visibility.Collapsed };
+    readonly AnnotationLayer _layer;
+    readonly Rectangle _frame = new() { Stroke = ToolbarUi.Accent, IsHitTestVisible = false, Visibility = Visibility.Collapsed };
 
     // Ui (DIP) layer
     readonly Magnifier _magnifier;
     readonly Border _sizeLabel;
     readonly Rectangle[] _handles = new Rectangle[8];
     readonly StackPanel _toolbar = new() { Visibility = Visibility.Collapsed };
-    readonly StackPanel _styleBar = new() { Orientation = Orientation.Horizontal };
-    readonly Dictionary<Tool, Border> _toolButtons = new();
-    readonly List<Border> _sizeButtons = new();
-    readonly List<Border> _colorButtons = new();
     readonly List<Action> _toggleUpdates = new();
 
     bool _editing;
     Rect _selection = Rect.Empty;
-    Tool _tool;
     DragMode _drag;
     Point _dragStart;
     Rect _dragOrigin;
     Edge _resizeEdges;
     bool _moved;
-    Shape? _drawing;
-    TextBox? _text;
 
     public CaptureWindow(ScreenShot shot, WindowFinder finder, ScreenToolService service, CaptureMode mode = CaptureMode.Screenshot) : base(shot)
     {
@@ -80,15 +57,18 @@ sealed class CaptureWindow : OverlayWindow
         _finder = finder;
         _mode = mode;
 
-        _annotations = new Canvas { Width = shot.Width, Height = shot.Height, Clip = _clipGeometry };
+        _layer = new AnnotationLayer(shot, service, () => Scale);
+        _layer.Content.Clip = _clipGeometry;
+        _layer.ToolChanged += OnToolChanged;
         var mask = new Path
         {
             Fill = new SolidColorBrush(Color.FromArgb(120, 0, 0, 0)),
             Data = new CombinedGeometry(GeometryCombineMode.Exclude, new RectangleGeometry(new Rect(0, 0, shot.Width, shot.Height)), _selectionGeometry),
             IsHitTestVisible = false,
         };
-        Surface.Children.Add(_annotations);
+        Surface.Children.Add(_layer.Content);
         Surface.Children.Add(mask);
+        Surface.Children.Add(_layer.Chrome);
         Surface.Children.Add(_frame);
 
         _sizeLabel = new Border
@@ -102,7 +82,7 @@ sealed class CaptureWindow : OverlayWindow
         Ui.Children.Add(_sizeLabel);
         for (int i = 0; i < _handles.Length; i++)
         {
-            _handles[i] = new Rectangle { Width = 7, Height = 7, Fill = Brushes.White, Stroke = Accent, IsHitTestVisible = false, Visibility = Visibility.Collapsed };
+            _handles[i] = new Rectangle { Width = 7, Height = 7, Fill = Brushes.White, Stroke = ToolbarUi.Accent, IsHitTestVisible = false, Visibility = Visibility.Collapsed };
             Ui.Children.Add(_handles[i]);
         }
         BuildToolbar();
@@ -135,14 +115,7 @@ sealed class CaptureWindow : OverlayWindow
             return;
         }
         var main = new StackPanel { Orientation = Orientation.Horizontal };
-        AddTool(main, Tool.Rectangle, "□", "矩形");
-        AddTool(main, Tool.Ellipse, "○", "椭圆");
-        AddTool(main, Tool.Arrow, "↗", "箭头");
-        AddTool(main, Tool.Pen, "✎", "画笔");
-        AddTool(main, Tool.Text, "A", "文字");
-        AddTool(main, Tool.Mosaic, "▦", "马赛克");
-        main.Children.Add(Divider());
-        main.Children.Add(Button("↶", "撤销 (Ctrl+Z)", Undo));
+        _layer.AddToolButtons(main);
         main.Children.Add(Divider());
         main.Children.Add(Button("文", "识别文字", RecognizeText));
         main.Children.Add(Button("码", "识别二维码", DecodeQrCodes));
@@ -150,35 +123,14 @@ sealed class CaptureWindow : OverlayWindow
         main.Children.Add(Button("📌", "贴到屏幕", Pin));
         main.Children.Add(Button("💾", "保存 (Ctrl+S)", Save));
         main.Children.Add(Button("✕", "退出 (Esc)", Close));
-        main.Children.Add(Button("✓", "复制到剪贴板 (Enter / 双击)", CopyAndClose, Accent));
-
-        for (int i = 0; i < StrokeSizes.Length; i++)
-        {
-            int index = i;
-            double dot = 4 + i * 3;
-            var button = Button("", $"{new[] { "细", "中", "粗" }[i]}", () => SetPenSize(index));
-            button.Child = new Ellipse { Width = dot, Height = dot, Fill = Brushes.DimGray };
-            _sizeButtons.Add(button);
-            _styleBar.Children.Add(button);
-        }
-        _styleBar.Children.Add(Divider());
-        for (int i = 0; i < Palette.Length; i++)
-        {
-            int index = i;
-            var button = Button("", "", () => SetPenColor(index));
-            button.Width = 26;
-            button.Child = new Rectangle { Width = 16, Height = 16, Fill = new SolidColorBrush(Palette[i]), Stroke = Brushes.Gray, StrokeThickness = 1 };
-            _colorButtons.Add(button);
-            _styleBar.Children.Add(button);
-        }
+        main.Children.Add(Button("✓", "复制到剪贴板 (Enter / 双击)", CopyAndClose, ToolbarUi.Accent));
 
         _toolbar.Children.Add(Card(main));
-        var style = Card(_styleBar);
+        var style = Card(_layer.StyleBar);
         style.Margin = new Thickness(0, 4, 0, 0);
         style.HorizontalAlignment = HorizontalAlignment.Left;
         style.Visibility = Visibility.Collapsed;
         _toolbar.Children.Add(style);
-        UpdateStyleButtons();
     }
 
     void BuildRecordToolbar()
@@ -207,7 +159,7 @@ sealed class CaptureWindow : OverlayWindow
         Border? button = null;
         void Update()
         {
-            button!.Background = get() ? ButtonSelected : Brushes.Transparent;
+            ToolbarUi.SetSelected(button!, get());
             button.ToolTip = $"{tip}：{(get() ? "开" : "关")}";
             button.Child.Opacity = get() ? 1 : 0.4;
         }
@@ -233,99 +185,25 @@ sealed class CaptureWindow : OverlayWindow
         _service.StartRecording(region, scale);
     }
 
-    static Border Card(UIElement child) => new()
-    {
-        Background = Brushes.White,
-        BorderBrush = new SolidColorBrush(Color.FromRgb(200, 200, 200)),
-        BorderThickness = new Thickness(1),
-        CornerRadius = new CornerRadius(4),
-        Padding = new Thickness(3),
-        Effect = new DropShadowEffect { BlurRadius = 8, ShadowDepth = 1, Opacity = 0.3 },
-        Child = child,
-    };
+    static Border Card(UIElement child) => ToolbarUi.Card(child);
+    static Rectangle Divider() => ToolbarUi.Divider();
+    static Border Button(string glyph, string tip, Action onClick, Brush? foreground = null) => ToolbarUi.Button(glyph, tip, onClick, foreground);
 
-    static Rectangle Divider() => new() { Width = 1, Height = 18, Fill = new SolidColorBrush(Color.FromRgb(221, 221, 221)), Margin = new Thickness(4, 0, 4, 0) };
+    AnnotationTool CurrentTool => RecordMode ? AnnotationTool.None : _layer.Tool;
 
-    void AddTool(Panel panel, Tool tool, string glyph, string tip)
+    void SetTool(AnnotationTool tool)
     {
-        var button = Button(glyph, tip, () => SetTool(_tool == tool ? Tool.None : tool));
-        _toolButtons[tool] = button;
-        panel.Children.Add(button);
+        if (RecordMode) OnToolChanged();
+        else _layer.SetTool(tool);
     }
 
-    static readonly FontFamily ToolbarFont = new("Segoe UI Symbol, Segoe UI Emoji, Segoe UI");
-
-    /// <summary>Flat button made from a Border, so it never takes keyboard focus from the overlay.</summary>
-    Border Button(string glyph, string tip, Action onClick, Brush? foreground = null)
+    void OnToolChanged()
     {
-        var button = new Border
-        {
-            Width = 32,
-            Height = 30,
-            CornerRadius = new CornerRadius(3),
-            Background = Brushes.Transparent,
-            Cursor = Cursors.Arrow,
-            ToolTip = tip.Length > 0 ? tip : null,
-            Child = new TextBlock
-            {
-                Text = glyph,
-                // Segoe UI Symbol ships with Win7 (with updates) through Win11, so the glyphs render everywhere
-                FontFamily = ToolbarFont,
-                FontSize = 16,
-                Foreground = foreground ?? new SolidColorBrush(Color.FromRgb(51, 51, 51)),
-                HorizontalAlignment = HorizontalAlignment.Center,
-                VerticalAlignment = VerticalAlignment.Center,
-            },
-        };
-        button.MouseEnter += (_, _) => { if (button.Background != ButtonSelected) button.Background = ButtonHover; };
-        button.MouseLeave += (_, _) => { if (button.Background != ButtonSelected) button.Background = Brushes.Transparent; };
-        button.MouseLeftButtonDown += (_, e) => e.Handled = true;
-        button.MouseLeftButtonUp += (_, e) => { e.Handled = true; onClick(); };
-        return button;
-    }
-
-    void SetTool(Tool tool)
-    {
-        CommitText();
-        _tool = tool;
-        if (RecordMode)
-        {
-            UpdateHandles();
-            PlaceToolbar();
-            return;
-        }
-        foreach (var pair in _toolButtons)
-            pair.Value.Background = pair.Key == tool ? ButtonSelected : Brushes.Transparent;
-        _toolbar.Children[1].Visibility = tool == Tool.None ? Visibility.Collapsed : Visibility.Visible;
+        if (_toolbar.Children.Count > 1)
+            _toolbar.Children[1].Visibility = !RecordMode && _layer.ShowsStyle ? Visibility.Visible : Visibility.Collapsed;
         UpdateHandles();
         PlaceToolbar();
     }
-
-    void SetPenSize(int index)
-    {
-        _service.Settings.PenSize = index;
-        _service.SaveSettings();
-        UpdateStyleButtons();
-    }
-
-    void SetPenColor(int index)
-    {
-        _service.Settings.PenColor = index;
-        _service.SaveSettings();
-        UpdateStyleButtons();
-    }
-
-    void UpdateStyleButtons()
-    {
-        for (int i = 0; i < _sizeButtons.Count; i++)
-            _sizeButtons[i].Background = i == SizeIndex ? ButtonSelected : Brushes.Transparent;
-        for (int i = 0; i < _colorButtons.Count; i++)
-            _colorButtons[i].Background = i == ColorIndex ? ButtonSelected : Brushes.Transparent;
-    }
-
-    int SizeIndex => Math.Max(0, Math.Min(StrokeSizes.Length - 1, _service.Settings.PenSize));
-    int ColorIndex => Math.Max(0, Math.Min(Palette.Length - 1, _service.Settings.PenColor));
-    Brush PenBrush => new SolidColorBrush(Palette[ColorIndex]);
 
     void PlaceToolbar()
     {
@@ -432,7 +310,7 @@ sealed class CaptureWindow : OverlayWindow
 
     void UpdateHandles()
     {
-        bool show = _editing && _tool == Tool.None && !_selection.IsEmpty;
+        bool show = _editing && CurrentTool == AnnotationTool.None && !_selection.IsEmpty;
         var r = UiRect(_selection.IsEmpty ? new Rect() : _selection);
         double[] xs = { r.Left, r.Left + r.Width / 2, r.Right };
         double[] ys = { r.Top, r.Top + r.Height / 2, r.Bottom };
@@ -483,7 +361,7 @@ sealed class CaptureWindow : OverlayWindow
         _editing = true;
         ShowSelection(selection);
         _magnifier.Visibility = Visibility.Collapsed;
-        SetTool(Tool.None);
+        SetTool(AnnotationTool.None);
         // Recognition modes act on the first selection; deferred so the mouse-up finishes first
         if (_mode == CaptureMode.Text) Dispatcher.BeginInvoke(new Action(RecognizeText));
         else if (_mode == CaptureMode.QrCode) Dispatcher.BeginInvoke(new Action(DecodeQrCodes));
@@ -491,10 +369,9 @@ sealed class CaptureWindow : OverlayWindow
 
     void CancelEditing()
     {
-        CommitText();
-        _annotations.Children.Clear();
+        _layer.Clear();
         _editing = false;
-        SetTool(Tool.None);
+        SetTool(AnnotationTool.None);
         _toolbar.Visibility = Visibility.Collapsed;
         Cursor = Cursors.Cross;
         Hover(Mouse.GetPosition(Surface));
@@ -526,7 +403,7 @@ sealed class CaptureWindow : OverlayWindow
                 Resize(raw);
                 return;
             case DragMode.Draw:
-                UpdateDrawing(p);
+                _layer.MouseMove(p);
                 return;
         }
 
@@ -540,14 +417,14 @@ sealed class CaptureWindow : OverlayWindow
             Cursor = Cursors.Arrow;
             return;
         }
-        if (_tool == Tool.None)
+        if (CurrentTool == AnnotationTool.None)
         {
             var edges = EdgesAt(raw);
             Cursor = edges != Edge.None ? CursorFor(edges) : _selection.Contains(raw) ? Cursors.SizeAll : Cursors.Arrow;
         }
         else
         {
-            Cursor = _tool == Tool.Text ? Cursors.IBeam : Cursors.Cross;
+            Cursor = _layer.CursorAt(p);
         }
     }
 
@@ -570,7 +447,7 @@ sealed class CaptureWindow : OverlayWindow
     void OnMouseDown(object sender, MouseButtonEventArgs e)
     {
         // Toolbar buttons and the text being typed handle their own clicks
-        if (_toolbar.IsMouseOver || _text is { IsMouseOver: true }) return;
+        if (_toolbar.IsMouseOver || _layer.EditingText is { IsMouseOver: true }) return;
 
         var raw = PixelOf(e);
         var p = Clamp(raw);
@@ -584,13 +461,7 @@ sealed class CaptureWindow : OverlayWindow
             return;
         }
 
-        if (_text != null)
-        {
-            CommitText();
-            if (_tool != Tool.Text) return;
-        }
-
-        if (_tool == Tool.None)
+        if (CurrentTool == AnnotationTool.None)
         {
             if (e.ClickCount == 2 && _selection.Contains(raw))
             {
@@ -609,13 +480,12 @@ sealed class CaptureWindow : OverlayWindow
             return;
         }
 
-        if (!_selection.Contains(raw)) return;
-        if (_tool == Tool.Text)
+        if (!_selection.Contains(raw))
         {
-            BeginText(p);
+            _layer.CommitText();
             return;
         }
-        BeginDrawing(p);
+        if (!_layer.MouseDown(p)) return;
         _drag = DragMode.Draw;
         CaptureMouse();
     }
@@ -649,20 +519,15 @@ sealed class CaptureWindow : OverlayWindow
                 PlaceToolbar();
                 break;
             case DragMode.Draw:
-                EndDrawing();
+                _layer.MouseUp();
                 break;
         }
     }
 
     void OnRightClick(object sender, MouseButtonEventArgs e)
     {
-        if (_text != null)
-        {
-            _annotations.Children.Remove(_text);
-            _text = null;
-            Focus();
-        }
-        else if (_editing)
+        if (_layer.CancelText()) return;
+        if (_editing)
         {
             CancelEditing();
         }
@@ -674,189 +539,10 @@ sealed class CaptureWindow : OverlayWindow
 
     #endregion
 
-    #region Annotations
-
-    void BeginDrawing(Point p)
-    {
-        double stroke = StrokeSizes[SizeIndex] * Scale;
-        switch (_tool)
-        {
-            case Tool.Rectangle:
-                _drawing = new Path { Stroke = PenBrush, StrokeThickness = stroke, Data = new RectangleGeometry(new Rect(p, p)) };
-                break;
-            case Tool.Ellipse:
-                _drawing = new Path { Stroke = PenBrush, StrokeThickness = stroke, Data = new EllipseGeometry(new Rect(p, p)) };
-                break;
-            case Tool.Arrow:
-                _drawing = new Path { Stroke = PenBrush, Fill = PenBrush, StrokeThickness = stroke, StrokeLineJoin = PenLineJoin.Round };
-                break;
-            case Tool.Pen:
-                _drawing = Stroke(PenBrush, stroke, p);
-                break;
-            case Tool.Mosaic:
-                // Painting with a pixelated copy of the screen reveals blocks wherever the brush goes
-                var brush = new ImageBrush(Shot.Mosaic(Math.Max(6, (int)(10 * Scale))))
-                {
-                    ViewportUnits = BrushMappingMode.Absolute,
-                    Viewport = new Rect(0, 0, Shot.Width, Shot.Height),
-                    Stretch = Stretch.Fill,
-                };
-                brush.Freeze();
-                _drawing = Stroke(brush, MosaicSizes[SizeIndex] * Scale, p);
-                break;
-        }
-        if (_drawing != null) _annotations.Children.Add(_drawing);
-    }
-
-    static Polyline Stroke(Brush brush, double thickness, Point start) => new()
-    {
-        Stroke = brush,
-        StrokeThickness = thickness,
-        StrokeLineJoin = PenLineJoin.Round,
-        StrokeStartLineCap = PenLineCap.Round,
-        StrokeEndLineCap = PenLineCap.Round,
-        // Two points so a single click leaves a dot
-        Points = new PointCollection { start, start },
-    };
-
-    void UpdateDrawing(Point p)
-    {
-        switch (_drawing)
-        {
-            case Polyline line:
-                line.Points.Add(p);
-                break;
-            case Path { Data: RectangleGeometry rect }:
-                rect.Rect = new Rect(_dragStart, p);
-                break;
-            case Path { Data: EllipseGeometry ellipse }:
-                ellipse.RadiusX = Math.Abs(p.X - _dragStart.X) / 2;
-                ellipse.RadiusY = Math.Abs(p.Y - _dragStart.Y) / 2;
-                ellipse.Center = new Point((p.X + _dragStart.X) / 2, (p.Y + _dragStart.Y) / 2);
-                break;
-            case Path arrow:
-                arrow.Data = Arrow(_dragStart, p, arrow.StrokeThickness);
-                break;
-        }
-    }
-
-    void EndDrawing()
-    {
-        if (_drawing is Path path && !(path.Data is { } data && data.Bounds.Width + data.Bounds.Height >= 4))
-            _annotations.Children.Remove(path);
-        _drawing = null;
-    }
-
-    Geometry Arrow(Point from, Point to, double stroke)
-    {
-        var v = to - from;
-        double length = v.Length;
-        if (length < 1) return Geometry.Empty;
-        v /= length;
-        var normal = new Vector(-v.Y, v.X);
-        double head = Math.Min(length, Math.Max(12 * Scale, stroke * 4));
-        var basePoint = to - v * head;
-
-        var g = new StreamGeometry();
-        using (var ctx = g.Open())
-        {
-            ctx.BeginFigure(from, false, false);
-            ctx.LineTo(basePoint, true, true);
-            ctx.BeginFigure(to, true, true);
-            ctx.LineTo(basePoint + normal * head * 0.45, true, true);
-            ctx.LineTo(basePoint - normal * head * 0.45, true, true);
-        }
-        g.Freeze();
-        return g;
-    }
-
-    void BeginText(Point p)
-    {
-        var color = PenBrush;
-        _text = new TextBox
-        {
-            Foreground = color,
-            CaretBrush = color,
-            Background = Brushes.Transparent,
-            BorderBrush = Accent,
-            BorderThickness = new Thickness(Math.Max(1, Math.Round(Scale))),
-            Padding = new Thickness(0),
-            FontSize = FontSizes[SizeIndex] * Scale,
-            AcceptsReturn = true,
-            MinWidth = 24 * Scale,
-        };
-        Canvas.SetLeft(_text, p.X);
-        Canvas.SetTop(_text, p.Y - _text.FontSize * 0.7);
-        _annotations.Children.Add(_text);
-        _text.Loaded += (_, _) => _text?.Focus();
-    }
-
-    /// <summary>Freezes the text being typed into a plain label.</summary>
-    void CommitText()
-    {
-        if (_text == null) return;
-        var text = _text;
-        _text = null;
-        if (text.Text.Trim().Length == 0)
-        {
-            _annotations.Children.Remove(text);
-        }
-        else
-        {
-            // Keep the TextBox so layout doesn't shift, just make it inert
-            text.Select(0, 0);
-            text.IsReadOnly = true;
-            text.Focusable = false;
-            text.IsHitTestVisible = false;
-            text.BorderBrush = Brushes.Transparent;
-        }
-        Focus();
-    }
-
-    void Undo()
-    {
-        if (_text != null)
-        {
-            _annotations.Children.Remove(_text);
-            _text = null;
-            Focus();
-            return;
-        }
-        int count = _annotations.Children.Count;
-        if (count > 0) _annotations.Children.RemoveAt(count - 1);
-    }
-
-    #endregion
-
     #region Output
 
-    BitmapSource Render()
-    {
-        CommitText();
-        var r = new Int32Rect((int)_selection.X, (int)_selection.Y, (int)_selection.Width, (int)_selection.Height);
-        var target = new Rect(0, 0, r.Width, r.Height);
-
-        var visual = new DrawingVisual();
-        using (var dc = visual.RenderOpen())
-        {
-            dc.DrawImage(new CroppedBitmap(Shot.Image, r), target);
-            if (_annotations.Children.Count > 0)
-            {
-                var brush = new VisualBrush(_annotations)
-                {
-                    ViewboxUnits = BrushMappingMode.Absolute,
-                    Viewbox = _selection,
-                    Stretch = Stretch.Fill,
-                };
-                dc.DrawRectangle(brush, null, target);
-            }
-        }
-        // 96 DPI: one drawing unit is one pixel
-        var bitmap = new RenderTargetBitmap(r.Width, r.Height, 96, 96, PixelFormats.Pbgra32);
-        bitmap.Render(visual);
-        bitmap.Freeze();
-        return bitmap;
-    }
+    BitmapSource Render() =>
+        _layer.Render(Shot.Image, new Int32Rect((int)_selection.X, (int)_selection.Y, (int)_selection.Width, (int)_selection.Height));
 
     void CopyAndClose()
     {
@@ -903,14 +589,14 @@ sealed class CaptureWindow : OverlayWindow
 
     void OnKey(object sender, KeyEventArgs e)
     {
-        if (_text != null && _text.IsKeyboardFocused)
+        if (_layer.EditingText is { IsKeyboardFocused: true })
         {
-            // Enter finishes the text, Shift+Enter adds a line
-            if (e.Key == Key.Escape || (e.Key == Key.Enter && !Keyboard.Modifiers.HasFlag(ModifierKeys.Shift)))
-            {
-                CommitText();
-                e.Handled = true;
-            }
+            _layer.HandleTextKey(e);
+            return;
+        }
+        if (_editing && !RecordMode && _layer.HandleKey(e))
+        {
+            e.Handled = true;
             return;
         }
 
@@ -936,7 +622,6 @@ sealed class CaptureWindow : OverlayWindow
         }
         else if (e.Key == Key.Enter || (ctrl && e.Key == Key.C)) CopyAndClose();
         else if (ctrl && e.Key == Key.S && !RecordMode) Save();
-        else if (ctrl && e.Key == Key.Z && !RecordMode) Undo();
         else if (e.Key is Key.Left or Key.Right or Key.Up or Key.Down && _drag == DragMode.None)
         {
             // Arrow keys nudge the selection by one pixel

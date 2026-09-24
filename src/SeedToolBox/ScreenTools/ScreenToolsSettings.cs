@@ -17,6 +17,10 @@ public class ScreenToolsSettings
     /// <summary>Annotation color and size, as indexes into the toolbar choices.</summary>
     public int PenColor { get; set; }
     public int PenSize { get; set; } = 1;
+    /// <summary>Hex colour used when <see cref="PenColor"/> points past the palette.</summary>
+    public string CustomColor { get; set; } = "#FF69B4";
+    /// <summary>Fill rectangles and ellipses instead of outlining them.</summary>
+    public bool FillShapes { get; set; }
 
     public RecordSettings Record { get; set; } = new();
 }

@@ -9,7 +9,7 @@ using WinForms = System.Windows.Forms;
 namespace SeedToolBox.ScreenTools;
 
 /// <summary>A frozen copy of the whole virtual screen in physical pixels.</summary>
-public sealed class ScreenShot
+public sealed class ScreenShot : IAnnotationSource
 {
     /// <summary>Virtual screen origin; can be negative when a monitor sits left of/above the primary one.</summary>
     public int X { get; }
@@ -20,7 +20,7 @@ public sealed class ScreenShot
 
     readonly byte[] _pixels;
     readonly int _stride;
-    BitmapSource? _mosaic;
+    readonly PixelBuffer _effects;
 
     ScreenShot(int x, int y, int width, int height, byte[] pixels, int stride)
     {
@@ -32,6 +32,7 @@ public sealed class ScreenShot
         _stride = stride;
         Image = BitmapSource.Create(width, height, 96, 96, PixelFormats.Bgr32, null, pixels, stride);
         Image.Freeze();
+        _effects = new PixelBuffer(pixels, width, height, stride, PixelFormats.Bgr32);
     }
 
     public static ScreenShot Capture()
@@ -78,34 +79,42 @@ public sealed class ScreenShot
         return System.Windows.Media.Color.FromRgb(_pixels[i + 2], _pixels[i + 1], _pixels[i]);
     }
 
-    /// <summary>The screenshot pixelated into blocks, used by the mosaic brush.</summary>
-    public BitmapSource Mosaic(int cell)
-    {
-        if (_mosaic != null) return _mosaic;
+    public BitmapSource Mosaic(int cell) => _effects.Mosaic(cell);
 
-        var result = new byte[_pixels.Length];
-        for (int by = 0; by < Height; by += cell)
+    public BitmapSource Blurred() => _effects.Blurred();
+
+    /// <summary>Copies one screen rectangle (physical pixels) as top-down Bgr32 rows.</summary>
+    public static byte[] CaptureRegion(Rectangle region)
+    {
+        using var bitmap = new Bitmap(region.Width, region.Height, System.Drawing.Imaging.PixelFormat.Format32bppRgb);
+        using (var g = Graphics.FromImage(bitmap))
         {
-            int cy = System.Math.Min(by + cell / 2, Height - 1);
-            for (int bx = 0; bx < Width; bx += cell)
+            var target = g.GetHdc();
+            var screen = GetDC(IntPtr.Zero);
+            try
             {
-                int cx = System.Math.Min(bx + cell / 2, Width - 1);
-                int src = cy * _stride + cx * 4;
-                for (int y = by; y < System.Math.Min(by + cell, Height); y++)
-                {
-                    for (int x = bx; x < System.Math.Min(bx + cell, Width); x++)
-                    {
-                        int dst = y * _stride + x * 4;
-                        result[dst] = _pixels[src];
-                        result[dst + 1] = _pixels[src + 1];
-                        result[dst + 2] = _pixels[src + 2];
-                    }
-                }
+                if (!BitBlt(target, 0, 0, region.Width, region.Height, screen, region.X, region.Y, SRCCOPY | CAPTUREBLT))
+                    throw new System.ComponentModel.Win32Exception();
+            }
+            finally
+            {
+                ReleaseDC(IntPtr.Zero, screen);
+                g.ReleaseHdc(target);
             }
         }
-        _mosaic = BitmapSource.Create(Width, Height, 96, 96, PixelFormats.Bgr32, null, result, _stride);
-        _mosaic.Freeze();
-        return _mosaic;
+        var data = bitmap.LockBits(new Rectangle(0, 0, region.Width, region.Height), ImageLockMode.ReadOnly, bitmap.PixelFormat);
+        try
+        {
+            int stride = region.Width * 4;
+            var pixels = new byte[stride * region.Height];
+            for (int y = 0; y < region.Height; y++)
+                Marshal.Copy(data.Scan0 + y * data.Stride, pixels, y * stride, stride);
+            return pixels;
+        }
+        finally
+        {
+            bitmap.UnlockBits(data);
+        }
     }
 
     const int SRCCOPY = 0x00CC0020, CAPTUREBLT = 0x40000000;
