@@ -23,7 +23,7 @@ public class ClipboardSettings
 {
     public const string SettingsName = "clipboard";
 
-    public string Hotkey { get; set; } = "Ctrl+Alt+H";
+    public string Hotkey { get; set; } = "Alt+Shift+V";
     /// <summary>Records clipboard changes; false while recording is paused.</summary>
     public bool Enabled { get; set; } = true;
     public int MaxItems { get; set; } = 300;

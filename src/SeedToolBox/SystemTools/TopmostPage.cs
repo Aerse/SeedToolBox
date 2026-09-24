@@ -124,7 +124,7 @@ sealed class TopmostPage : DockPanel
 
     public TopmostPage()
     {
-        var header = Ui.Header("窗口置顶", "让任意窗口保持在最前面；默认快捷键 Ctrl+Alt+T 切换当前窗口，可在设置中修改");
+        var header = Ui.Header("窗口置顶", "让任意窗口保持在最前面；可在设置中为「切换当前窗口置顶」指定快捷键");
         _filter.ToolTip = "标题或进程名";
         _filter.TextChanged += (_, _) => ApplyFilter();
         _onlyTopmost.Click += (_, _) => ApplyFilter();

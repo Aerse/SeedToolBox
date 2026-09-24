@@ -31,7 +31,7 @@ sealed class SystemToolsModule : IModule
         host.AddLauncherCommand("保持唤醒（开/关）", KeepAwake.Toggle);
         foreach (var (id, name) in new[] { ("keep-awake", "保持唤醒"), ("topmost", "窗口置顶"), ("env-vars", "环境变量"), ("startup", "启动项"), ("processes", "进程") })
             host.AddLauncherCommand("打开" + name + "页面", () => host.OpenPage(id));
-        host.AddHotkey("topmost", "切换当前窗口置顶", "Ctrl+Alt+T", () => Topmost.ToggleForeground());
+        host.AddHotkey("topmost", "切换当前窗口置顶", "", () => Topmost.ToggleForeground());
     }
 
     static void Add(IAppHost host, string text, string file) =>

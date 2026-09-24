@@ -6,12 +6,12 @@ public class ScreenToolsSettings
 {
     public const string SettingsName = "screentools";
 
-    public string ScreenshotHotkey { get; set; } = "Ctrl+Alt+A";
-    public string ColorPickerHotkey { get; set; } = "Ctrl+Alt+C";
-    public string RulerHotkey { get; set; } = "Ctrl+Alt+R";
-    public string RecordHotkey { get; set; } = "Ctrl+Alt+V";
-    public string OcrHotkey { get; set; } = "Ctrl+Alt+O";
-    public string QrHotkey { get; set; } = "Ctrl+Alt+Q";
+    public string ScreenshotHotkey { get; set; } = "F1";
+    public string ColorPickerHotkey { get; set; } = "";
+    public string RulerHotkey { get; set; } = "";
+    public string RecordHotkey { get; set; } = "Shift+F1";
+    public string OcrHotkey { get; set; } = "";
+    public string QrHotkey { get; set; } = "";
 
     public ColorFormat ColorFormat { get; set; } = ColorFormat.Hex;
     /// <summary>Last folder screenshots were saved to.</summary>

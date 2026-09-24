@@ -147,6 +147,8 @@ public partial class App : Application
 
         _hotkeys.Add(new HotkeyBinding(TrayIcon.ShowWindowCommand, "呼出主窗口", () => data.Hotkey, v => data.Hotkey = v, main.ToggleFromHotkey));
         _hotkeys.Add(new HotkeyBinding("screenshot", "截图", () => screen.Settings.ScreenshotHotkey, v => screen.Settings.ScreenshotHotkey = v, () => RunHidden(screen.Screenshot)));
+        _hotkeys.Add(new HotkeyBinding("record", "录屏", () => screen.Settings.RecordHotkey, v => screen.Settings.RecordHotkey = v, () => RunHidden(screen.Record)));
+        _hotkeys.Add(new HotkeyBinding("clipboard", "剪贴板历史", () => clipboard.Settings.Hotkey, v => clipboard.Settings.Hotkey = v, showClipboard));
         _hotkeys.Add(new HotkeyBinding("fullscreen", "全屏截图", () => screen.Settings.FullScreenHotkey, v => screen.Settings.FullScreenHotkey = v, () => RunHidden(screen.FullScreen)));
         // Not hidden first: hiding our windows would change which window is in front
         _hotkeys.Add(new HotkeyBinding("activewindow", "窗口截图", () => screen.Settings.ActiveWindowHotkey, v => screen.Settings.ActiveWindowHotkey = v, screen.ActiveWindow));
@@ -155,10 +157,11 @@ public partial class App : Application
         _hotkeys.Add(new HotkeyBinding("delayed", "延时截图", () => screen.Settings.DelayedScreenshotHotkey, v => screen.Settings.DelayedScreenshotHotkey = v, () => RunHidden(screen.DelayedScreenshot)));
         _hotkeys.Add(new HotkeyBinding("color", "取色", () => screen.Settings.ColorPickerHotkey, v => screen.Settings.ColorPickerHotkey = v, () => RunHidden(screen.PickColor)));
         _hotkeys.Add(new HotkeyBinding("ruler", "屏幕标尺", () => screen.Settings.RulerHotkey, v => screen.Settings.RulerHotkey = v, () => RunHidden(screen.Ruler)));
-        _hotkeys.Add(new HotkeyBinding("record", "录屏", () => screen.Settings.RecordHotkey, v => screen.Settings.RecordHotkey = v, () => RunHidden(screen.Record)));
         _hotkeys.Add(new HotkeyBinding("ocr", "识别文字", () => screen.Settings.OcrHotkey, v => screen.Settings.OcrHotkey = v, () => RunHidden(screen.RecognizeText)));
         _hotkeys.Add(new HotkeyBinding("qr", "识别二维码", () => screen.Settings.QrHotkey, v => screen.Settings.QrHotkey = v, () => RunHidden(screen.RecognizeQrCodes)));
-        _hotkeys.Add(new HotkeyBinding("clipboard", "剪贴板历史", () => clipboard.Settings.Hotkey, v => clipboard.Settings.Hotkey = v, showClipboard));
+
+        bool migrateHotkeys = data.HotkeyDefaults < CurrentHotkeyDefaults;
+        if (migrateHotkeys) MigrateHotkeys(screen.Settings, clipboard.Settings);
 
         var taken = new List<string>();
         foreach (var binding in _hotkeys)
@@ -174,6 +177,15 @@ public partial class App : Application
 
         var moduleHotkeys = settings.Load<Dictionary<string, string>>(ModuleHotkeysFile);
         _saveModuleHotkeys = () => settings.Save(ModuleHotkeysFile, moduleHotkeys);
+        if (migrateHotkeys)
+        {
+            if (moduleHotkeys.TryGetValue("topmost", out var topmost) && topmost == "Ctrl+Alt+T") moduleHotkeys.Remove("topmost");
+            data.HotkeyDefaults = CurrentHotkeyDefaults;
+            _saveModuleHotkeys();
+            screen.SaveSettings();
+            clipboard.SaveSettings();
+            main.RequestSave();
+        }
         _modules = new ModuleManager(new AppHost(_tray, settings, Dispatcher, new AppHost.Callbacks
         {
             AddPage = toolbox.AddGroupPage,
@@ -196,6 +208,22 @@ public partial class App : Application
 
         if (!e.Args.Contains(AutoStart.BackgroundArg))
             _main.Show();
+    }
+
+    const int CurrentHotkeyDefaults = 1;
+
+    /// <summary>Replaces the old Ctrl+Alt defaults, which clash with QQ and WeChat, with the new ones.</summary>
+    static void MigrateHotkeys(ScreenToolsSettings s, Clips.ClipboardSettings c)
+    {
+        var fresh = new ScreenToolsSettings();
+        string Fix(string value, string old, string now) => value == old ? now : value;
+        s.ScreenshotHotkey = Fix(s.ScreenshotHotkey, "Ctrl+Alt+A", fresh.ScreenshotHotkey);
+        s.ColorPickerHotkey = Fix(s.ColorPickerHotkey, "Ctrl+Alt+C", fresh.ColorPickerHotkey);
+        s.RulerHotkey = Fix(s.RulerHotkey, "Ctrl+Alt+R", fresh.RulerHotkey);
+        s.RecordHotkey = Fix(s.RecordHotkey, "Ctrl+Alt+V", fresh.RecordHotkey);
+        s.OcrHotkey = Fix(s.OcrHotkey, "Ctrl+Alt+O", fresh.OcrHotkey);
+        s.QrHotkey = Fix(s.QrHotkey, "Ctrl+Alt+Q", fresh.QrHotkey);
+        c.Hotkey = Fix(c.Hotkey, "Ctrl+Alt+H", new Clips.ClipboardSettings().Hotkey);
     }
 
     /// <summary>Starts a screen tool, first hiding the app's windows so they stay out of the capture.</summary>

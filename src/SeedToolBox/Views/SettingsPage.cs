@@ -60,7 +60,7 @@ sealed class SettingsPage : ScrollViewer
         _autoStart.Click += (_, _) => { _o.SetAutoStart(_autoStart.IsChecked == true); _autoStart.IsChecked = _o.AutoStart(); };
         root.Children.Add(Section("常规", _autoStart, _lock));
 
-        _hotkeyStatus.Text = "点击输入框后直接按下组合键（如 Ctrl+Alt+A、F1）";
+        _hotkeyStatus.Text = "点击输入框后直接按下组合键（如 F1、Ctrl+Shift+S）";
         root.Children.Add(Section("快捷键", _hotkeys, _hotkeyStatus));
 
         root.Children.Add(Section("录屏", RecordSection()));
@@ -94,6 +94,9 @@ sealed class SettingsPage : ScrollViewer
     {
         _hotkeys.Children.Clear();
         var entries = _o.Hotkeys();
+        // The first four are the main ones; the rest are off by default
+        const int mainCount = 4;
+        var more = new StackPanel();
         for (int i = 0; i < entries.Count; i++)
         {
             int index = i;
@@ -133,8 +136,10 @@ sealed class SettingsPage : ScrollViewer
             // An unfinished combination falls back to the current one
             box.LostKeyboardFocus += (_, _) => box.Text = Display(value);
             var label = new TextBlock { Text = entries[i].Label, Width = 110, VerticalAlignment = VerticalAlignment.Center };
-            _hotkeys.Children.Add(Ui.Row(label, box, Ui.Button("清除", () => Apply(""))));
+            (i < mainCount ? _hotkeys : more).Children.Add(Ui.Row(label, box, Ui.Button("清除", () => Apply(""))));
         }
+        if (more.Children.Count > 0)
+            _hotkeys.Children.Add(new Expander { Header = "更多快捷键（默认未设置）", Content = more, Margin = new Thickness(0, 6, 0, 0) });
     }
 
     FrameworkElement RecordSection()

@@ -406,7 +406,7 @@ sealed class CaptureWindow : OverlayWindow
         int x = (int)p.X, y = (int)p.Y;
         var color = Shot.GetColor(x, y);
         _magnifier.Visibility = Visibility.Visible;
-        _magnifier.Update(x, y, $"{x + Shot.X}, {y + Shot.Y}\n{ColorText.Format(color, _service.Settings.ColorFormat)}\nC 复制颜色 · 右键/Esc 退出");
+        _magnifier.Update(x, y, $"{x + Shot.X}, {y + Shot.Y}\n{ColorText.Format(color, _service.Settings.ColorFormat)}\nC 复制颜色 · 右键/Esc 退出\nF 全屏 · W 窗口 · R 上次区域 · O 识字 · Q 扫码");
         PlaceNear(_magnifier, ToUi(p), 24);
     }
 
@@ -802,6 +802,20 @@ sealed class CaptureWindow : OverlayWindow
                 var last = _service.Settings.LastRegion!;
                 if (Fit(new Rect(last[0] - Shot.X, last[1] - Shot.Y, last[2], last[3])) is { } region) BeginEditing(region);
             }
+            else if (e.Key == Key.F && !ctrl)
+            {
+                BeginEditing(new Rect(0, 0, Shot.Width, Shot.Height));
+            }
+            else if (e.Key is Key.W or Key.O or Key.Q && !ctrl)
+            {
+                // Acts on the window under the cursor, as if it had been clicked
+                if (_selection.IsEmpty || (RecordMode && e.Key != Key.W)) return;
+                BeginEditing(_selection);
+                // Text and QR modes already run their action from BeginEditing
+                if (_mode != CaptureMode.Screenshot) return;
+                if (e.Key == Key.O) RecognizeText();
+                else if (e.Key == Key.Q) DecodeQrCodes();
+            }
             else if (e.Key == Key.C)
             {
                 var p = Clamp(Mouse.GetPosition(Surface));
@@ -815,6 +829,8 @@ sealed class CaptureWindow : OverlayWindow
             }
         }
         else if (e.Key == Key.Enter || (ctrl && e.Key == Key.C)) CopyAndClose();
+        else if (!ctrl && !RecordMode && e.Key == Key.O && _drag == DragMode.None) RecognizeText();
+        else if (!ctrl && !RecordMode && e.Key == Key.Q && _drag == DragMode.None) DecodeQrCodes();
         else if (!ctrl && Digit(e.Key) is { } digit && _drag == DragMode.None && CurrentTool == AnnotationTool.None)
         {
             // Typing a number starts entering an exact size

@@ -5,7 +5,7 @@ using System.Windows.Input;
 
 namespace SeedToolBox.Host;
 
-/// <summary>A key combination such as Ctrl+Alt+Q, stored as text in settings.</summary>
+/// <summary>A key combination such as Ctrl+Shift+Q, stored as text in settings.</summary>
 public readonly struct Hotkey
 {
     public ModifierKeys Modifiers { get; }

@@ -45,7 +45,7 @@ public class LaunchItem : ObservableObject
     public int RunCount { get; set; }
     /// <summary>Last launch time, the tie-breaker after <see cref="RunCount"/>.</summary>
     public DateTime? LastRun { get; set; }
-    /// <summary>Global hotkey that launches this item, e.g. "Ctrl+Alt+N". Empty means none.</summary>
+    /// <summary>Global hotkey that launches this item, e.g. "Ctrl+Shift+N". Empty means none.</summary>
     public string Hotkey { get; set; } = "";
 
     [JsonIgnore]
@@ -124,6 +124,8 @@ public class LauncherData
     public WindowSettings Window { get; set; } = new();
     /// <summary>Global hotkey that shows/hides the main window, e.g. "Ctrl+Q". Empty disables it.</summary>
     public string Hotkey { get; set; } = "Ctrl+Q";
+    /// <summary>Version of the default hotkeys the saved values were migrated to.</summary>
+    public int HotkeyDefaults { get; set; }
     /// <summary>Search box prefixes for web searches, e.g. "g hello".</summary>
     public List<WebSearchEngine> SearchEngines { get; set; } = new()
     {
