@@ -32,10 +32,26 @@ sealed class SystemToolsModule : IModule
         foreach (var (id, name) in new[] { ("keep-awake", "保持唤醒"), ("topmost", "窗口置顶"), ("env-vars", "环境变量"), ("startup", "启动项"), ("processes", "进程") })
             host.AddLauncherCommand("打开" + name + "页面", () => host.OpenPage(id));
         host.AddHotkey("topmost", "切换当前窗口置顶", "", () => Topmost.ToggleForeground());
+
+        _monitor = new MonitorService(host.Settings, () => host.OpenPage("monitor"));
+        host.AddPage("monitor", Submenu, "\uE9D2", "系统监控", () => new MonitorPage(_monitor));
+        host.AddTrayMenuItem("系统监控悬浮条（开/关）", _monitor.Toggle);
+        host.AddTrayMenuItem("系统监控鼠标穿透（开/关）", _monitor.ToggleClickThrough);
+        host.AddLauncherCommand("系统监控悬浮条（开/关）", _monitor.Toggle);
+        host.AddLauncherCommand("打开系统监控页面", () => host.OpenPage("monitor"));
+        host.AddHotkey("monitor", "显示/隐藏系统监控", "", _monitor.Toggle);
+        host.AddHotkey("monitor-through", "切换系统监控鼠标穿透", "", _monitor.ToggleClickThrough);
+
     }
 
     static void Add(IAppHost host, string text, string file) =>
         host.AddTrayMenuItem(text, () => ProcessLauncher.Start(file, displayName: text), Submenu);
 
-    public void Shutdown() => KeepAwake.Stop();
+    MonitorService? _monitor;
+
+    public void Shutdown()
+    {
+        KeepAwake.Stop();
+        _monitor?.Shutdown();
+    }
 }
