@@ -28,6 +28,8 @@ public partial class App : Application
     Clips.ClipboardHistory? _clipboard;
     Clips.ClipboardWindow? _clipboardWindow;
     ModuleManager? _modules;
+    const string ModuleHotkeysFile = "module-hotkeys";
+    Action? _saveModuleHotkeys;
     readonly List<HotkeyBinding> _hotkeys = new();
 
     /// <summary>A configurable global hotkey and the tray command it mirrors.</summary>
@@ -107,7 +109,7 @@ public partial class App : Application
         _tray.AddCommand("clipboard", "剪贴板历史", showClipboard);
         _tray.AddCommand("toolbox", "工具箱", () => toolbox.ShowAndActivate());
         toolbox.AddPage("clipboard", "\uE77F", "剪贴板", () => new Clips.ClipboardPage(clipboard));
-        toolbox.AddFooterPage("settings", "\uE713", "设置", () => new SettingsPage(new SettingsPage.Options
+        var settingsOptions = new SettingsPage.Options
         {
             SizeLocked = () => data.Window.SizeLocked,
             SetSizeLocked = _main.SetSizeLocked,
@@ -123,7 +125,8 @@ public partial class App : Application
             Restore = RestoreData,
             OpenData = () => ProcessLauncher.OpenLocation(AppPaths.Data),
             OpenApp = () => ProcessLauncher.OpenLocation(ProcessLauncher.ExePath),
-        }));
+        };
+        toolbox.AddFooterPage("settings", "\uE713", "设置", () => new SettingsPage(settingsOptions));
 
         _hotkeys.Add(new HotkeyBinding(TrayIcon.ShowWindowCommand, "呼出主窗口", () => data.Hotkey, v => data.Hotkey = v, main.ToggleFromHotkey));
         _hotkeys.Add(new HotkeyBinding("screenshot", "截图", () => screen.Settings.ScreenshotHotkey, v => screen.Settings.ScreenshotHotkey = v, () => RunHidden(screen.Screenshot)));
@@ -144,7 +147,21 @@ public partial class App : Application
         if (taken.Count > 0)
             _tray.ShowMessage($"热键已被其他程序占用：{string.Join("、", taken)}。可在「设置」页中更换");
 
-        _modules = new ModuleManager(new AppHost(_tray, settings, Dispatcher));
+        var moduleHotkeys = settings.Load<Dictionary<string, string>>(ModuleHotkeysFile);
+        _saveModuleHotkeys = () => settings.Save(ModuleHotkeysFile, moduleHotkeys);
+        _modules = new ModuleManager(new AppHost(_tray, settings, Dispatcher, new AppHost.Callbacks
+        {
+            AddPage = toolbox.AddGroupPage,
+            AddSettingsSection = (title, create) => settingsOptions.Extra.Add((title, create)),
+            AddHotkey = (id, label, fallback, pressed) =>
+            {
+                var binding = new HotkeyBinding("module:" + id, label,
+                    () => moduleHotkeys.TryGetValue(id, out var v) ? v : fallback, v => moduleHotkeys[id] = v, pressed);
+                _hotkeys.Add(binding);
+                if (!binding.Register(binding.Get()) && binding.Get().Length > 0)
+                    _tray.ShowMessage($"热键已被其他程序占用：{label} {binding.Get()}。可在「设置」页中更换");
+            },
+        }));
         _modules.LoadAll();
 
         try { DataBackup.AutoBackup(); }
@@ -197,6 +214,7 @@ public partial class App : Application
         _main!.RequestSave();
         _screenTools!.SaveSettings();
         _clipboard?.SaveSettings();
+        _saveModuleHotkeys?.Invoke();
         return null;
     }
 

@@ -121,6 +121,15 @@ public partial class ToolboxWindow : Window
         BuildNav();
     }
 
+    /// <summary>Adds a page at the end of <paramref name="group"/>, creating the group if it is new.</summary>
+    public void AddGroupPage(string id, string group, string glyph, string name, Func<FrameworkElement> create)
+    {
+        int last = _pages.FindLastIndex(p => p.Group == group);
+        if (last < 0) last = _pages.FindLastIndex(p => p.Group != FooterGroup);
+        _pages.Insert(last + 1, new Page(id, group, glyph, name, create));
+        BuildNav();
+    }
+
     /// <summary>Adds a page pinned to the bottom of the sidebar, such as settings.</summary>
     public void AddFooterPage(string id, string glyph, string name, Func<FrameworkElement> create)
     {

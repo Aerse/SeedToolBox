@@ -37,6 +37,8 @@ sealed class SettingsPage : ScrollViewer
         public Action Restore { get; set; } = () => { };
         public Action OpenData { get; set; } = () => { };
         public Action OpenApp { get; set; } = () => { };
+        /// <summary>Sections added by modules, shown before 数据.</summary>
+        public List<(string Title, Func<FrameworkElement> Create)> Extra { get; } = new();
     }
 
     readonly Options _o;
@@ -63,6 +65,8 @@ sealed class SettingsPage : ScrollViewer
 
         root.Children.Add(Section("录屏", RecordSection()));
         root.Children.Add(Section("剪贴板历史", ClipboardSection()));
+
+        foreach (var (title, create) in _o.Extra) root.Children.Add(Section(title, create()));
 
         root.Children.Add(Section("数据",
             Hint("启动项和所有设置保存在程序目录的 Data 文件夹，每天自动备份一次"),
