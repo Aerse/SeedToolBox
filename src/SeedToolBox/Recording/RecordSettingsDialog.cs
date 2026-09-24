@@ -27,6 +27,7 @@ static class RecordSettingsDialog
         var microphone = new CheckBox { Content = "录制麦克风", IsChecked = settings.Microphone };
         var cursor = new CheckBox { Content = "显示鼠标指针", IsChecked = settings.ShowCursor };
         var clicks = new CheckBox { Content = "显示鼠标点击效果", IsChecked = settings.ClickEffect };
+        var keys = new CheckBox { Content = "在视频中显示按下的按键（密码也会显示）", IsChecked = settings.ShowKeys };
         var countdown = new CheckBox { Content = "开始前倒计时 3 秒", IsChecked = settings.Countdown };
 
         int row = 0;
@@ -54,6 +55,7 @@ static class RecordSettingsDialog
         Add("", microphone);
         Add("鼠标", cursor);
         Add("", clicks);
+        Add("按键", keys);
         Add("其他", countdown);
 
         var hint = new TextBlock
@@ -83,6 +85,7 @@ static class RecordSettingsDialog
         settings.Microphone = microphone.IsChecked == true;
         settings.ShowCursor = cursor.IsChecked == true;
         settings.ClickEffect = clicks.IsChecked == true;
+        settings.ShowKeys = keys.IsChecked == true;
         settings.Countdown = countdown.IsChecked == true;
         return true;
     }

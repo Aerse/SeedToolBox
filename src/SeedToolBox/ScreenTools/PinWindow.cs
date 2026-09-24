@@ -18,7 +18,8 @@ sealed class PinWindow : Window
     static readonly Brush ActiveBorder = new SolidColorBrush(Color.FromRgb(30, 144, 255));
     static readonly Brush InactiveBorder = new SolidColorBrush(Color.FromRgb(144, 144, 144));
 
-    readonly BitmapSource _image;
+    BitmapSource _image;
+    bool _clickThrough;
     readonly ScreenToolService _service;
     readonly Image _view;
     readonly Border _frame;
@@ -72,6 +73,8 @@ sealed class PinWindow : Window
         menu.Items.Add(Item("复制", "Ctrl+C", () => ScreenToolService.CopyImage(_image)));
         menu.Items.Add(Item("保存...", "Ctrl+S", () => _service.SaveImage(_image, this)));
         menu.Items.Add(Item("原始大小", "1", () => SetZoom(1)));
+        menu.Items.Add(Item("标注...", "E", Annotate));
+        menu.Items.Add(Item("鼠标穿透", "T", () => SetClickThrough(true)));
         menu.Items.Add(Item("识别文字", null, () => _service.RecognizeText(_image)));
         menu.Items.Add(Item("识别二维码", null, () => _service.DecodeQrCodes(_image)));
 
@@ -139,7 +142,49 @@ sealed class PinWindow : Window
         else if (ctrl && e.Key == Key.C) ScreenToolService.CopyImage(_image);
         else if (ctrl && e.Key == Key.S) _service.SaveImage(_image, this);
         else if (e.Key is Key.D1 or Key.NumPad1) SetZoom(1);
+        else if (e.Key == Key.E) Annotate();
+        else if (e.Key == Key.T) SetClickThrough(true);
     }
+
+    void Annotate() => _service.Edit(_image, image =>
+    {
+        if (!IsLoaded) return;
+        _image = image;
+        _view.Source = image;
+        _view.Width = image.PixelWidth;
+        _view.Height = image.PixelHeight;
+    });
+
+    public static bool AnyClickThrough => All.Any(p => p._clickThrough);
+
+    /// <summary>Turns click-through on for every pin when none has it, otherwise off for all.</summary>
+    public static void ToggleClickThroughAll()
+    {
+        bool enable = !AnyClickThrough;
+        foreach (var pin in All) pin.SetClickThrough(enable, false);
+        if (enable && All.Count > 0) ShowHint();
+    }
+
+    void SetClickThrough(bool enable, bool hint = true)
+    {
+        var hwnd = new WindowInteropHelper(this).Handle;
+        if (hwnd == IntPtr.Zero) return;
+        _clickThrough = enable;
+        int style = GetWindowLong(hwnd, GWL_EXSTYLE);
+        SetWindowLong(hwnd, GWL_EXSTYLE, enable ? style | WS_EX_TRANSPARENT : style & ~WS_EX_TRANSPARENT);
+        _frame.BorderBrush = enable ? InactiveBorder : ActiveBorder;
+        if (enable && hint) ShowHint();
+    }
+
+    static void ShowHint() => Toast.Show("贴图已开启鼠标穿透。用托盘菜单「恢复贴图点击」或贴图穿透快捷键恢复", 4);
+
+    const int GWL_EXSTYLE = -20, WS_EX_TRANSPARENT = 0x20;
+
+    [DllImport("user32.dll")]
+    static extern int GetWindowLong(IntPtr hwnd, int index);
+
+    [DllImport("user32.dll")]
+    static extern int SetWindowLong(IntPtr hwnd, int index, int value);
 
     struct RECT { public int Left, Top, Right, Bottom; }
 

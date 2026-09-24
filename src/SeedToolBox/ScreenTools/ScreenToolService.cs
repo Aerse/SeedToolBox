@@ -15,7 +15,7 @@ using SeedToolBox.Recording;
 namespace SeedToolBox.ScreenTools;
 
 /// <summary>Entry points for screenshot, color picker, ruler, screen recording, OCR and QR codes, plus shared copy/save/pin helpers.</summary>
-public sealed class ScreenToolService
+public sealed partial class ScreenToolService
 {
     readonly ISettingsStore _store;
     readonly DispatcherTimer _trimTimer;
@@ -78,11 +78,27 @@ public sealed class ScreenToolService
     public async void RecognizeText(BitmapSource image)
     {
         if (!CheckOcr()) return;
+        if (Settings.OcrCopyDirectly)
+        {
+            try
+            {
+                var text = await TextRecognizer.RecognizeAsync(image, Settings.OcrLanguage);
+                if (text.Length > 0) CopyText(text);
+                Toast.Show(text.Length > 0 ? $"已复制识别的文字（{text.Length} 字）" : "未识别到文字");
+            }
+            catch (Exception ex)
+            {
+                Log.Error("OCR failed", ex);
+                Toast.Show($"识别失败：{ex.Message}");
+            }
+            return;
+        }
         var window = new TextResultWindow("识别文字", image);
+        window.AddTranslate(Settings.TranslateUrl);
         window.Show();
         try
         {
-            var text = await TextRecognizer.RecognizeAsync(image);
+            var text = await TextRecognizer.RecognizeAsync(image, Settings.OcrLanguage);
             window.SetResult(text, "未识别到文字");
         }
         catch (Exception ex)
@@ -159,6 +175,7 @@ public sealed class ScreenToolService
             Microphone = s.Microphone,
             ShowCursor = s.ShowCursor,
             ClickEffect = s.ClickEffect,
+            ShowKeys = s.ShowKeys,
             Scale = scale,
         };
         try
@@ -171,6 +188,7 @@ public sealed class ScreenToolService
         catch (Exception ex)
         {
             _recording = null;
+            options.Keys?.Dispose();
             Log.Error("Failed to start recording", ex);
             MessageBox.Show($"无法开始录屏：{ex.Message}", "SeedToolBox", MessageBoxButton.OK, MessageBoxImage.Warning);
         }
@@ -299,7 +317,7 @@ public sealed class ScreenToolService
         var dialog = new SaveFileDialog
         {
             Title = title,
-            FileName = $"{name}_{DateTime.Now:yyyyMMdd_HHmmss}",
+            FileName = name == "截图" ? FileName() : $"{name}_{DateTime.Now:yyyyMMdd_HHmmss}",
             Filter = "PNG 图片|*.png|JPEG 图片|*.jpg|BMP 图片|*.bmp",
             InitialDirectory = folder,
         };

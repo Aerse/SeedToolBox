@@ -47,19 +47,43 @@ static class TextRecognizer
     static bool HasLanguages() => OcrEngine.AvailableRecognizerLanguages.Count > 0;
 
     /// <summary>Recognized text, lines separated by CRLF; empty if nothing was found.</summary>
-    public static async Task<string> RecognizeAsync(BitmapSource image)
+    /// <param name="language">A Windows OCR language tag to use Windows OCR with; empty for the default engine.</param>
+    public static async Task<string> RecognizeAsync(BitmapSource image, string language = "")
     {
         if (!image.IsFrozen && image.CanFreeze) image.Freeze();
-        var pieces = await Task.Run(() => PaddleOcr.IsAvailable ? PaddleOcr.Recognize(image) : null)
-            ?? await RecognizeWithWindows(image);
+        bool windows = !string.IsNullOrEmpty(language) && WindowsAvailable;
+        var pieces = await Task.Run(() => !windows && PaddleOcr.IsAvailable ? PaddleOcr.Recognize(image) : null)
+            ?? await RecognizeWithWindows(image, windows ? language : "");
         return Layout(pieces);
     }
 
+    /// <summary>Installed Windows OCR languages as (tag, display name); empty when Windows OCR is unavailable.</summary>
+    public static List<(string Tag, string Name)> WindowsLanguages()
+    {
+        if (!WindowsAvailable) return new();
+        try { return ListLanguages(); }
+        catch (Exception ex)
+        {
+            Log.Error("Failed to list OCR languages", ex);
+            return new();
+        }
+    }
+
+    [MethodImpl(MethodImplOptions.NoInlining)]
+    static List<(string Tag, string Name)> ListLanguages() =>
+        OcrEngine.AvailableRecognizerLanguages.Select(l => (l.LanguageTag, l.DisplayName)).ToList();
+
     /// <summary>Words, in image pixels.</summary>
     [MethodImpl(MethodImplOptions.NoInlining)]
-    static async Task<List<(Rect Box, string Text)>> RecognizeWithWindows(BitmapSource image)
+    static async Task<List<(Rect Box, string Text)>> RecognizeWithWindows(BitmapSource image, string language)
     {
-        var engine = OcrEngine.TryCreateFromUserProfileLanguages()
+        OcrEngine? engine = null;
+        if (language.Length > 0)
+        {
+            try { engine = OcrEngine.TryCreateFromLanguage(new Windows.Globalization.Language(language)); }
+            catch (Exception ex) { Log.Error($"OCR language {language} unavailable", ex); }
+        }
+        engine ??= OcrEngine.TryCreateFromUserProfileLanguages()
             ?? OcrEngine.TryCreateFromLanguage(OcrEngine.AvailableRecognizerLanguages.First());
         if (engine == null) throw new InvalidOperationException("没有可用的识别语言");
 

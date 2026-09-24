@@ -155,6 +155,7 @@ sealed class SettingsPage : ScrollViewer
                 Toggle("录制麦克风", r.Microphone, v => r.Microphone = v),
                 Toggle("显示鼠标指针", r.ShowCursor, v => r.ShowCursor = v),
                 Toggle("显示鼠标点击效果", r.ClickEffect, v => r.ClickEffect = v),
+                Toggle("在视频中显示按键", r.ShowKeys, v => r.ShowKeys = v),
                 Toggle("开始前倒计时 3 秒", r.Countdown, v => r.Countdown = v),
             },
         };

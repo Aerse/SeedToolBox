@@ -56,6 +56,7 @@ sealed class ColorPickerWindow : OverlayWindow
     {
         var text = ColorText.Format(_color, _service.Settings.ColorFormat);
         Close();
+        _service.AddColor(_color);
         ScreenToolService.CopyText(text);
     }
 }
