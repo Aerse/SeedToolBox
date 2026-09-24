@@ -49,7 +49,7 @@ sealed class DiskUsagePage : DockPanel
         var browse = Ui.Button("浏览…", Browse);
         browse.Margin = new Thickness(8, 0, 16, 0);
         _scan = Ui.Button("分析", () => Scan(_folder.Text.Trim(), rescan: true), accent: true);
-        var row = Ui.Row(Ui.Label("文件夹"), _folder, browse, _scan, Ui.Button("上一级", Up), Ui.Button("停止", () => _cancel?.Cancel()), Ui.Button("打开", () => { if (Directory.Exists(_folder.Text)) ProcessLauncher.OpenLocation(_folder.Text); }));
+        var row = Ui.Row(Ui.Label("文件夹"), _folder, browse, _scan, Ui.Button("上一级", Up), Ui.Button("停止", () => _cancel?.Cancel()), Ui.Button("打开", () => { if (Directory.Exists(_folder.Text)) ProcessLauncher.OpenLocation(_folder.Text); }), ListTools.ExportButton(_list, _status, "磁盘占用.csv", ("名称", "Path"), ("占比", "PercentText")));
         _folder.KeyDown += (_, e) => { if (e.Key == System.Windows.Input.Key.Enter) Scan(_folder.Text.Trim(), rescan: false); };
         Ui.FileDrop(_folder, p => { if (Directory.Exists(p[0])) Scan(p[0], rescan: true); });
 
@@ -61,6 +61,7 @@ sealed class DiskUsagePage : DockPanel
         view.Columns.Add(new GridViewColumn { Header = "占比", Width = 190, CellTemplate = BarTemplate() });
         view.Columns.Add(new GridViewColumn { Header = "文件数", Width = 90, DisplayMemberBinding = new Binding(nameof(UsageItem.FilesText)) });
         _list.View = view;
+        ListTools.Sortable(_list, ("名称", "Name"), ("占比", "Percent"));
         _list.MouseDoubleClick += (_, _) =>
         {
             if (_list.SelectedItem is not UsageItem item) return;

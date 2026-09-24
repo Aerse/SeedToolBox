@@ -48,7 +48,7 @@ sealed class RenamePage : DockPanel
         _digits.Text = "2";
         _digits.ToolTip = "序号位数，不足补 0";
 
-        var row1 = Ui.Row(Ui.Button("添加文件", Pick), Ui.Button("清空", () => { _items.Clear(); _undo.Clear(); _status.Text = ""; }), Ui.Label("", 8), Ui.Label("排序"), _sort, Ui.Label("", 16), Ui.Label("大小写"), _case);
+        var row1 = Ui.Row(Ui.Button("添加文件", Pick), Ui.Button("清空", () => { _items.Clear(); _undo.Clear(); _status.Text = ""; }), Ui.Label("", 8), Ui.Label("排序"), _sort, Ui.Label("", 16), Ui.Label("大小写"), _case, Ui.Label("", 16), ListTools.ExportButton(_list, _status, "重命名预览.csv"));
         var row2 = Ui.Row(Ui.Label("查找"), _find, Ui.Label("", 8), Ui.Label("替换为"), _replace, Ui.Label("", 12), _regex, _withExt);
         var row3 = Ui.Row(Ui.Label("命名模板"), _template, Ui.Label("", 8), Ui.Label("起始"), _start, Ui.Label("", 8), Ui.Label("位数"), _digits, Ui.Label("", 16), Ui.Button("执行重命名", Apply, accent: true), Ui.Button("撤销", Undo));
 

@@ -44,7 +44,7 @@ sealed class DuplicatePage : DockPanel
         browse.Margin = new Thickness(8, 0, 16, 0);
         _scan = Ui.Button("开始查找", Scan, accent: true);
         var row1 = Ui.Row(Ui.Label("文件夹"), _folder, browse, Ui.Label("最小"), _minSize, Ui.Label("KB", 16), _scan, Ui.Button("停止", () => _cancel?.Cancel()));
-        var row2 = Ui.Row(Ui.Button("每组保留最早的", () => AutoCheck(keepOldest: true)), Ui.Button("每组保留最新的", () => AutoCheck(keepOldest: false)), Ui.Button("取消勾选", () => { foreach (var i in _items) i.Check = false; }), Ui.Label("", 16), Ui.Button("删除勾选（回收站）", DeleteChecked));
+        var row2 = Ui.Row(Ui.Button("每组保留最早的", () => AutoCheck(keepOldest: true)), Ui.Button("每组保留最新的", () => AutoCheck(keepOldest: false)), Ui.Button("取消勾选", () => { foreach (var i in _items) i.Check = false; }), Ui.Label("", 16), Ui.Button("删除勾选（回收站）", DeleteChecked), ListTools.ExportButton(_list, _status, "重复文件.csv"));
         Ui.FileDrop(_folder, p => { if (Directory.Exists(p[0])) _folder.Text = p[0]; });
 
         _list.ItemsSource = _items;
@@ -58,6 +58,7 @@ sealed class DuplicatePage : DockPanel
         view.Columns.Add(new GridViewColumn { Header = "修改时间", Width = 140, DisplayMemberBinding = new Binding(nameof(DuplicateItem.Modified)) { StringFormat = "yyyy-MM-dd HH:mm" } });
         view.Columns.Add(new GridViewColumn { Header = "路径", Width = 470, DisplayMemberBinding = new Binding(nameof(DuplicateItem.Path)) });
         _list.View = view;
+        ListTools.Sortable(_list);
         _list.MouseDoubleClick += (_, _) => { if (_list.SelectedItem is DuplicateItem item) ProcessLauncher.OpenLocation(item.Path); };
         _list.ToolTip = "双击打开所在位置";
 

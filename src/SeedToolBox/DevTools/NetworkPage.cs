@@ -71,7 +71,7 @@ sealed class NetworkPage : DockPanel
         var toolbar = Ui.Row(Ui.Label("筛选"), _filter, Ui.Label("", 12), _listenOnly, Ui.Button("刷新", RefreshPorts), Ui.Button("结束进程", KillSelected), Ui.Button("打开位置", () =>
         {
             if (_portList.SelectedItem is PortEntry { ProcessPath: { } path }) Launcher.ProcessLauncher.OpenLocation(path);
-        }));
+        }), ListTools.ExportButton(_portList, _portStatus, "端口占用.csv"));
         toolbar.Margin = new Thickness(0, 10, 0, 10);
 
         _portList.ItemsSource = _ports;
@@ -86,6 +86,7 @@ sealed class NetworkPage : DockPanel
         Column("PID", nameof(PortEntry.Pid), 64);
         Column("进程", nameof(PortEntry.Process), 150);
         _portList.View = view;
+        ListTools.Sortable(_portList);
         var menu = new ContextMenu();
         menu.Items.Add(MenuItem("结束进程", KillSelected));
         menu.Items.Add(MenuItem("打开文件位置", () => { if (_portList.SelectedItem is PortEntry { ProcessPath: { } path }) Launcher.ProcessLauncher.OpenLocation(path); }));
