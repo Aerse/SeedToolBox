@@ -698,13 +698,14 @@ public partial class MainWindow : Window
         else if (SplitPrefix(text) is { } split)
         {
             var (prefix, rest) = split;
-            if (string.Equals(prefix, "t", StringComparison.OrdinalIgnoreCase) && ToolSearch != null)
+            if (string.Equals(prefix, "f", StringComparison.OrdinalIgnoreCase))
+                list.AddRange(FileCommands(rest));
+            else if (string.Equals(prefix, "t", StringComparison.OrdinalIgnoreCase) && ToolSearch != null)
             {
                 foreach (var (name, open) in ToolSearch(rest))
                     list.Add(new SearchCommand("\uE8FD", name, "工具箱", () =>
                     {
                         open();
-                        if (IsVisible) Hide();
                     }));
                 if (list.Count == 0) list.Add(new SearchCommand("\uE8FD", "工具箱", "没有找到匹配的工具", null));
             }
@@ -718,6 +719,43 @@ public partial class MainWindow : Window
                 }));
             }
         }
+        return list;
+    }
+
+    string? _fileQuery;
+    List<string>? _fileResults;
+
+    /// <summary>Found files for the "f " prefix; the search runs in the background and refreshes the list when done.</summary>
+    List<SearchCommand> FileCommands(string query)
+    {
+        var list = new List<SearchCommand>();
+        if (query.Length == 0)
+        {
+            list.Add(new SearchCommand("\uE721", "查找文件", $"输入文件名，回车打开，Ctrl+回车打开所在文件夹（{FileSearch.Engine}）", null));
+            return list;
+        }
+        if (_fileQuery != query)
+        {
+            _fileQuery = query;
+            _fileResults = null;
+            System.Threading.Tasks.Task.Run(() => FileSearch.Find(query)).ContinueWith(t =>
+            {
+                if (_fileQuery != query) return;
+                _fileResults = t.Status == System.Threading.Tasks.TaskStatus.RanToCompletion ? t.Result : new List<string>();
+                UpdateSearch();
+            }, System.Threading.Tasks.TaskScheduler.FromCurrentSynchronizationContext());
+        }
+        if (_fileResults == null)
+        {
+            list.Add(new SearchCommand("\uE721", "正在查找…", FileSearch.Engine, null));
+            return list;
+        }
+        foreach (var path in _fileResults)
+            list.Add(new SearchCommand(Directory.Exists(path) ? "\uE8B7" : "\uE8A5", Path.GetFileName(path), path, () =>
+            {
+                if (ProcessLauncher.Start(path)) Hide();
+            }) { RunAlt = () => { ProcessLauncher.OpenLocation(path); Hide(); } });
+        if (list.Count == 0) list.Add(new SearchCommand("\uE721", "没有找到文件", $"{FileSearch.Engine} 里没有名字包含「{query}」的文件", null));
         return list;
     }
 
@@ -795,7 +833,11 @@ public partial class MainWindow : Window
 
         if (e.Key == Key.Enter)
         {
-            if (_highlight >= 0 && _highlight < _entries.Count) RunEntry(_entries[_highlight]);
+            if (_highlight >= 0 && _highlight < _entries.Count)
+            {
+                if (Keyboard.Modifiers == ModifierKeys.Control && _entries[_highlight] is SearchCommand { RunAlt: { } alt }) alt();
+                else RunEntry(_entries[_highlight]);
+            }
             e.Handled = true;
             return;
         }

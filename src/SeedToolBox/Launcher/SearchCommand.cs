@@ -21,5 +21,7 @@ public sealed class SearchCommand : ObservableObject
     public string Subtitle { get => _subtitle; set => Set(ref _subtitle, value); }
     /// <summary>Null when there is nothing to do yet, e.g. an incomplete expression.</summary>
     public Action? Run { get; }
+    /// <summary>Run by Ctrl+Enter, e.g. opening a found file's folder.</summary>
+    public Action? RunAlt { get; set; }
     public bool IsHighlighted { get => _isHighlighted; set => Set(ref _isHighlighted, value); }
 }
