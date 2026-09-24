@@ -175,6 +175,7 @@ public sealed partial class ScreenToolService
             Microphone = s.Microphone,
             ShowCursor = s.ShowCursor,
             ClickEffect = s.ClickEffect,
+            ShowKeys = s.ShowKeys,
             Scale = scale,
         };
         try
@@ -187,6 +188,7 @@ public sealed partial class ScreenToolService
         catch (Exception ex)
         {
             _recording = null;
+            options.Keys?.Dispose();
             Log.Error("Failed to start recording", ex);
             MessageBox.Show($"无法开始录屏：{ex.Message}", "SeedToolBox", MessageBoxButton.OK, MessageBoxImage.Warning);
         }

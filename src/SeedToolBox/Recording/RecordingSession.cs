@@ -36,6 +36,7 @@ sealed class RecordingSession
     {
         _region = region;
         _options = options;
+        if (options.ShowKeys) options.Keys = new KeyWatcher();
         var folder = Path.Combine(Path.GetTempPath(), "SeedToolBox");
         Directory.CreateDirectory(folder);
         _recorder = new Recorder(region, options, Path.Combine(folder, $"rec_{DateTime.Now:yyyyMMdd_HHmmss_fff}.mp4"));
@@ -111,6 +112,7 @@ sealed class RecordingSession
         _bar.ShowSaving();
 
         var error = await _recorder.Completion;
+        _options.Keys?.Dispose();
         // Cancelled in the countdown: finalizing an empty file may fail, which doesn't matter
         if (!_started) error = null;
         _frame.Close();

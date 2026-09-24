@@ -68,6 +68,7 @@ public class RecordSettings
     public bool Microphone { get; set; }
     public bool ShowCursor { get; set; } = true;
     public bool ClickEffect { get; set; } = true;
+    public bool ShowKeys { get; set; }
     public bool Countdown { get; set; } = true;
     public int GifFps { get; set; } = 15;
     /// <summary>GIF size in percent of the recording.</summary>

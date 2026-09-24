@@ -18,6 +18,10 @@ sealed class RecordOptions
     public bool Microphone { get; set; }
     public bool ShowCursor { get; set; } = true;
     public bool ClickEffect { get; set; } = true;
+    /// <summary>Draw recent key presses near the bottom of the video.</summary>
+    public bool ShowKeys { get; set; }
+    /// <summary>Set by the session when <see cref="ShowKeys"/> is on.</summary>
+    public KeyWatcher? Keys { get; set; }
     /// <summary>Monitor scale factor, so cursor effects keep their apparent size.</summary>
     public double Scale { get; set; } = 1;
 }
@@ -316,8 +320,39 @@ sealed class Recorder
             }
 
             if (_options.ClickEffect) DrawClicks(clicks, now);
+            if (_options.Keys?.Current is { } keys) DrawKeys(keys);
             if (_options.ShowCursor) DrawCursor();
             GdiFlush();
+        }
+
+        Font? _keyFont;
+
+        void DrawKeys(string text)
+        {
+            float size = (float)(18 * _options.Scale);
+            _keyFont ??= new Font("Segoe UI", size, FontStyle.Bold, GraphicsUnit.Pixel);
+            var measured = _graphics.MeasureString(text, _keyFont);
+            float padX = size * 0.7f, padY = size * 0.35f;
+            float w = measured.Width + padX * 2, h = measured.Height + padY * 2;
+            float x = (_region.Width - w) / 2, y = _region.Height - h - size * 1.5f;
+            if (y < 0) y = 0;
+            using (var path = RoundedRect(x, y, w, h, size * 0.4f))
+            using (var fill = new SolidBrush(Color.FromArgb(200, 30, 30, 30)))
+                _graphics.FillPath(fill, path);
+            _graphics.TextRenderingHint = System.Drawing.Text.TextRenderingHint.AntiAliasGridFit;
+            _graphics.DrawString(text, _keyFont, Brushes.White, x + padX, y + padY);
+            _graphics.Flush();
+        }
+
+        static GraphicsPath RoundedRect(float x, float y, float w, float h, float r)
+        {
+            var path = new GraphicsPath();
+            path.AddArc(x, y, r * 2, r * 2, 180, 90);
+            path.AddArc(x + w - r * 2, y, r * 2, r * 2, 270, 90);
+            path.AddArc(x + w - r * 2, y + h - r * 2, r * 2, r * 2, 0, 90);
+            path.AddArc(x, y + h - r * 2, r * 2, r * 2, 90, 90);
+            path.CloseFigure();
+            return path;
         }
 
         void DrawClicks(IEnumerable<Click> clicks, long now)
@@ -359,6 +394,7 @@ sealed class Recorder
         public void Dispose()
         {
             _graphics.Dispose();
+            _keyFont?.Dispose();
             SelectObject(_dc, _old);
             DeleteObject(_bitmap);
             DeleteDC(_dc);
