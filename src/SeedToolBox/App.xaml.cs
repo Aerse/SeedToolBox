@@ -85,6 +85,7 @@ public partial class App : Application
         var main = _main;
         var toolbox = _toolbox = new ToolboxWindow(data, main.RequestSave, RunHidden);
         main.ToolboxRequested += () => toolbox.ShowAndActivate();
+        main.SettingsRequested += () => toolbox.ShowAndActivate("settings");
         main.ToolSearch = toolbox.SearchTools;
         main.AppHotkeyOwner = v => _hotkeys.FirstOrDefault(h => h.Get() == v)?.Label;
 
@@ -132,7 +133,6 @@ public partial class App : Application
         main.AddQuickButton("\uE70B", "便签", noteWindows.New, () => _hotkeys.FirstOrDefault(h => h.Command == "notes")?.Get() ?? "");
         main.AddQuickButton("\uE943", "开发工具", () => toolbox.ShowAndActivate("format"));
         main.AddQuickButton("\uE8FD", "全部工具", () => toolbox.ShowAndActivate());
-        main.AddQuickButton("\uE713", "设置", () => toolbox.ShowAndActivate("settings"));
         _tray.AddCommand("clipboardPause", "暂停记录剪贴板", () => clipboard.Recording = !clipboard.Recording);
         clipboard.RecordingChanged += () => _tray.SetChecked("clipboardPause", !clipboard.Recording);
         _tray.SetChecked("clipboardPause", !clipboard.Recording);

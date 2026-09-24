@@ -251,6 +251,8 @@
         <DockPanel Margin="14,0,6,0">
             <Button DockPanel.Dock="Right" Content="&#xE8BB;" Style="{StaticResource CloseButton}" Click="OnCloseClick"
                     ToolTip="隐藏到托盘" AutomationProperties.Name="隐藏到托盘" WindowChrome.IsHitTestVisibleInChrome="True" />
+            <Button DockPanel.Dock="Right" Content="&#xE713;" Style="{StaticResource IconButton}" Click="OnSettingsClick" Margin="0,0,4,0"
+                    ToolTip="设置" AutomationProperties.Name="设置" WindowChrome.IsHitTestVisibleInChrome="True" />
             <Button DockPanel.Dock="Right" Content="&#xE8FD;" Style="{StaticResource IconButton}" Click="OnToolboxClick" Margin="0,0,4,0"
                     ToolTip="工具箱：屏幕工具、剪贴板历史、开发工具和设置" AutomationProperties.Name="工具箱" WindowChrome.IsHitTestVisibleInChrome="True" />
             <Image Source="/Assets/app.ico" Width="18" Height="18" VerticalAlignment="Center" RenderOptions.BitmapScalingMode="HighQuality" />
@@ -319,7 +321,10 @@
             </DockPanel>
 
             <!-- Quick tools -->
-            <WrapPanel x:Name="QuickBar" Grid.Row="3" Margin="0,10,0,0" HorizontalAlignment="Center" />
+            <Border Grid.Row="3" Margin="0,10,0,0" CornerRadius="8" Padding="6"
+                    Background="{StaticResource CardBrush}" BorderBrush="{StaticResource CardBorderBrush}" BorderThickness="1">
+                <UniformGrid x:Name="QuickBar" Columns="4" />
+            </Border>
 
             <!-- Items -->
             <Border Grid.Row="2" CornerRadius="8"

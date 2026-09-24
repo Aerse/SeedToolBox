@@ -209,34 +209,56 @@ public partial class MainWindow : Window
 
     void OnToolboxClick(object sender, RoutedEventArgs e) => ToolboxRequested?.Invoke();
 
-    /// <summary>Adds an icon button to the bar under the items.</summary>
+    /// <summary>The title bar button that opens the settings page.</summary>
+    public event Action? SettingsRequested;
+
+    void OnSettingsClick(object sender, RoutedEventArgs e) => SettingsRequested?.Invoke();
+
+    /// <summary>Tile colours for the quick buttons, in order.</summary>
+    static readonly string[] QuickColors = { "#0078D4", "#E74856", "#8764B8", "#00A67E", "#F7630C", "#E3A21A", "#0099BC", "#6B7280" };
+
+    /// <summary>Adds a coloured icon tile to the card under the items; the hotkey shows in its tooltip.</summary>
     public void AddQuickButton(string glyph, string label, Action action, Func<string>? hotkey = null)
     {
-        var keys = new System.Windows.Controls.TextBlock { FontFamily = new System.Windows.Media.FontFamily("Microsoft YaHei UI, Segoe UI"), FontSize = 10, Opacity = 0.6, Margin = new Thickness(0, 1, 0, 0), HorizontalAlignment = HorizontalAlignment.Center };
-        if (hotkey != null)
+        var color = (System.Windows.Media.Color)System.Windows.Media.ColorConverter.ConvertFromString(QuickColors[QuickBar.Children.Count % QuickColors.Length]);
+        var tile = new System.Windows.Controls.Border
         {
-            void Refresh() { var k = hotkey(); keys.Text = k; keys.Visibility = k.Length > 0 ? Visibility.Visible : Visibility.Collapsed; }
-            Refresh();
-            Activated += (_, _) => Refresh();
-        }
-        else keys.Visibility = Visibility.Collapsed;
+            Width = 36,
+            Height = 36,
+            CornerRadius = new CornerRadius(10),
+            Background = new System.Windows.Media.SolidColorBrush(System.Windows.Media.Color.FromArgb(0x1F, color.R, color.G, color.B)),
+            Child = new System.Windows.Controls.TextBlock
+            {
+                Text = glyph,
+                FontFamily = new System.Windows.Media.FontFamily("Segoe Fluent Icons, Segoe MDL2 Assets"),
+                FontSize = 17,
+                Foreground = new System.Windows.Media.SolidColorBrush(color),
+                HorizontalAlignment = HorizontalAlignment.Center,
+                VerticalAlignment = VerticalAlignment.Center,
+            },
+        };
         var button = new System.Windows.Controls.Button
         {
             Style = (Style)FindResource("IconButton"),
-            Width = 76,
-            Height = 62,
-            Margin = new Thickness(2, 0, 2, 0),
+            Width = double.NaN,
+            Height = 70,
+            Margin = new Thickness(2),
             ToolTip = label,
             Content = new System.Windows.Controls.StackPanel
             {
                 Children =
                 {
-                    new System.Windows.Controls.TextBlock { Text = glyph, FontFamily = new System.Windows.Media.FontFamily("Segoe Fluent Icons, Segoe MDL2 Assets"), FontSize = 18, HorizontalAlignment = HorizontalAlignment.Center },
-                    new System.Windows.Controls.TextBlock { Text = label, FontFamily = new System.Windows.Media.FontFamily("Microsoft YaHei UI, Segoe UI"), FontSize = 11, Margin = new Thickness(0, 4, 0, 0), HorizontalAlignment = HorizontalAlignment.Center },
-                    keys,
+                    tile,
+                    new System.Windows.Controls.TextBlock { Text = label, FontFamily = new System.Windows.Media.FontFamily("Microsoft YaHei UI, Segoe UI"), FontSize = 12, Foreground = (System.Windows.Media.Brush)FindResource("TextBrush"), Margin = new Thickness(0, 6, 0, 0), HorizontalAlignment = HorizontalAlignment.Center },
                 },
             },
         };
+        if (hotkey != null)
+        {
+            void Refresh() { var k = hotkey(); button.ToolTip = k.Length > 0 ? $"{label}（{k}）" : label; }
+            Refresh();
+            Activated += (_, _) => Refresh();
+        }
         System.Windows.Automation.AutomationProperties.SetName(button, label);
         button.Click += (_, _) => action();
         QuickBar.Children.Add(button);
