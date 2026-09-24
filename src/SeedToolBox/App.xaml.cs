@@ -118,6 +118,7 @@ public partial class App : Application
         _tray.AddCommand("toolbox", "工具箱", () => toolbox.ShowAndActivate());
         toolbox.AddPage("clipboard", "\uE77F", "剪贴板", () => new Clips.ClipboardPage(clipboard));
         toolbox.AddPage("captures", "\uE91B", "截图历史", () => new CaptureHistoryPage(screen));
+        toolbox.AddPage("colors", "\uE790", "颜色", () => new ColorPage(screen));
         var settingsOptions = new SettingsPage.Options
         {
             SizeLocked = () => data.Window.SizeLocked,

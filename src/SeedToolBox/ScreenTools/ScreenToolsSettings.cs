@@ -1,3 +1,5 @@
+using System.Collections.Generic;
+
 namespace SeedToolBox.ScreenTools;
 
 public class ScreenToolsSettings
@@ -40,6 +42,10 @@ public class ScreenToolsSettings
     public string AutoSaveFolder { get; set; } = "";
     /// <summary>How many screenshots to keep in Data\captures; 0 turns the history off.</summary>
     public int HistoryCount { get; set; } = 50;
+
+    /// <summary>Recently picked colours as hex, newest first.</summary>
+    public List<string> ColorHistory { get; set; } = new();
+    public List<string> FavoriteColors { get; set; } = new();
 
     public RecordSettings Record { get; set; } = new();
 }
