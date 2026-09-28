@@ -199,7 +199,10 @@ public partial class App : Application
         main.AddQuickButton("\uE99A", "AI 助手", () => ai.Open(), () => ai.Settings.OpenHotkey);
         main.AddQuickButton("\uE8FD", "全部工具", () => toolbox.ShowAndActivate());
         toolbox.AddGroupPage("api", "开发调试", "\uE774", "API 请求", () => new DevTools.ApiPage(prompt => ai.Ready() ? ai.CompleteAsync(prompt) : throw new InvalidOperationException("AI 助手没有开启")));
-        toolbox.AddTool("terminal", "\uE756", "终端 / SSH", () => Terminal.TerminalWindow.Open(prompt => ai.Ready() ? ai.CompleteAsync(prompt) : throw new InvalidOperationException("AI 助手没有开启")), hide: false);
+        void OpenTerminal() => Terminal.TerminalWindow.Open(prompt => ai.Ready() ? ai.CompleteAsync(prompt) : throw new InvalidOperationException("AI 助手没有开启"));
+        toolbox.AddGroupPage("terminal", "开发调试", "", "终端 / SSH", () => Terminal.TerminalWindow.Launcher(OpenTerminal));
+        main.AddQuickButton("", "终端 / SSH", OpenTerminal);
+        _tray.AddCommand("terminal", "终端 / SSH", OpenTerminal);
         toolbox.AddPage("aiPlugins", "\uEA86", "AI 插件和技能", () => new Ai.Automation.PluginsPage(ai));
         toolbox.AddTool("ai", "\uE99A", "AI 助手", () => ai.Open(), hide: false);
         toolbox.AddTool("aiScreenshot", "\uE722", "截图问 AI", () => { if (ai.Ready()) screen.AskAi(); });

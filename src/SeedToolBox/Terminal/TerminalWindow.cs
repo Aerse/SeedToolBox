@@ -1,6 +1,7 @@
 using System;
 using System.Threading.Tasks;
 using System.Windows;
+using SeedToolBox.DevTools;
 using SeedToolBox.DevTools.Api;
 using SeedToolBox.Views;
 
@@ -11,6 +12,18 @@ sealed class TerminalWindow : Window
 {
     static TerminalWindow? _open;
     readonly TerminalPage _page;
+
+    /// <summary>The toolbox page for the terminal: opens the window whenever the page is shown.</summary>
+    public static FrameworkElement Launcher(Action open)
+    {
+        var panel = new System.Windows.Controls.StackPanel { HorizontalAlignment = HorizontalAlignment.Center, VerticalAlignment = VerticalAlignment.Center };
+        panel.Children.Add(new System.Windows.Controls.TextBlock { Text = "终端 / SSH 在单独的窗口里打开", FontSize = 16, Margin = new Thickness(0, 0, 0, 12) });
+        var button = Ui.Button("打开终端窗口", open, accent: true);
+        button.HorizontalAlignment = HorizontalAlignment.Center;
+        panel.Children.Add(button);
+        panel.Loaded += (_, _) => open();
+        return panel;
+    }
 
     public static void Open(Func<string, Task<string>>? ai)
     {
