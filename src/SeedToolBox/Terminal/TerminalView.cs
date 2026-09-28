@@ -64,7 +64,7 @@ static class TerminalThemes
 /// <summary>One xterm.js terminal in a WebView2, wired to an <see cref="ISession"/>.</summary>
 sealed class TerminalView : Border
 {
-    const string VirtualHost = "stb-terminal.local";
+    const string VirtualHost = "stb-terminal.example";
     static Task<CoreWebView2Environment>? _environment;
 
     readonly WebView2 _web = new() { DefaultBackgroundColor = System.Drawing.Color.Transparent };
