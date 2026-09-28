@@ -29,6 +29,8 @@ public sealed class AiSettings
     public bool AllowCommands { get; set; }
     /// <summary>Installed pi packages (plugins) are loaded in automation mode.</summary>
     public bool LoadPlugins { get; set; } = true;
+    /// <summary>Plugin tools run without asking; SeedToolBox's own tools are still confirmed.</summary>
+    public bool TrustPlugins { get; set; }
     /// <summary>Opens new windows in automation mode.</summary>
     public bool AutomationDefault { get; set; }
     public List<QuickTask> QuickTasks { get; set; } = new();

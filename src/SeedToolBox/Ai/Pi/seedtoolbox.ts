@@ -78,14 +78,16 @@ export default function (pi: ExtensionAPI) {
 		});
 	}
 
+	let trustAll = process.env.STB_TRUST_PLUGINS === "1";
 	pi.on("tool_call", async (event, ctx) => {
-		if (own.has(event.toolName) || allowed.has(event.toolName)) return undefined;
+		if (trustAll || own.has(event.toolName) || allowed.has(event.toolName)) return undefined;
 		const input = JSON.stringify(event.input, null, 2);
 		const choice = await ctx.ui.select(
 			`插件工具「${event.toolName}」想要运行：\n\n${input.length > 1500 ? input.slice(0, 1500) + "…" : input}`,
-			["允许", "拒绝", "本次对话都允许"],
+			["允许", "拒绝", "本次对话都允许", "本次对话所有插件都允许"],
 		);
 		if (choice === "本次对话都允许") allowed.add(event.toolName);
+		else if (choice === "本次对话所有插件都允许") trustAll = true;
 		else if (choice !== "允许") return { block: true, reason: "用户拒绝了这次调用" };
 		return undefined;
 	});

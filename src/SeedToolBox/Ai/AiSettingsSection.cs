@@ -324,6 +324,7 @@ static class AiSettingsSection
 
         panel.Children.Add(Option("允许 AI 运行 PowerShell 命令（每条都要你确认；命令能做任何事，看不懂的别点允许）", s.AllowCommands, v => s.AllowCommands = v));
         panel.Children.Add(Option("自动化模式加载已安装的 pi 插件和技能（插件工具每次调用也会先问你）", s.LoadPlugins, v => s.LoadPlugins = v));
+        panel.Children.Add(Option("插件工具直接运行，不再询问（只影响插件，本程序自己的改动仍会确认）", s.TrustPlugins, v => s.TrustPlugins = v));
         panel.Children.Add(Spaced(Ui.Row(Ui.Button("管理插件和技能…", service.OpenPlugins), Hint("  改动在新开的对话里生效"))));
         return new Expander { Header = "自动化模式", Content = panel, Margin = new Thickness(0, 4, 0, 4) };
     }

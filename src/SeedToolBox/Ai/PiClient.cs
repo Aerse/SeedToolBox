@@ -89,6 +89,7 @@ sealed class PiClient : IDisposable
             ["STB_PIPE"] = @"\\.\pipe\" + server.PipeName,
             ["STB_TOKEN"] = server.Token,
             ["STB_TOOLS"] = server.ManifestPath,
+            ["STB_TRUST_PLUGINS"] = settings.TrustPlugins ? "1" : "",
         });
     }
 
