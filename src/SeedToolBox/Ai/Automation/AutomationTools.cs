@@ -65,10 +65,12 @@ static class AutomationTools
             new()
             {
                 Name = "search_files", Label = "搜索文件",
-                Description = "按文件名在整台电脑上搜索文件（装了 Everything 就用 Everything，否则用 Windows 搜索），最多返回 30 个。",
-                Parameters = Params(("query", "string", "文件名关键词，可以用空格分隔多个词", true)),
+                Description = "按文件名搜索文件，最多返回 30 个。传 path 时只在这个文件夹（含子文件夹）里找；不传时在整台电脑上找（装了 Everything 就用 Everything，否则用 Windows 搜索）。",
+                Parameters = Params(("query", "string", "文件名关键词，可以用空格分隔多个词", true), ("path", "string", "只在这个文件夹里找", false)),
                 Run = (a, _) => Task.Run(() =>
                 {
+                    var folder = Str(a, "path", "");
+                    if (folder.Length > 0) return SearchIn(FileActions.Readable(folder), Str(a, "query"));
                     var found = FileSearch.Find(Str(a, "query"));
                     return Reply(found.Count == 0 ? "没有找到" : $"（{FileSearch.Engine}）\n" + string.Join("\n", found));
                 }),
@@ -275,6 +277,32 @@ static class AutomationTools
     }
 
     // Parameters
+
+    /// <summary>Files under a folder whose names contain every word; unreadable subfolders are skipped.</summary>
+    static ToolReply SearchIn(string folder, string query)
+    {
+        if (!Directory.Exists(folder)) throw new ToolException("文件夹不存在：" + folder);
+        var words = query.Split(new[] { ' ' }, StringSplitOptions.RemoveEmptyEntries);
+        var found = new List<string>();
+        var pending = new Stack<string>();
+        pending.Push(folder);
+        while (pending.Count > 0 && found.Count < 30)
+        {
+            var dir = pending.Pop();
+            try
+            {
+                foreach (var entry in Directory.EnumerateFileSystemEntries(dir))
+                {
+                    var name = Path.GetFileName(entry);
+                    if (words.All(w => name.IndexOf(w, StringComparison.OrdinalIgnoreCase) >= 0)) found.Add(entry);
+                    if (found.Count >= 30) break;
+                    if (Directory.Exists(entry) && (File.GetAttributes(entry) & FileAttributes.ReparsePoint) == 0) pending.Push(entry);
+                }
+            }
+            catch (Exception ex) when (ex is IOException or UnauthorizedAccessException) { }
+        }
+        return Reply(found.Count == 0 ? "没有找到" : string.Join("\n", found));
+    }
 
     static JObject Params(params (string Name, string Type, string Description, bool Required)[] items)
     {

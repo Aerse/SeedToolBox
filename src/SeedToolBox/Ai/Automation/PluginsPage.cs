@@ -240,9 +240,12 @@ sealed class PluginsPage : DockPanel
         _output.Clear();
         var info = PiRuntime.StartInfo(install, _service.Settings, args);
         var registry = PiMirrors.Order(_service.Settings).First().Registry;
+        // Our own npmrc like the installer's, so a stale proxy or registry in the user's npm settings doesn't break installs
+        Directory.CreateDirectory(PiRuntime.Root);
+        var npmrc = Path.Combine(PiRuntime.Root, "plugins.npmrc");
+        File.WriteAllText(npmrc, $"registry={registry}\nfund=false\naudit=false\nupdate-notifier=false\n");
+        info.EnvironmentVariables["npm_config_userconfig"] = npmrc;
         info.EnvironmentVariables["npm_config_registry"] = registry;
-        info.EnvironmentVariables["npm_config_fund"] = "false";
-        info.EnvironmentVariables["npm_config_audit"] = "false";
         info.EnvironmentVariables["NO_COLOR"] = "1";
         info.RedirectStandardOutput = info.RedirectStandardError = true;
         info.StandardOutputEncoding = info.StandardErrorEncoding = new UTF8Encoding(false);
