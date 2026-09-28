@@ -26,6 +26,8 @@ sealed class SystemToolsModule : IModule
         host.AddPage("env-vars", Submenu, "\uE943", "环境变量", () => new EnvVarsPage());
         host.AddPage("startup", Submenu, "\uE768", "启动项", () => new StartupPage());
         host.AddPage("processes", Submenu, "\uE9D9", "进程", () => new ProcessPage());
+        host.AddPage("services", Submenu, "\uE912", "本地服务", () => new ServicesPage());
+        LocalServices.StartAutoStart();
 
         host.AddTrayMenuItem("保持唤醒（开/关）", KeepAwake.Toggle);
         host.AddLauncherCommand("保持唤醒（开/关）", KeepAwake.Toggle);

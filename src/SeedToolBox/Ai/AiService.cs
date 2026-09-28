@@ -3,6 +3,8 @@ using System.Collections.Generic;
 using System.Linq;
 using SeedToolBox.Reminders;
 using System.Runtime.InteropServices;
+using System.Text;
+using System.Threading.Tasks;
 using System.Windows;
 using System.Windows.Media.Imaging;
 using System.Windows.Threading;
@@ -115,6 +117,21 @@ sealed class AiService
         if (task == null) return;
         if (!Settings.Enabled || PiRuntime.Find(Settings) == null) return;
         Automate(task.Prompt);
+    }
+
+    /// <summary>One question, one answer, in a pi without tools; throws when pi fails.</summary>
+    public async Task<string> CompleteAsync(string prompt)
+    {
+        using var client = PiClient.Start(Settings);
+        var answer = new StringBuilder();
+        var done = new TaskCompletionSource<string?>();
+        client.TextDelta += d => answer.Append(d);
+        client.Finished += error => done.TrySetResult(error);
+        client.Exited += error => done.TrySetResult("pi 已退出" + (error.Length > 0 ? "：" + error : ""));
+        await client.PromptAsync(prompt);
+        var failed = await done.Task;
+        if (failed != null) throw new InvalidOperationException(failed);
+        return answer.ToString();
     }
 
     public static string? AskText(Window? owner, string title, string hint, string initial)

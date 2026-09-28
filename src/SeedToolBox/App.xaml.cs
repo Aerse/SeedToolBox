@@ -198,6 +198,7 @@ public partial class App : Application
         toolbox.AddPage("aiLog", "\uE81C", "AI 操作记录", () => new Ai.Automation.OperationLogPage(ai.Operations));
         main.AddQuickButton("\uE99A", "AI 助手", () => ai.Open(), () => ai.Settings.OpenHotkey);
         main.AddQuickButton("\uE8FD", "全部工具", () => toolbox.ShowAndActivate());
+        toolbox.AddGroupPage("api", "开发调试", "\uE774", "API 请求", () => new DevTools.ApiPage(prompt => ai.Ready() ? ai.CompleteAsync(prompt) : throw new InvalidOperationException("AI 助手没有开启")));
         toolbox.AddPage("aiPlugins", "\uEA86", "AI 插件和技能", () => new Ai.Automation.PluginsPage(ai));
         toolbox.AddTool("ai", "\uE99A", "AI 助手", () => ai.Open(), hide: false);
         toolbox.AddTool("aiScreenshot", "\uE722", "截图问 AI", () => { if (ai.Ready()) screen.AskAi(); });
@@ -448,6 +449,7 @@ public partial class App : Application
     protected override void OnExit(ExitEventArgs e)
     {
         _modules?.ShutdownAll();
+        SystemTools.LocalServices.StopAll();
         foreach (var binding in _hotkeys) binding.Hotkey.Dispose();
         _clipboard?.Dispose();
         _noteWindows?.CloseAllForExit();
