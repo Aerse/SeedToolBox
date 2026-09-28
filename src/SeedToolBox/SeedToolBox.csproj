@@ -43,6 +43,7 @@
   </ItemGroup>
 
   <ItemGroup>
+    <PackageReference Include="Jint" Version="4.16.4" />
     <PackageReference Include="Microsoft.Windows.SDK.Contracts" Version="10.0.19041.1" />
     <PackageReference Include="Microsoft.ML.OnnxRuntime" Version="1.20.1" ExcludeAssets="native;build;buildTransitive" GeneratePathProperty="true" />
     <PackageReference Include="nQuant" Version="1.0.3" />
