@@ -8,6 +8,7 @@ using System.Threading;
 using System.Threading.Tasks;
 using Renci.SshNet;
 using Renci.SshNet.Common;
+using SeedToolBox.Core.Services;
 
 namespace SeedToolBox.Terminal;
 
@@ -95,7 +96,8 @@ sealed class SshConnection : IDisposable
             e.CanTrust = _prompts.TrustHostKey(endpoint, fp, known);
             if (e.CanTrust) lock (_data) _data.KnownHosts[endpoint] = fp;
         };
-        try { client.Connect(); }
+        var watch = System.Diagnostics.Stopwatch.StartNew();
+        try { client.Connect(); Log.Info($"SSH {endpoint} connected in {watch.ElapsedMilliseconds} ms ({client.ConnectionInfo.CurrentKeyExchangeAlgorithm}, {client.ConnectionInfo.CurrentServerEncryption})"); }
         catch (SshAuthenticationException ex) { client.Dispose(); throw new InvalidOperationException("登录失败：" + ex.Message, ex); }
         catch (SshConnectionException ex) when (ex.DisconnectReason == Renci.SshNet.Messages.Transport.DisconnectReason.HostKeyNotVerifiable) { client.Dispose(); throw new InvalidOperationException("没有信任主机密钥，已断开", ex); }
         catch (SocketException ex) { client.Dispose(); throw new InvalidOperationException($"连不上 {endpoint}：{ex.Message}", ex); }

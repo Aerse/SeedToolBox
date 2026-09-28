@@ -617,6 +617,8 @@ sealed partial class TerminalPage : DockPanel, IConnectPrompts
 
     async Task StartAsync(Pane pane)
     {
+        // Start the SSH handshake while the terminal view is still loading instead of after it.
+        if (pane.Host != null) BeginConnect(pane);
         await WhenReady(pane.View);
         if (!pane.Tab.Panes.Contains(pane)) return;
         if (pane.Host != null) await ConnectAsync(pane);
@@ -639,12 +641,21 @@ sealed partial class TerminalPage : DockPanel, IConnectPrompts
         UpdateStatus();
     }
 
+    void BeginConnect(Pane pane)
+    {
+        var owner = pane.Tab.Session;
+        if (owner.Connection is { IsConnected: true } || owner.Pending != null) return;
+        if (owner.Connection != null) DropConnection(owner);
+        pane.Cancel = new CancellationTokenSource();
+        owner.Pending = SshConnection.OpenAsync(pane.Host!, _data, this, pane.Cancel.Token);
+    }
+
     async Task ConnectAsync(Pane pane)
     {
         var host = pane.Host!;
         if (pane.Connecting) return;
         pane.Connecting = true;
-        pane.Cancel = new CancellationTokenSource();
+        if (pane.Cancel == null || pane.Cancel.IsCancellationRequested) pane.Cancel = new CancellationTokenSource();
         pane.View.WriteText($"\x1b[90m正在连接 {host.Address}{(host.JumpHostId.Length > 0 ? "（经跳板机）" : "")} …\x1b[0m\r\n");
         UpdateStatus();
         try
@@ -654,13 +665,14 @@ sealed partial class TerminalPage : DockPanel, IConnectPrompts
             if (owner.Connection is not { IsConnected: true })
             {
                 if (owner.Connection != null) DropConnection(owner);
-                if (owner.Pending == null) { owner.Pending = SshConnection.OpenAsync(host, _data, this, pane.Cancel.Token); fresh = true; }
+                owner.Pending ??= SshConnection.OpenAsync(host, _data, this, pane.Cancel.Token);
                 var pending = owner.Pending;
                 SshConnection opened;
                 try { opened = await pending; }
                 finally { if (owner.Pending == pending) owner.Pending = null; }
-                if (fresh)
+                if (owner.Connection != opened)
                 {
+                    fresh = true;
                     if (!_sessions.Contains(owner)) { opened.Dispose(); return; }
                     owner.Connection = opened;
                 }
