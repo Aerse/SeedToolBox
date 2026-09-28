@@ -34,7 +34,7 @@
 
 ## 安装
 
-1. 下载发布包，解压到任意文件夹。
+1. 到 **[Releases 页面](https://github.com/Aerse/SeedToolBox/releases/latest)** 下载最新的 `SeedToolBox-x.y.z.zip`，解压到任意文件夹。
 2. 运行 `SeedToolBox.exe`。
 
 - **系统要求**：Windows 10 / 11，.NET Framework 4.8（系统自带）。
