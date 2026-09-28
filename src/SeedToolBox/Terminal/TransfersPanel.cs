@@ -45,7 +45,7 @@ sealed class Transfer : INotifyPropertyChanged
     public double Percent => Total > 0 ? 100.0 * _done / Total : State == "完成" ? 100 : 0;
     public string Direction => Upload ? "↑" : "↓";
     public string Size => $"{Ui.FormatSize(_done)} / {Ui.FormatSize(Total)}";
-    public bool Active => _state is "上传中" or "下载中" or "等待";
+    public bool Active => _state is "上传中" or "下载中" or "等待" or "压缩中" or "解压中";
     public string Speed => Active && _speed > 0 ? Ui.FormatSize((long)_speed) + "/s" : Active ? "" : Average;
     string Average => _state == "完成" && _clock.Elapsed.TotalSeconds > 0.2 ? "平均 " + Ui.FormatSize((long)(Total / _clock.Elapsed.TotalSeconds)) + "/s" : "";
 
@@ -63,6 +63,40 @@ sealed class Transfer : INotifyPropertyChanged
 
     public event PropertyChangedEventHandler? PropertyChanged;
     void Changed(string n) => PropertyChanged?.Invoke(this, new PropertyChangedEventArgs(n));
+}
+
+/// <summary>Folders travel as one tar.gz: Windows 10+ ships bsdtar as tar.exe.</summary>
+static class Packer
+{
+    public static readonly string? LocalTar = File.Exists(Path.Combine(Environment.SystemDirectory, "tar.exe")) ? Path.Combine(Environment.SystemDirectory, "tar.exe") : null;
+
+    public static string TempArchive()
+    {
+        var dir = Path.Combine(Path.GetTempPath(), "SeedToolBox", "pack");
+        Directory.CreateDirectory(dir);
+        return Path.Combine(dir, Guid.NewGuid().ToString("N").Substring(0, 12) + ".tar.gz");
+    }
+
+    public static void Delete(string path) { try { File.Delete(path); } catch (Exception ex) when (ex is IOException or UnauthorizedAccessException) { } }
+
+    /// <summary>Single-quoted for a POSIX shell.</summary>
+    public static string Quote(string s) => "'" + s.Replace("'", "'\\''") + "'";
+
+    public static string Error(string output) =>
+        string.Join(" ", output.Replace("\r", "").Split('\n').Where(l => l.Trim().Length > 0 && !l.StartsWith("__rc=")).Take(3)) is { Length: > 0 } e ? e : "tar 出错";
+
+    public static System.Threading.Tasks.Task RunTar(CancellationToken cancel, params string[] args) => System.Threading.Tasks.Task.Run(() =>
+    {
+        var psi = new ProcessStartInfo(LocalTar!, string.Join(" ", args.Select(a => "\"" + a.TrimEnd('\\') + "\"")))
+        {
+            UseShellExecute = false, CreateNoWindow = true, RedirectStandardError = true,
+        };
+        using var p = Process.Start(psi)!;
+        var error = p.StandardError.ReadToEndAsync();
+        while (!p.WaitForExit(200))
+            if (cancel.IsCancellationRequested) { try { p.Kill(); } catch (InvalidOperationException) { } cancel.ThrowIfCancellationRequested(); }
+        if (p.ExitCode != 0) throw new InvalidOperationException("本地 tar 出错：" + error.Result.Trim());
+    });
 }
 
 static class Transfers

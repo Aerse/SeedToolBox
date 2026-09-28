@@ -202,7 +202,7 @@ sealed class SftpPanel : DockPanel
     // ---------- connection ----------
 
     public void Bind(SshConnection? connection, string? directory) =>
-        BindSource(connection, connection == null ? null : async () => new SftpFiles(await Task.Run(connection.OpenSftp)), directory);
+        BindSource(connection, connection == null ? null : async () => new SftpFiles(await Task.Run(connection.OpenSftp), (command, timeout) => connection.Run(command + " 2>&1", timeout)), directory);
 
     /// <summary>Browses a server that has no terminal (FTP); follow and cd are hidden.</summary>
     public void BindFiles(object key, Func<Task<IRemoteFiles>> open)
@@ -511,6 +511,7 @@ sealed class SftpPanel : DockPanel
         catch (Exception ex) when (IsSftpError(ex)) { Ui.SetStatus(_status, "上传失败：" + ex.Message, true); return; }
         foreach (var path in paths)
         {
+            if (Directory.Exists(path) && client.Shell != null && Packer.LocalTar != null && await PackedUpload(client, path, remoteDir)) continue;
             if (Directory.Exists(path))
             {
                 var root = Join(remoteDir, Path.GetFileName(path));
@@ -569,6 +570,7 @@ sealed class SftpPanel : DockPanel
         foreach (var e in items)
         {
             if (!e.IsDirectory) { await DownloadOne(e.FullName, Path.Combine(folder, e.Name), e.Length); continue; }
+            if (client.Shell != null && Packer.LocalTar != null && await PackedDownload(client, e.FullName, folder)) continue;
             List<(string Remote, string Local, long Length)> files;
             try
             {
@@ -604,6 +606,67 @@ sealed class SftpPanel : DockPanel
         Ui.SetStatus(_status, $"{(t.Upload ? "上传" : "下载")}「{t.Name}」… 进度和历史在「传输」页签");
         return t;
     }
+
+    // ---------- folders as one archive ----------
+
+    /// <summary>Packs the folder with tar, uploads one file and unpacks it on the server; false means fall back to file by file.</summary>
+    async Task<bool> PackedUpload(IRemoteFiles client, string folder, string remoteDir)
+    {
+        var name = Path.GetFileName(folder.TrimEnd('\\'));
+        var archive = Packer.TempArchive();
+        var remoteArchive = Join(remoteDir, ".stb-upload-" + Path.GetFileName(archive));
+        var t = Start(new Transfer { Name = name + "（打包）", Upload = true, Local = folder, Remote = Join(remoteDir, name), State = "压缩中" });
+        try
+        {
+            if (!(await Task.Run(() => client.Shell!("command -v tar", 15))).Contains("tar")) { Transfers.All.Remove(t); Transfers.OnChanged(); return false; }
+            await Packer.RunTar(t.Cancel.Token, "-czf", archive, "-C", Path.GetDirectoryName(folder.TrimEnd('\\'))!, name);
+            t.Total = new FileInfo(archive).Length;
+            t.State = "上传中";
+            using (var stream = File.OpenRead(archive))
+                await client.UploadAsync(stream, remoteArchive, n => t.Done = n, t.Cancel.Token);
+            t.Done = t.Total;
+            t.State = "解压中";
+            var output = await Task.Run(() => client.Shell!($"cd {Packer.Quote(remoteDir)} && tar -xzf {Packer.Quote(remoteArchive)} --no-same-owner; rc=$?; rm -f {Packer.Quote(remoteArchive)}; echo __rc=$rc", 1800));
+            if (!output.Contains("__rc=0")) { t.State = "失败：" + Packer.Error(output); return true; }
+            t.State = "完成";
+        }
+        catch (OperationCanceledException) { t.State = "已取消"; Cleanup(client, remoteArchive); }
+        catch (Exception ex) when (IsSftpError(ex) || ex is InvalidOperationException) { t.State = "失败：" + ex.Message; Cleanup(client, remoteArchive); }
+        finally { Packer.Delete(archive); }
+        return true;
+    }
+
+    /// <summary>Packs the remote folder with tar, downloads one file and unpacks it here; false means fall back to file by file.</summary>
+    async Task<bool> PackedDownload(IRemoteFiles client, string remoteFolder, string localFolder)
+    {
+        var name = ParentOf(remoteFolder) == remoteFolder ? "root" : remoteFolder.TrimEnd('/').Substring(ParentOf(remoteFolder).TrimEnd('/').Length + 1);
+        var archive = Packer.TempArchive();
+        var remoteArchive = "/tmp/.stb-download-" + Path.GetFileName(archive);
+        var t = Start(new Transfer { Name = name + "（打包）", Local = Path.Combine(localFolder, name), Remote = remoteFolder, State = "压缩中" });
+        try
+        {
+            var output = await Task.Run(() => client.Shell!($"command -v tar >/dev/null || {{ echo __notar; exit; }}; tar -czf {Packer.Quote(remoteArchive)} --format=pax -C {Packer.Quote(ParentOf(remoteFolder))} {Packer.Quote(name)}; echo __rc=$?; stat -c %s {Packer.Quote(remoteArchive)}", 1800));
+            if (output.Contains("__notar")) { Transfers.All.Remove(t); Transfers.OnChanged(); return false; }
+            if (!output.Contains("__rc=0")) { t.State = "失败：" + Packer.Error(output); Cleanup(client, remoteArchive); return true; }
+            long.TryParse(output.Substring(output.IndexOf("__rc=0") + 6).Trim(), out t.Total);
+            t.State = "下载中";
+            using (var stream = File.Create(archive))
+                await client.DownloadAsync(remoteArchive, stream, n => t.Done = n, t.Cancel.Token);
+            t.Done = t.Total;
+            Cleanup(client, remoteArchive);
+            t.State = "解压中";
+            Directory.CreateDirectory(localFolder);
+            await Packer.RunTar(t.Cancel.Token, "-xzf", archive, "-C", localFolder);
+            t.State = "完成";
+        }
+        catch (OperationCanceledException) { t.State = "已取消"; Cleanup(client, remoteArchive); }
+        catch (Exception ex) when (IsSftpError(ex) || ex is InvalidOperationException) { t.State = "失败：" + ex.Message; Cleanup(client, remoteArchive); }
+        finally { Packer.Delete(archive); }
+        return true;
+    }
+
+    static void Cleanup(IRemoteFiles client, string remoteArchive) =>
+        _ = Task.Run(() => { try { client.Shell?.Invoke("rm -f " + Packer.Quote(remoteArchive), 30); } catch (Exception ex) when (IsSftpError(ex) || ex is InvalidOperationException or ObjectDisposedException) { } });
 
     async Task<bool> DownloadOne(string remote, string local, long length)
     {

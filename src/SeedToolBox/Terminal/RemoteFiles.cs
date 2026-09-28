@@ -41,13 +41,17 @@ interface IRemoteFiles : IDisposable
     void Chmod(string path, short mode);
     Task UploadAsync(Stream source, string remote, Action<long>? progress, CancellationToken cancel);
     Task DownloadAsync(string remote, Stream target, Action<long>? progress, CancellationToken cancel);
+    /// <summary>Runs a shell command on the server (stdout and stderr), or null when the protocol has no shell (FTP).</summary>
+    Func<string, int, string>? Shell { get; }
 }
 
 sealed class SftpFiles : IRemoteFiles
 {
     readonly SftpClient _client;
 
-    public SftpFiles(SftpClient client) => _client = client;
+    public SftpFiles(SftpClient client, Func<string, int, string>? shell = null) { _client = client; Shell = shell; }
+
+    public Func<string, int, string>? Shell { get; }
 
     public bool IsConnected => _client.IsConnected;
     public string Home => _client.WorkingDirectory;
@@ -167,6 +171,7 @@ sealed class FtpFiles : IRemoteFiles
     bool _disposed;
     public string Home { get; private set; } = "/";
     public bool CanChmod => true;
+    public Func<string, int, string>? Shell => null;
 
     public List<RemoteFile> List(string dir) =>
         Do(c => c.GetListing(dir, FtpListOption.AllFiles)).Where(f => f.Name != "." && f.Name != "..").Select(f => new RemoteFile
