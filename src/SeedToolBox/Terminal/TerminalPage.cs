@@ -520,6 +520,7 @@ sealed partial class TerminalPage : DockPanel, IConnectPrompts
         Item("关闭其他终端", () => { foreach (var t in s.Tabs.Where(t => t != tab).ToList()) CloseTab(t); });
         tab.Chip.ContextMenu = menu;
         tab.Root.Visibility = Visibility.Collapsed;
+        s.Current ??= tab;
         s.Tabs.Add(tab);
         s.Strip.Children.Add(tab.Chip);
         s.Body.Children.Add(tab.Root);
