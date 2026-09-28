@@ -652,6 +652,7 @@ sealed class SftpPanel : DockPanel
         var choice = Conflict.Stop;
         overwrite.Click += (_, _) => { choice = Conflict.Overwrite; window.Close(); };
         skip.Click += (_, _) => { choice = Conflict.Skip; window.Close(); };
+        stop.Click += (_, _) => window.Close();
         window.ShowDialog();
         if (choice == Conflict.Stop || all.IsChecked == true) _conflict = choice;
         return choice == Conflict.Overwrite;
@@ -672,7 +673,7 @@ sealed class SftpPanel : DockPanel
     void TransfersChanged()
     {
         if (_batches > 0 || _mine.Count == 0 || _mine.Any(t => t.Active)) return;
-        var downloads = _mine.Where(t => !t.Upload && t.State == "完成" && !t.Local.StartsWith(Path.GetTempPath(), StringComparison.OrdinalIgnoreCase)).ToList();
+        var downloads = _mine.Where(t => !t.Upload && t.State == "完成" && !t.Local.StartsWith(Transfers.Cache, StringComparison.OrdinalIgnoreCase)).ToList();
         var failed = _mine.Count(t => t.State.StartsWith("失败"));
         var done = _mine.Count(t => t.State == "完成");
         _mine.Clear();

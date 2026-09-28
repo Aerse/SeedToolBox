@@ -110,6 +110,8 @@ static class Packer
 
 static class Transfers
 {
+    /// <summary>Our own scratch folder (edit copies, archives); downloads there are not "real" downloads.</summary>
+    public static readonly string Cache = Path.Combine(Path.GetTempPath(), "SeedToolBox");
     public static readonly ObservableCollection<Transfer> All = new();
     /// <summary>A transfer started, finished or was removed.</summary>
     public static event Action? Changed;
@@ -118,7 +120,7 @@ static class Transfers
 
     public static void Add(Transfer t)
     {
-        if (!t.Upload && t.Local.Length > 0 && !t.Local.StartsWith(Path.GetTempPath(), StringComparison.OrdinalIgnoreCase))
+        if (!t.Upload && t.Local.Length > 0 && !t.Local.StartsWith(Transfers.Cache, StringComparison.OrdinalIgnoreCase))
             LastFolder = Path.GetDirectoryName(t.Local) ?? LastFolder;
         All.Insert(0, t);
         OnChanged();
