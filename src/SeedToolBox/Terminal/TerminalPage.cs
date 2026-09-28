@@ -842,6 +842,11 @@ sealed partial class TerminalPage : DockPanel, IConnectPrompts
 
     void OpenHost(HostEntry host)
     {
+        if (Protocols.IsFiles(host.Protocol))
+        {
+            FtpWindow.Open(Owner, host, () => Dispatcher.BeginInvoke(() => { host.LastConnected = DateTime.Now; ScheduleSave(); }));
+            return;
+        }
         var s = NewSession(host, null);
         AddPane(NewTab(s), host, null);
         SelectSession(s);

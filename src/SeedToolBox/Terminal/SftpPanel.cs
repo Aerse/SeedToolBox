@@ -14,9 +14,7 @@ using System.Windows.Input;
 using System.Windows.Media;
 using System.Windows.Threading;
 using Microsoft.Win32;
-using Renci.SshNet;
 using Renci.SshNet.Common;
-using Renci.SshNet.Sftp;
 using SeedToolBox.Core.Services;
 using SeedToolBox.DevTools;
 using SeedToolBox.DevTools.Api;
@@ -63,11 +61,13 @@ sealed class SftpPanel : DockPanel
     readonly ToggleButton _hidden = new() { ToolTip = "显示隐藏文件" };
     readonly ListBox _queue = new() { MaxHeight = 140, BorderThickness = new Thickness(0), Visibility = Visibility.Collapsed };
     readonly ObservableCollection<Transfer> _transfers = new();
-    readonly Dictionary<SshConnection, SftpClient> _clients = new();
+    readonly Dictionary<object, IRemoteFiles> _clients = new();
     readonly List<FileSystemWatcher> _watchers = new();
     readonly Func<Window?> _owner;
     readonly Action<string> _cdInTerminal;
-    SshConnection? _connection;
+    object? _source;
+    Func<Task<IRemoteFiles>>? _open;
+    bool _linked = true;
     TreeViewItem? _root;
     string _home = "/";
     string _current = "";
@@ -210,12 +210,12 @@ sealed class SftpPanel : DockPanel
     ContextMenu MoreMenu()
     {
         var menu = new ContextMenu();
-        void Item(string header, Action a, bool enabled = true) { var mi = new MenuItem { Header = header, IsEnabled = enabled && _connection != null }; mi.Click += (_, _) => a(); menu.Items.Add(mi); }
+        void Item(string header, Action a, bool enabled = true) { var mi = new MenuItem { Header = header, IsEnabled = enabled && _source != null }; mi.Click += (_, _) => a(); menu.Items.Add(mi); }
         Item("新建文件夹…", NewFolder);
         Item("新建文件…", NewFile);
         Item("上级目录", () => Go(ParentOf(_current)), _current.Length > 1);
         menu.Items.Add(new Separator());
-        Item("在终端中进入当前文件夹", () => _cdInTerminal(_current), _current.Length > 0);
+        if (_linked) Item("在终端中进入当前文件夹", () => _cdInTerminal(_current), _current.Length > 0);
         Item("复制路径", () => Clipboard.SetText(_current), _current.Length > 0);
         menu.Items.Add(new Separator());
         var queue = new MenuItem { Header = "显示传输队列", IsCheckable = true, IsChecked = _showQueue };
@@ -249,38 +249,46 @@ sealed class SftpPanel : DockPanel
 
     // ---------- connection ----------
 
-    public void Bind(SshConnection? connection, string? directory)
+    public void Bind(SshConnection? connection, string? directory) =>
+        BindSource(connection, connection == null ? null : async () => new SftpFiles(await Task.Run(connection.OpenSftp)), directory);
+
+    /// <summary>Browses a server that has no terminal (FTP); follow and cd are hidden.</summary>
+    public void BindFiles(object key, Func<Task<IRemoteFiles>> open)
     {
-        if (connection == _connection && connection != null) { if (directory != null && _follow.IsChecked == true) Follow(directory); return; }
-        _connection = connection;
+        _linked = false;
+        _follow.Visibility = Visibility.Collapsed;
+        BindSource(key, open, null);
+    }
+
+    void BindSource(object? source, Func<Task<IRemoteFiles>>? open, string? directory)
+    {
+        if (source == _source && source != null) { if (directory != null && _follow.IsChecked == true) Follow(directory); return; }
+        _source = source;
+        _open = open;
         _current = "";
         _path.Text = "";
-        foreach (var dead in _clients.Keys.Where(c => !c.IsConnected).ToList()) { Dispose(_clients[dead]); _clients.Remove(dead); }
-        if (connection == null) { Show("没有连接。选中一个 SSH 会话后这里会显示服务器上的文件。"); return; }
+        foreach (var dead in _clients.Where(kv => !kv.Value.IsConnected).Select(kv => kv.Key).ToList()) { _clients[dead].Dispose(); _clients.Remove(dead); }
+        if (source == null) { Show("没有连接。选中一个 SSH 会话后这里会显示服务器上的文件。"); return; }
         Show("");
         Go(directory ?? "~");
     }
 
     public void Follow(string directory)
     {
-        if (_connection != null && _follow.IsChecked == true && directory != _current) Go(directory);
+        if (_source != null && _follow.IsChecked == true && directory != _current) Go(directory);
     }
 
-    public bool IsBound => _connection != null;
+    public bool IsBound => _source != null;
 
-    async Task<SftpClient> ClientAsync()
+    async Task<IRemoteFiles> ClientAsync()
     {
-        var connection = _connection ?? throw new InvalidOperationException("没有连接");
-        if (_clients.TryGetValue(connection, out var c) && c.IsConnected) return c;
-        if (c != null) Dispose(c);
-        c = await Task.Run(connection.OpenSftp);
-        _clients[connection] = c;
+        var source = _source ?? throw new InvalidOperationException("没有连接");
+        if (_clients.TryGetValue(source, out var c) && c.IsConnected) return c;
+        c?.Dispose();
+        c = await _open!();
+        if (source != _source) { c.Dispose(); throw new InvalidOperationException("连接已经切换"); }
+        _clients[source] = c;
         return c;
-    }
-
-    static void Dispose(SftpClient c)
-    {
-        try { c.Dispose(); } catch (Exception ex) when (ex is SshException or ObjectDisposedException) { }
     }
 
     // ---------- tree ----------
@@ -324,7 +332,7 @@ sealed class SftpPanel : DockPanel
         try
         {
             var client = await ClientAsync();
-            var files = await Task.Run(() => client.ListDirectory(dir).Where(f => f.Name != "." && f.Name != "..").ToList());
+            var files = await Task.Run(() => client.List(dir));
             if (version != _version) return false;
             var expanded = new HashSet<string>(item.Items.OfType<TreeViewItem>().Where(i => i.IsExpanded).Select(i => ((Entry)i.Tag).FullName));
             item.Items.Clear();
@@ -333,12 +341,12 @@ sealed class SftpPanel : DockPanel
             {
                 var child = MakeItem(new Entry
                 {
-                    Name = f.Name, FullName = f.FullName, IsDirectory = f.IsDirectory, IsLink = f.IsSymbolicLink, Length = f.Length,
+                    Name = f.Name, FullName = f.FullName, IsDirectory = f.IsDirectory, IsLink = f.IsLink, Length = f.Length,
                     Size = f.IsDirectory ? "" : Ui.FormatSize(f.Length),
-                    Modified = f.LastWriteTime.ToString("yyyy-MM-dd HH:mm"),
-                    Permissions = Mode(f),
-                    Owner = f.UserId.ToString(),
-                    Glyph = f.IsDirectory ? "" : f.IsSymbolicLink ? "" : "",
+                    Modified = f.Modified.ToString("yyyy-MM-dd HH:mm"),
+                    Permissions = f.Mode,
+                    Owner = f.Owner,
+                    Glyph = f.IsDirectory ? "" : f.IsLink ? "" : "",
                 });
                 item.Items.Add(child);
                 if (expanded.Contains(f.FullName)) child.IsExpanded = true;
@@ -356,13 +364,13 @@ sealed class SftpPanel : DockPanel
     /// <summary>Expands the tree down to <paramref name="path"/> and selects it.</summary>
     async void Go(string path)
     {
-        if (_connection == null) return;
+        if (_source == null) return;
         var version = ++_version;
         try
         {
             var client = await ClientAsync();
             if (version != _version) return;
-            _home = client.WorkingDirectory;
+            _home = client.Home;
             var target = path == "~" || path.Length == 0 ? _home : path.StartsWith("~/") ? Join(_home, path.Substring(2)) : path;
             if (!target.StartsWith("/")) target = Join(_current.Length > 0 ? _current : _home, target);
             if (_root == null)
@@ -410,7 +418,7 @@ sealed class SftpPanel : DockPanel
     void Refresh(string dir)
     {
         if (Find(dir) is { } item && !(item.Items.Count == 1 && item.Items[0] is string)) _ = LoadAsync(item);
-        else if (_connection != null && _root == null) Go(dir);
+        else if (_source != null && _root == null) Go(dir);
     }
 
     void Reload()
@@ -426,16 +434,7 @@ sealed class SftpPanel : DockPanel
         if (_root != null) Walk(_root);
     }
 
-    static bool IsSftpError(Exception ex) => ex is SshException or IOException or InvalidOperationException or ObjectDisposedException or System.Net.Sockets.SocketException or UnauthorizedAccessException;
-
-    static string Mode(ISftpFile f)
-    {
-        char B(bool v, char c) => v ? c : '-';
-        return (f.IsDirectory ? "d" : f.IsSymbolicLink ? "l" : "-")
-            + B(f.OwnerCanRead, 'r') + B(f.OwnerCanWrite, 'w') + B(f.OwnerCanExecute, 'x')
-            + B(f.GroupCanRead, 'r') + B(f.GroupCanWrite, 'w') + B(f.GroupCanExecute, 'x')
-            + B(f.OthersCanRead, 'r') + B(f.OthersCanWrite, 'w') + B(f.OthersCanExecute, 'x');
-    }
+    static bool IsSftpError(Exception ex) => ex is SshException or FluentFTP.Exceptions.FtpException or TimeoutException or IOException or InvalidOperationException or ObjectDisposedException or System.Net.Sockets.SocketException or UnauthorizedAccessException;
 
     static string Octal(string mode)
     {
@@ -454,7 +453,7 @@ sealed class SftpPanel : DockPanel
     ContextMenu ItemMenu()
     {
         var menu = new ContextMenu();
-        void Item(string header, Action a, bool enabled = true) { var mi = new MenuItem { Header = header, IsEnabled = enabled && _connection != null }; mi.Click += (_, _) => a(); menu.Items.Add(mi); }
+        void Item(string header, Action a, bool enabled = true) { var mi = new MenuItem { Header = header, IsEnabled = enabled && _source != null }; mi.Click += (_, _) => a(); menu.Items.Add(mi); }
         var one = Selected.FirstOrDefault();
         var any = one != null && one.FullName != "/";
         Item(one?.IsDirectory == true ? "刷新这个文件夹" : "编辑（保存后自动上传）", () => { if (one?.IsDirectory == true) Refresh(one.FullName); else if (one != null) Activate(one); }, one != null);
@@ -468,7 +467,7 @@ sealed class SftpPanel : DockPanel
         Item("新建文件…", NewFile);
         menu.Items.Add(new Separator());
         Item("复制路径", () => Clipboard.SetText(one?.FullName ?? _current));
-        Item("在终端中进入" + (one?.IsDirectory == true ? "这个文件夹" : "所在文件夹"), () => _cdInTerminal(_current));
+        if (_linked) Item("在终端中进入" + (one?.IsDirectory == true ? "这个文件夹" : "所在文件夹"), () => _cdInTerminal(_current));
         if (Favorites != null && one?.IsDirectory == true)
             Item(Favorites.Contains(one.FullName) ? "取消收藏" : "收藏这个文件夹", () => { if (!Favorites.Remove(one.FullName)) Favorites.Add(one.FullName); FavoritesChanged?.Invoke(); });
         return menu;
@@ -482,7 +481,7 @@ sealed class SftpPanel : DockPanel
 
     // ---------- operations ----------
 
-    async Task Run(string doing, Action<SftpClient> action, bool refresh = true)
+    async Task Run(string doing, Action<IRemoteFiles> action, bool refresh = true)
     {
         try
         {
@@ -504,14 +503,14 @@ sealed class SftpPanel : DockPanel
     void NewFile()
     {
         var name = TerminalDialogs.Ask(_owner(), "新建文件", "文件名称：", false)?.Trim();
-        if (!string.IsNullOrEmpty(name)) _ = Run("新建文件", c => { using var s = new MemoryStream(); c.UploadFile(s, Join(_current, name!), false); });
+        if (!string.IsNullOrEmpty(name)) _ = Run("新建文件", c => c.CreateEmpty(Join(_current, name!)));
     }
 
     void Rename()
     {
         if (Selected.FirstOrDefault() is not { } e) return;
         var name = TerminalDialogs.Ask(_owner(), "重命名", "新名称：", false, e.Name)?.Trim();
-        if (!string.IsNullOrEmpty(name) && name != e.Name) _ = Run("重命名", c => c.RenameFile(e.FullName, Join(_current, name!)));
+        if (!string.IsNullOrEmpty(name) && name != e.Name) _ = Run("重命名", c => c.Rename(e.FullName, Join(_current, name!)));
     }
 
     void Delete()
@@ -522,11 +521,11 @@ sealed class SftpPanel : DockPanel
         _ = Run("删除", c => { foreach (var i in items) DeleteRecursive(c, i.FullName, i.IsDirectory); });
     }
 
-    static void DeleteRecursive(SftpClient c, string path, bool directory)
+    static void DeleteRecursive(IRemoteFiles c, string path, bool directory)
     {
         if (!directory) { c.DeleteFile(path); return; }
-        foreach (var f in c.ListDirectory(path).Where(f => f.Name != "." && f.Name != ".."))
-            DeleteRecursive(c, f.FullName, f.IsDirectory && !f.IsSymbolicLink);
+        foreach (var f in c.List(path))
+            DeleteRecursive(c, f.FullName, f.IsDirectory && !f.IsLink);
         c.DeleteDirectory(path);
     }
 
@@ -537,22 +536,22 @@ sealed class SftpPanel : DockPanel
         var mode = TerminalDialogs.Ask(_owner(), "修改权限", $"八进制权限，例如 755、644（{items.Count} 项）：", false, Octal(items[0].Permissions))?.Trim();
         if (mode == null) return;
         if (mode.Length != 3 || mode.Any(ch => ch < '0' || ch > '7')) { Ui.SetStatus(_status, "权限要写成 3 位八进制数字，例如 755", true); return; }
-        _ = Run("修改权限", c => { foreach (var i in items) c.ChangePermissions(i.FullName, short.Parse(mode)); });
+        _ = Run("修改权限", c => { foreach (var i in items) c.Chmod(i.FullName, short.Parse(mode)); });
     }
 
     // ---------- transfers ----------
 
     void UploadPick()
     {
-        if (_connection == null) return;
+        if (_source == null) return;
         var dlg = new OpenFileDialog { Multiselect = true, Title = "上传到 " + _current };
         if (dlg.ShowDialog(_owner()) == true) _ = UploadAsync(dlg.FileNames, _current);
     }
 
     async Task UploadAsync(string[] paths, string remoteDir)
     {
-        if (_connection == null) return;
-        SftpClient client;
+        if (_source == null) return;
+        IRemoteFiles client;
         try { client = await ClientAsync(); }
         catch (Exception ex) when (IsSftpError(ex)) { Ui.SetStatus(_status, "上传失败：" + ex.Message, true); return; }
         foreach (var path in paths)
@@ -573,14 +572,14 @@ sealed class SftpPanel : DockPanel
         Refresh(remoteDir);
     }
 
-    async Task<bool> UploadOne(SftpClient client, string local, string remote)
+    async Task<bool> UploadOne(IRemoteFiles client, string local, string remote)
     {
         var t = new Transfer { Name = Path.GetFileName(local), Upload = true, Total = new FileInfo(local).Length, State = "上传中" };
         _transfers.Insert(0, t);
         try
         {
             using var stream = File.OpenRead(local);
-            await client.UploadFileAsync(stream, remote, true, new Progress<UploadFileProgressReport>(p => t.Done = (long)p.TotalBytesUploaded), t.Cancel.Token);
+            await client.UploadAsync(stream, remote, n => t.Done = n, t.Cancel.Token);
             t.Done = t.Total;
             t.State = "完成";
             return true;
@@ -610,7 +609,7 @@ sealed class SftpPanel : DockPanel
 
     async Task DownloadMany(List<Entry> items, string folder)
     {
-        SftpClient client;
+        IRemoteFiles client;
         try { client = await ClientAsync(); }
         catch (Exception ex) when (IsSftpError(ex)) { Ui.SetStatus(_status, "下载失败：" + ex.Message, true); return; }
         foreach (var e in items)
@@ -625,9 +624,9 @@ sealed class SftpPanel : DockPanel
                     void Walk(string remote, string local)
                     {
                         Directory.CreateDirectory(local);
-                        foreach (var f in client.ListDirectory(remote).Where(f => f.Name != "." && f.Name != ".."))
+                        foreach (var f in client.List(remote))
                             if (f.IsDirectory) Walk(f.FullName, Path.Combine(local, f.Name));
-                            else if (f.IsRegularFile) list.Add((f.FullName, Path.Combine(local, f.Name), f.Length));
+                            else if (f.IsRegular) list.Add((f.FullName, Path.Combine(local, f.Name), f.Length));
                     }
                     Walk(e.FullName, Path.Combine(folder, e.Name));
                     return list;
@@ -648,7 +647,7 @@ sealed class SftpPanel : DockPanel
             var client = await ClientAsync();
             var tmp = local + ".part";
             using (var stream = File.Create(tmp))
-                await client.DownloadFileAsync(remote, stream, new Progress<DownloadFileProgressReport>(p => t.Done = (long)p.TotalBytesDownloaded), t.Cancel.Token);
+                await client.DownloadAsync(remote, stream, n => t.Done = n, t.Cancel.Token);
             if (File.Exists(local)) File.Delete(local);
             File.Move(tmp, local);
             t.Done = t.Total;
@@ -674,7 +673,7 @@ sealed class SftpPanel : DockPanel
         Directory.CreateDirectory(folder);
         var local = Path.Combine(folder, e.Name);
         if (!await DownloadOne(e.FullName, local, e.Length)) return;
-        var connection = _connection;
+        var source = _source;
         var remote = e.FullName;
         var watcher = new FileSystemWatcher(folder, e.Name) { NotifyFilter = NotifyFilters.LastWrite | NotifyFilters.Size | NotifyFilters.FileName, EnableRaisingEvents = true };
         var debounce = new DispatcherTimer { Interval = TimeSpan.FromMilliseconds(700) };
@@ -684,7 +683,7 @@ sealed class SftpPanel : DockPanel
             debounce.Stop();
             if (!File.Exists(local) || File.GetLastWriteTimeUtc(local) == lastWrite) return;
             lastWrite = File.GetLastWriteTimeUtc(local);
-            if (connection != _connection || connection == null || !connection.IsConnected) { Ui.SetStatus(_status, $"「{e.Name}」已修改，但连接已经变了，没有上传", true); return; }
+            if (source != _source || source == null) { Ui.SetStatus(_status, $"「{e.Name}」已修改，但连接已经变了，没有上传", true); return; }
             try
             {
                 var client = await ClientAsync();
@@ -696,7 +695,7 @@ sealed class SftpPanel : DockPanel
                     catch (IOException) when (i < 4) { await Task.Delay(200); }
                 }
                 using var stream = new MemoryStream(bytes);
-                await client.UploadFileAsync(stream, remote, true, null, CancellationToken.None);
+                await client.UploadAsync(stream, remote, null, CancellationToken.None);
                 Ui.SetStatus(_status, $"已上传「{e.Name}」 {DateTime.Now:HH:mm:ss}");
                 Refresh(ParentOf(remote));
             }
@@ -722,7 +721,7 @@ sealed class SftpPanel : DockPanel
         foreach (var w in _watchers) w.Dispose();
         _watchers.Clear();
         foreach (var t in _transfers) t.Cancel.Cancel();
-        foreach (var c in _clients.Values) Dispose(c);
+        foreach (var c in _clients.Values) c.Dispose();
         _clients.Clear();
     }
 }
