@@ -74,7 +74,7 @@ sealed class SyncService
     const string PendingFolderName = "pending";
     static readonly JsonSerializerSettings Json = new() { ObjectCreationHandling = ObjectCreationHandling.Replace };
     /// <summary>Data files synced as settings, excluding the launcher which has its own switch. AI keys live in PiAgent and never leave the computer.</summary>
-    static readonly string[] SettingsFiles = { "clipboard", "screentools", "module-hotkeys", "ai" };
+    static readonly string[] SettingsFiles = { "clipboard", "screentools", "module-hotkeys", "ai", "terminal" };
     const string LauncherFile = "launcher";
     const long MaxImageBytes = 8L * 1024 * 1024;
 
@@ -412,6 +412,8 @@ sealed class SyncService
         if (!File.Exists(path)) return null;
         var json = JToken.Parse(File.ReadAllText(path, Encoding.UTF8));
         if (name == LauncherFile && json is JObject o) o.Remove("Window");
+        // DPAPI only works on this computer; the whole file is encrypted by the sync anyway
+        if (name == "terminal" && json is JObject t) Terminal.Secret.MakePortable(t);
         return json.ToString(Formatting.None);
     }
 

@@ -36,6 +36,7 @@
 
   <!-- PaddleOCR (PP-OCRv4) models go to Ocr, the ONNX Runtime that runs them to Native\x64 and Native\x86 -->
   <ItemGroup>
+    <None Include="Assets\terminal\*" Link="terminal\%(Filename)%(Extension)" CopyToOutputDirectory="PreserveNewest" />
     <None Include="Assets\Ocr\*" Link="Ocr\%(Filename)%(Extension)" CopyToOutputDirectory="PreserveNewest" />
     <None Include="Ai\Pi\**\*" Link="Pi\%(RecursiveDir)%(Filename)%(Extension)" CopyToOutputDirectory="PreserveNewest" />
     <None Include="$(PkgMicrosoft_ML_OnnxRuntime)\runtimes\win-x64\native\onnxruntime.dll" Link="Native\x64\onnxruntime.dll" CopyToOutputDirectory="PreserveNewest" Visible="false" />
@@ -44,10 +45,12 @@
 
   <ItemGroup>
     <PackageReference Include="Jint" Version="4.16.4" />
+    <PackageReference Include="Microsoft.Web.WebView2" Version="1.0.4191.47" />
     <PackageReference Include="Microsoft.Windows.SDK.Contracts" Version="10.0.19041.1" />
     <PackageReference Include="Microsoft.ML.OnnxRuntime" Version="1.20.1" ExcludeAssets="native;build;buildTransitive" GeneratePathProperty="true" />
     <PackageReference Include="nQuant" Version="1.0.3" />
     <PackageReference Include="NUglify" Version="1.23.1" />
+    <PackageReference Include="SSH.NET" Version="2026.0.0" />
     <PackageReference Include="YamlDotNet" Version="18.1.0" />
     <PackageReference Include="ZXing.Net" Version="0.16.11" />
   </ItemGroup>
