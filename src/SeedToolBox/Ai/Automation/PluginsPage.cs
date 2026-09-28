@@ -12,6 +12,7 @@ using Newtonsoft.Json.Linq;
 using SeedToolBox.Core;
 using SeedToolBox.Core.Services;
 using SeedToolBox.DevTools;
+using SeedToolBox.Launcher;
 using SeedToolBox.Views;
 
 namespace SeedToolBox.Ai.Automation;
@@ -26,6 +27,10 @@ sealed class PluginsPage : DockPanel
     readonly TextBox _output = Ui.Area(wrap: true);
     readonly TextBlock _status = Ui.Status();
     readonly List<Button> _actions = new();
+    readonly TextBox _search = Ui.Field();
+    readonly TextBlock _marketStatus = Ui.Status();
+    readonly StackPanel _market = new();
+    List<PluginMarket.Package>? _results;
     bool _busy;
 
     public PluginsPage(AiService service)
@@ -65,6 +70,19 @@ sealed class PluginsPage : DockPanel
         body.Children.Add(Section("已安装的插件"));
         body.Children.Add(_packages);
 
+        body.Children.Add(Section("插件市场"));
+        body.Children.Add(Hint("来自 npm 上标了 pi-package 的包，按热度排序；装之前可以点“主页”看看是做什么的。"));
+        _search.KeyDown += (_, e) => { if (e.Key == System.Windows.Input.Key.Enter) _ = Search(); };
+        var searchRow = new DockPanel { Margin = new Thickness(0, 0, 0, 6) };
+        var searchButton = Ui.Button("搜索", () => _ = Search());
+        searchButton.Margin = new Thickness(8, 0, 0, 0);
+        SetDock(searchButton, Dock.Right);
+        searchRow.Children.Add(searchButton);
+        searchRow.Children.Add(_search);
+        body.Children.Add(searchRow);
+        body.Children.Add(_marketStatus);
+        body.Children.Add(_market);
+
         var openSkills = Ui.Button("打开技能文件夹", () => OpenFolder(Path.Combine(PiRuntime.ConfigDir(service.Settings), "skills")));
         var openPrompts = Ui.Button("打开模板文件夹", () => OpenFolder(Path.Combine(PiRuntime.ConfigDir(service.Settings), "prompts")));
         body.Children.Add(Section("技能和提示模板"));
@@ -80,7 +98,56 @@ sealed class PluginsPage : DockPanel
         body.Children.Add(_output);
 
         Children.Add(new ScrollViewer { Content = body, VerticalScrollBarVisibility = ScrollBarVisibility.Auto });
-        Loaded += (_, _) => Refresh();
+        Loaded += (_, _) => { Refresh(); if (_results == null) _ = Search(); };
+    }
+
+    async Task Search()
+    {
+        Ui.SetStatus(_marketStatus, "正在搜索…");
+        try
+        {
+            _results = await PluginMarket.SearchAsync(_search.Text);
+            Ui.SetStatus(_marketStatus, _results.Count == 0 ? "没有找到" : $"{_results.Count} 个");
+        }
+        catch (System.Net.Http.HttpRequestException ex)
+        {
+            _results = new();
+            Ui.SetStatus(_marketStatus, ex.Message, true);
+        }
+        Refresh();
+    }
+
+    void ShowMarket()
+    {
+        _market.Children.Clear();
+        if (_results == null) return;
+        var installed = new HashSet<string>(Installed().Select(PackageName), StringComparer.OrdinalIgnoreCase);
+        foreach (var package in _results)
+        {
+            var p = package;
+            var home = Ui.Button("主页", () => ProcessLauncher.Start(p.Homepage));
+            FrameworkElement install = installed.Contains(p.Name)
+                ? new TextBlock { Text = "已安装", Foreground = DialogWindow.HintBrush, VerticalAlignment = VerticalAlignment.Center, Margin = new Thickness(8, 0, 8, 0) }
+                : Action("安装", () => Install("npm:" + p.Name));
+            var info = new List<string>();
+            if (p.Version.Length > 0) info.Add("v" + p.Version);
+            if (p.Author.Length > 0) info.Add(p.Author);
+            if (p.WeeklyDownloads > 0) info.Add($"每周 {Downloads(p.WeeklyDownloads)} 次下载");
+            if (p.Updated != null) info.Add(p.Updated.Value.ToLocalTime().ToString("yyyy-MM-dd") + " 更新");
+            var detail = (p.Description + "\n" + string.Join(" · ", info)).Trim();
+            _market.Children.Add(Card(p.Name, detail, Ui.Row(home, install)));
+        }
+    }
+
+    static string Downloads(long n) => n >= 10000 ? (n / 10000.0).ToString("0.#") + " 万" : n.ToString("N0");
+
+    /// <summary>"npm:name@1.2.3" → "name"; other sources stay as they are.</summary>
+    static string PackageName(string source)
+    {
+        if (!source.StartsWith("npm:", StringComparison.OrdinalIgnoreCase)) return source;
+        var name = source.Substring(4);
+        int at = name.LastIndexOf('@');
+        return at > 0 ? name.Substring(0, at) : name;
     }
 
     Button Action(string text, Action run, bool accent = false)
@@ -146,6 +213,7 @@ sealed class PluginsPage : DockPanel
             });
             _packages.Children.Add(Card(source, "", Ui.Row(update, remove)));
         }
+        ShowMarket();
         foreach (var b in _actions) b.IsEnabled = !_busy;
 
         _skills.Children.Clear();
@@ -209,6 +277,7 @@ sealed class PluginsPage : DockPanel
     static Border Card(string title, string detail, FrameworkElement right)
     {
         right.Margin = new Thickness(8, 0, 0, 0);
+        right.VerticalAlignment = VerticalAlignment.Center;
         var card = new DockPanel();
         SetDock(right, Dock.Right);
         card.Children.Add(right);
