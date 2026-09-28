@@ -28,6 +28,8 @@ sealed partial class TerminalPage : DockPanel, IConnectPrompts
         public HostEntry? Host;
         public ShellProfile? Shell;
         public string? Directory;
+        /// <summary>Run once the shell is up (docker exec and the like).</summary>
+        public string? Command;
         public SshConnection? Connection;
         public CancellationTokenSource? Cancel;
         public bool Connecting;
@@ -537,6 +539,18 @@ sealed partial class TerminalPage : DockPanel, IConnectPrompts
         SelectTab(tab);
     }
 
+    /// <summary>A new terminal on the active SSH session that runs the command.</summary>
+    void RunInNewTerminal(string title, string command)
+    {
+        if (ActivePane is not { Host: { IsSsh: true } } active) return;
+        var s = active.Tab.Session;
+        var tab = NewTab(s);
+        tab.CustomTitle = title;
+        var pane = AddPane(tab, s.Host, null);
+        pane.Command = command;
+        SelectTab(tab);
+    }
+
     void SelectTab(Tab tab)
     {
         var s = tab.Session;
@@ -699,6 +713,7 @@ sealed partial class TerminalPage : DockPanel, IConnectPrompts
             var session = new SshSession(connection, pane.View.Cols, pane.View.Rows, ownsConnection: false);
             pane.View.Attach(session);
             session.Start();
+            if (pane.Command != null) { session.Write(pane.Command + "\r"); pane.Command = null; }
             host.LastConnected = DateTime.Now;
             if (fresh) StartAutoTunnels(owner, pane);
             ScheduleSave();

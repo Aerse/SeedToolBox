@@ -20,14 +20,15 @@ sealed partial class TerminalPage
     FrameworkElement _hosts = null!;
     SftpPanel _sftp = null!;
     MonitorPanel _monitor = null!;
+    DockerPanel _docker = null!;
     SnippetPanel _snippets = null!;
     readonly ContentControl _sideHost = new();
     readonly TextBlock _sideTitle = new() { FontWeight = FontWeights.SemiBold, VerticalAlignment = VerticalAlignment.Center };
     readonly List<(int Index, Button Button, Border Mark)> _railButtons = new();
     int _side = -1;
 
-    const int SideHosts = 0, SideSftp = 1, SideMonitor = 2, SideSnippets = 3, SideHistory = 4;
-    static readonly string[] SideNames = { "主机", "文件", "服务器监控", "命令片段", "历史命令" };
+    const int SideHosts = 0, SideSftp = 1, SideMonitor = 2, SideSnippets = 3, SideHistory = 4, SideDocker = 5;
+    static readonly string[] SideNames = { "主机", "文件", "服务器监控", "命令片段", "历史命令", "Docker" };
 
     /// <summary>Makes bash and zsh report their directory (OSC 7) so SFTP can follow cd.</summary>
     const string ShellIntegration =
@@ -58,6 +59,7 @@ sealed partial class TerminalPage
         Add(SideHosts, "\uE7F4");
         Add(SideSftp, "\uE8B7");
         Add(SideMonitor, "\uE9D9");
+        Add(SideDocker, "\uE7B8");
         Add(SideSnippets, "\uE943");
         Add(SideHistory, "\uE81C");
         var more = RailButton("\uE712", "更多");
@@ -79,6 +81,7 @@ sealed partial class TerminalPage
         };
         _sftp.FavoritesChanged += ScheduleSave;
         _monitor = new MonitorPanel(() => Owner);
+        _docker = new DockerPanel(() => Owner, RunInNewTerminal);
         _snippets = new SnippetPanel(_data, () => Owner, SendToTerminal, ScheduleSave);
 
         var panel = new DockPanel { Margin = new Thickness(10, 8, 8, 6) };
@@ -127,7 +130,7 @@ sealed partial class TerminalPage
             _sideSplitter.Visibility = Visibility.Visible;
             _sideTitle.Text = SideNames[index];
             if (index is SideSnippets or SideHistory) _snippets.ShowTab(index == SideHistory);
-            _sideHost.Content = index switch { SideHosts => _hosts, SideSftp => _sftp, SideMonitor => _monitor, _ => _snippets };
+            _sideHost.Content = index switch { SideHosts => _hosts, SideSftp => _sftp, SideMonitor => _monitor, SideDocker => _docker, _ => _snippets };
         }
         BindSidePanel();
     }
@@ -138,6 +141,7 @@ sealed partial class TerminalPage
         var connection = pane?.Connection is { IsConnected: true } c ? c : null;
         _snippets.SetHistoryKey(pane?.HistoryKey ?? "local");
         _monitor.Bind(_side == SideMonitor ? connection : null);
+        _docker.Bind(_side == SideDocker ? connection : null);
         _sftp.Favorites = pane?.Host?.Favorites;
         if (_side == SideSftp) _sftp.Bind(connection, pane?.View.Directory);
     }
