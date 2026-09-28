@@ -22,6 +22,7 @@
 <script src="addon-fit.js"></script>
 <script src="addon-search.js"></script>
 <script src="addon-web-links.js"></script>
+<script src="zmodem.js"></script>
 <script>
   const host = window.chrome.webview;
   const post = m => host.postMessage(m);
@@ -52,7 +53,7 @@
     if (suggestOn) post({ t: 'line', s: line ?? '' });
   }
 
-  term.onData(d => { track(d); post({ t: 'input', d }); });
+  term.onData(d => { if (zsession) { if (d === '\x03') zabort(); return; } track(d); post({ t: 'input', d }); });
   term.onBinary(d => post({ t: 'binary', d: btoa(d) }));
   term.onResize(s => post({ t: 'resize', c: s.cols, r: s.rows }));
   term.onTitleChange(s => post({ t: 'title', s }));
@@ -129,10 +130,98 @@
   document.addEventListener('drop', e => e.preventDefault());
 
   const b64 = s => Uint8Array.from(atob(s), c => c.charCodeAt(0));
+  const tob64 = a => { let s = ''; for (let i = 0; i < a.length; i += 0x8000) s += String.fromCharCode.apply(null, a.subarray ? a.subarray(i, i + 0x8000) : a.slice(i, i + 0x8000)); return btoa(s); };
+
+  // ---------- ZMODEM (rz / sz) ----------
+  // The page watches the output for a ZMODEM start; files are read and written by the host app, a chunk per message.
+  let zsession = null, zseq = 0, zpickDone = null;
+  const zreads = new Map(), zsaves = new Map();
+  const zask = (map, msg) => new Promise(res => { const id = ++zseq; map.set(id, res); post(Object.assign({ id }, msg)); });
+  const size = n => n < 1024 ? n + ' B' : n < 1048576 ? (n / 1024).toFixed(1) + ' KB' : n < 1073741824 ? (n / 1048576).toFixed(1) + ' MB' : (n / 1073741824).toFixed(2) + ' GB';
+  function zprogress(name, done, total, started, end) {
+    const secs = Math.max((Date.now() - started) / 1000, 0.001);
+    const pct = total ? Math.min(100, Math.floor(done * 100 / total)) : 100;
+    const bar = '#'.repeat(Math.floor(pct / 5)).padEnd(20, '.');
+    term.write('\r\x1b[K\x1b[36m' + name + '\x1b[0m [' + bar + '] ' + pct + '% ' + size(done) + ' / ' + size(total) + '  ' + size(done / secs) + '/s' + (end ? '\r\n' : ''));
+  }
+  function zfail(e) {
+    term.write('\r\n\x1b[31mZMODEM 传输出错：' + (e && e.message || e) + '\x1b[0m\r\n');
+    if (zsession) { try { zsession.abort(); } catch { } }
+    zsession = null;
+    post({ t: 'zdone' });
+  }
+  function zabort() {
+    if (!zsession) return;
+    try { zsession.abort(); } catch { }
+    zsession = null;
+    term.write('\r\n\x1b[33m已取消传输\x1b[0m\r\n');
+    post({ t: 'zdone', aborted: true });
+  }
+  const sentry = new Zmodem.Sentry({
+    to_terminal: octets => term.write(new Uint8Array(octets)),
+    sender: octets => post({ t: 'zout', d: tob64(new Uint8Array(octets)) }),
+    on_retract: () => { },
+    on_detect: detection => {
+      const session = detection.confirm();
+      zsession = session;
+      session.on('session_end', () => { if (zsession === session) { zsession = null; post({ t: 'zdone' }); } });
+      if (session.type === 'receive') zreceive(session); else zsend(session);
+    },
+  });
+  function zreceive(session) {
+    term.write('\r\n');
+    session.on('offer', async xfer => {
+      const d = xfer.get_details();
+      const ok = await zask(zsaves, { t: 'zsave', name: d.name, size: d.size || 0 });
+      if (!ok) { xfer.skip(); term.write('\x1b[90m跳过 ' + d.name + '\x1b[0m\r\n'); return; }
+      const id = zseq, started = Date.now();
+      let done = 0, last = 0;
+      xfer.on('input', payload => {
+        done += payload.length;
+        post({ t: 'zwrite', id, d: tob64(new Uint8Array(payload)) });
+        if (Date.now() - last > 150) { last = Date.now(); zprogress(d.name, done, d.size || done, started); }
+      });
+      try { await xfer.accept(); zprogress(d.name, done, d.size || done, started, true); post({ t: 'zclose', id, ok: true }); }
+      catch (e) { post({ t: 'zclose', id, ok: false }); throw e; }
+    });
+    session.start();
+  }
+  function zsend(session) {
+    term.write('\r\n');
+    zpickDone = async files => {
+      try {
+        if (!files.length) { session.abort(); zsession = null; term.write('\x1b[33m没有选择文件\x1b[0m\r\n'); post({ t: 'zdone', aborted: true }); return; }
+        let remaining = files.reduce((a, f) => a + f.size, 0);
+        for (let i = 0; i < files.length; i++) {
+          const f = files[i];
+          const xfer = await session.send_offer({ name: f.name, size: f.size, mtime: new Date(f.mtime), files_remaining: files.length - i, bytes_remaining: remaining });
+          remaining -= f.size;
+          if (!xfer) { term.write('\x1b[90m对方已有 ' + f.name + '，跳过\x1b[0m\r\n'); continue; }
+          const started = Date.now();
+          let off = 0, last = 0;
+          while (true) {
+            const chunk = await zask(zreads, { t: 'zread', file: f.i, off, n: 65536 });
+            if (zsession !== session) return;
+            off += chunk.length;
+            if (off >= f.size || !chunk.length) { await xfer.end(chunk); break; }
+            xfer.send(chunk);
+            if (Date.now() - last > 150) { last = Date.now(); zprogress(f.name, off, f.size, started); }
+          }
+          zprogress(f.name, off, f.size, started, true);
+        }
+        await session.close();
+      } catch (e) { zfail(e); }
+    };
+    post({ t: 'zpick' });
+  }
+  function zpicked(files) { const f = zpickDone; zpickDone = null; if (f) f(files); }
   host.addEventListener('message', ev => {
     const m = ev.data;
     switch (m.t) {
-      case 'data': term.write(b64(m.d)); break;
+      case 'data': { const bytes = b64(m.d); try { sentry.consume(bytes); } catch (e) { zfail(e); term.write(bytes); } break; }
+      case 'zfiles': zpicked(m.files || []); break;
+      case 'zchunk': { const r = zreads.get(m.id); if (r) { zreads.delete(m.id); r(b64(m.d || '')); } break; }
+      case 'zsaved': { const r = zsaves.get(m.id); if (r) { zsaves.delete(m.id); r(!!m.ok); } break; }
       case 'text': term.write(m.s); break;
       case 'opts':
         if (m.theme) term.options.theme = m.theme;

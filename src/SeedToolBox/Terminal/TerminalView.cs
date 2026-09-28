@@ -62,7 +62,7 @@ static class TerminalThemes
 }
 
 /// <summary>One xterm.js terminal in a WebView2, wired to an <see cref="ISession"/>.</summary>
-sealed class TerminalView : Border
+sealed partial class TerminalView : Border
 {
     const string VirtualHost = "stb-terminal.example";
     static Task<CoreWebView2Environment>? _environment;
@@ -177,6 +177,9 @@ sealed class TerminalView : Border
             case "text":
                 var id = (string?)m["id"] ?? "";
                 if (_textRequests.TryGetValue(id, out var tcs)) { _textRequests.Remove(id); tcs.TrySetResult((string?)m["s"] ?? ""); }
+                break;
+            case string z when z.StartsWith("z"):
+                OnZmodem(z, m);
                 break;
         }
     }
