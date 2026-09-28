@@ -201,7 +201,19 @@ sealed class ClipboardPage : DockPanel
 
     void ShowSelected()
     {
-        if (_editing != null) EndEdit(save: false);
+        if (_editing is { } edited)
+        {
+            // Moving to another entry keeps the edit instead of dropping it; saved once the selection change is done
+            var changed = _text.Text;
+            EndEdit(save: false);
+            if (changed.Length > 0 && changed != edited.Text)
+                Dispatcher.BeginInvoke(new Action(() =>
+                {
+                    if (!_history.Entries.Contains(edited)) return;
+                    _history.UpdateText(edited, changed);
+                    Ui.SetStatus(_status, "已保存修改");
+                }));
+        }
         var entry = Selected;
         _pin.Content = entry?.Pinned == true ? "取消置顶" : "置顶";
         _text.Visibility = entry?.IsImage == true ? Visibility.Collapsed : Visibility.Visible;

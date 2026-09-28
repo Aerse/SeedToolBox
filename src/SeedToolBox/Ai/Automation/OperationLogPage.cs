@@ -53,6 +53,10 @@ sealed class OperationLogPage : DockPanel
             if (item.CanUndo)
                 right = Ui.Button("撤销", () =>
                 {
+                    var changed = OperationLog.ChangedSince(item);
+                    if (changed.Count > 0 && MessageBox.Show(Window.GetWindow(this),
+                            "这些文件在那之后又被改过：\n" + string.Join("\n", changed.Take(10)) + (changed.Count > 10 ? $"\n……共 {changed.Count} 个" : "") +
+                            "\n\n撤销时现在的内容会移到回收站。继续吗？", "AI 操作记录", MessageBoxButton.YesNo, MessageBoxImage.Warning) != MessageBoxResult.Yes) return;
                     var problem = _log.Undo(item);
                     Ui.SetStatus(_status, problem.Length == 0 ? "已撤销：" + item.Summary : "有些没有撤销：\n" + problem, problem.Length > 0);
                 });

@@ -28,6 +28,8 @@ sealed class PortEntry
     public int Pid { get; set; }
     public string Process { get; set; } = "";
     public string? ProcessPath { get; set; }
+    /// <summary>Process creation time as a FILETIME, 0 when unknown; tells a reused PID apart.</summary>
+    public long Started { get; set; }
 }
 
 /// <summary>Ports and the processes holding them, network adapters, ping and TCP port tests.</summary>
@@ -163,7 +165,7 @@ sealed partial class NetworkPage : DockPanel
         Ui.SetStatus(_portStatus, $"共 {list.Count} 条（总计 {_allPorts.Count}）  右键可结束进程；系统进程需要以管理员身份运行才能结束");
     }
 
-    void KillSelected()
+    async void KillSelected()
     {
         if (_portList.SelectedItem is not PortEntry entry) { Ui.SetStatus(_portStatus, "先选中一行", true); return; }
         if (entry.Pid <= 4) { Ui.SetStatus(_portStatus, "这是系统进程，不能结束", true); return; }
@@ -171,9 +173,17 @@ sealed partial class NetworkPage : DockPanel
         if (MessageBox.Show(Window.GetWindow(this), $"结束进程 {entry.Process}（PID {entry.Pid}）？\n未保存的数据会丢失。", "结束进程", MessageBoxButton.OKCancel, MessageBoxImage.Warning) != MessageBoxResult.OK) return;
         try
         {
+            // The list can be seconds old: make sure the PID still belongs to the process the user confirmed
+            var now = PortTable.ProcessInfo(entry.Pid);
+            if (entry.Started != 0 && now.Started != 0 ? now.Started != entry.Started : !string.Equals(now.Name, entry.Process, StringComparison.OrdinalIgnoreCase))
+            {
+                Ui.SetStatus(_portStatus, $"PID {entry.Pid} 已不是 {entry.Process}，未结束任何进程", true);
+                RefreshPorts();
+                return;
+            }
             using var process = Process.GetProcessById(entry.Pid);
             process.Kill();
-            process.WaitForExit(3000);
+            await Task.Run(() => process.WaitForExit(3000));
             Ui.SetStatus(_portStatus, $"已结束 {entry.Process}（PID {entry.Pid}）");
         }
         catch (Exception ex) when (ex is Win32Exception or InvalidOperationException or ArgumentException)
@@ -373,35 +383,67 @@ static class PortTable
         ReadUdp(AF_INET, entries);
         ReadUdp(AF_INET6, entries);
 
-        var names = new Dictionary<int, (string Name, string? Path)>();
+        var names = new Dictionary<int, (string Name, string? Path, long Started)>();
         foreach (var e in entries)
         {
             if (!names.TryGetValue(e.Pid, out var info))
             {
-                info = e.Pid switch { 0 => ("System Idle", null), 4 => ("System", null), _ => ProcessInfo(e.Pid) };
+                info = e.Pid switch { 0 => ("System Idle", null, 0), 4 => ("System", null, 0), _ => ProcessInfo(e.Pid) };
                 names[e.Pid] = info;
             }
             e.Process = info.Name;
             e.ProcessPath = info.Path;
+            e.Started = info.Started;
         }
         return entries;
     }
 
-    static (string, string?) ProcessInfo(int pid)
+    /// <summary>Name and path by PID and creation time, so auto-refresh doesn't re-query every process each tick.</summary>
+    static readonly Dictionary<(int, long), (string Name, string? Path)> InfoCache = new();
+
+    public static (string Name, string? Path, long Started) ProcessInfo(int pid)
     {
+        // PROCESS_QUERY_LIMITED_INFORMATION works for most processes without elevation and is far cheaper than MainModule
+        var handle = OpenProcess(0x1000, false, pid);
+        if (handle != IntPtr.Zero)
+        {
+            try
+            {
+                long started = GetProcessTimes(handle, out var created, out _, out _, out _) ? created : 0;
+                lock (InfoCache)
+                    if (started != 0 && InfoCache.TryGetValue((pid, started), out var hit)) return (hit.Name, hit.Path, started);
+                var sb = new StringBuilder(1024);
+                int size = sb.Capacity;
+                if (QueryFullProcessImageName(handle, 0, sb, ref size))
+                {
+                    var path = sb.ToString();
+                    var name = System.IO.Path.GetFileNameWithoutExtension(path);
+                    if (started != 0)
+                        lock (InfoCache)
+                        {
+                            if (InfoCache.Count > 4096) InfoCache.Clear();
+                            InfoCache[(pid, started)] = (name, path);
+                        }
+                    return (name, path, started);
+                }
+            }
+            finally { CloseHandle(handle); }
+        }
         try
         {
             using var p = Process.GetProcessById(pid);
-            string? path = null;
-            try { path = p.MainModule?.FileName; }
-            catch (Exception ex) when (ex is Win32Exception or InvalidOperationException) { }
-            return (p.ProcessName, path);
+            return (p.ProcessName, null, 0);
         }
-        catch (ArgumentException)
+        catch (Exception ex) when (ex is ArgumentException or InvalidOperationException or Win32Exception)
         {
-            return ("（已退出）", null);
+            return ("（已退出）", null, 0);
         }
     }
+
+    [DllImport("kernel32.dll", SetLastError = true)] static extern IntPtr OpenProcess(uint access, bool inherit, int pid);
+    [DllImport("kernel32.dll")] static extern bool CloseHandle(IntPtr handle);
+    [DllImport("kernel32.dll", SetLastError = true)] static extern bool GetProcessTimes(IntPtr process, out long creation, out long exit, out long kernel, out long user);
+    [DllImport("kernel32.dll", CharSet = CharSet.Unicode, SetLastError = true)] static extern bool QueryFullProcessImageName(IntPtr process, int flags, StringBuilder name, ref int size);
 
     static readonly string[] TcpStates = { "", "CLOSED", "LISTEN", "SYN_SENT", "SYN_RCVD", "ESTABLISHED", "FIN_WAIT1", "FIN_WAIT2", "CLOSE_WAIT", "CLOSING", "LAST_ACK", "TIME_WAIT", "DELETE_TCB" };
 

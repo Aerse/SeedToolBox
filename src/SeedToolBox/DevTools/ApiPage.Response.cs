@@ -36,6 +36,9 @@ sealed partial class ApiPage
     readonly TextBox _console = Ui.Area();
     Panel _responseActions = null!;
     TabItem _testsTab = null!, _consoleTab = null!;
+    // One browser for every HTML preview, built when the Preview page is first shown.
+    WebBrowser? _browser;
+    ApiResponse? _previewFor, _previewShown;
 
     void BuildResponse()
     {
@@ -73,6 +76,15 @@ sealed partial class ApiPage
         _bodyViews.Items.Add(new TabItem { Header = "Pretty", Content = prettyDock, Tag = treeButtons });
         _bodyViews.Items.Add(new TabItem { Header = "Raw", Content = _rawView });
         _bodyViews.Items.Add(new TabItem { Header = "Preview", Content = _preview });
+        _bodyViews.SelectionChanged += (_, e) => { if (e.OriginalSource == _bodyViews) RenderPreview(); };
+        Loaded += (_, _) => RenderPreview();
+        Unloaded += (_, _) =>
+        {
+            _preview.Content = null;
+            _previewShown = null;
+            _browser?.Dispose();
+            _browser = null;
+        };
 
         _responseHeaders.View = GridOf(("名称", "Key", 200), ("值", "Value", 500));
         _cookies.View = GridOf(("名称", "Name", 140), ("值", "Value", 220), ("域", "Domain", 140), ("路径", "Path", 80), ("过期", "Expires", 140), ("HttpOnly", "HttpOnly", 70), ("Secure", "Secure", 60));
@@ -162,11 +174,7 @@ sealed partial class ApiPage
         _rawView.Text = text.Length > MaxRawChars ? text.Substring(0, MaxRawChars) + "\n…（只显示前 2 MB）" : text;
         var treeButtons = (FrameworkElement)((TabItem)_bodyViews.Items[0]).Tag;
         treeButtons.Visibility = Visibility.Collapsed;
-        JToken? json = null;
-        if (r != null && r.IsJson && text.Length < 20 * 1024 * 1024)
-        {
-            try { json = JToken.Parse(text); } catch (JsonReaderException) { }
-        }
+        var json = r?.Json;
         if (json != null)
         {
             _jsonTree.Show(json);
@@ -178,7 +186,8 @@ sealed partial class ApiPage
             _pretty.Text = r != null && (r.ContentType.Contains("xml") || r.IsHtml) ? TryXml(_rawView.Text) : _rawView.Text;
             _prettyHost.Content = _pretty;
         }
-        _preview.Content = r == null ? null : Preview(r);
+        _previewFor = r;
+        RenderPreview();
 
         _responseHeaders.ItemsSource = r?.Headers;
         _cookies.ItemsSource = r?.Cookies;
@@ -216,6 +225,14 @@ sealed partial class ApiPage
         catch (System.Xml.XmlException) { return text; }
     }
 
+    /// <summary>Loads the preview only while the Preview page is showing, and only when the response changed.</summary>
+    void RenderPreview()
+    {
+        if (_bodyViews.SelectedIndex != 2 || _previewShown == _previewFor) return;
+        _previewShown = _previewFor;
+        _preview.Content = _previewFor == null ? null : Preview(_previewFor);
+    }
+
     UIElement Preview(ApiResponse r)
     {
         if (r.IsImage)
@@ -234,15 +251,27 @@ sealed partial class ApiPage
         }
         if (r.IsHtml)
         {
-            var browser = new WebBrowser();
-            browser.Navigated += (_, _) => SilenceScriptErrors(browser);
-            var html = r.Text;
-            var head = "<meta charset=\"utf-8\"><base href=\"" + System.Net.WebUtility.HtmlEncode(r.FinalUrl) + "\">";
+            if (_browser == null)
+            {
+                var browser = _browser = new WebBrowser();
+                browser.Navigated += (_, _) => SilenceScriptErrors(browser);
+            }
+            var html = WithoutScripts(r.Text);
+            var head = "<meta charset=\"utf-8\"><meta http-equiv=\"Content-Security-Policy\" content=\"script-src 'none'; object-src 'none'\"><base href=\"" + System.Net.WebUtility.HtmlEncode(r.FinalUrl) + "\">";
             html = Regex.IsMatch(html, "<head[^>]*>", RegexOptions.IgnoreCase) ? Regex.Replace(html, "<head[^>]*>", m => m.Value + head, RegexOptions.IgnoreCase) : head + html;
-            browser.NavigateToString(html.Length > 0 ? html : " ");
-            return browser;
+            _browser.NavigateToString(html.Length > 0 ? html : " ");
+            return _browser;
         }
         return new TextBlock { Text = "Preview 只能显示 HTML 和图片；这次的内容类型是 " + (r.ContentType.Length > 0 ? r.ContentType : "未知"), Foreground = Views.DialogWindow.HintBrush, Margin = new Thickness(0, 8, 0, 0) };
+    }
+
+    /// <summary>The page without scripts, plugins and event handlers: responses come from anywhere and the IE engine runs with local rights.</summary>
+    static string WithoutScripts(string html)
+    {
+        const RegexOptions o = RegexOptions.IgnoreCase;
+        html = Regex.Replace(html, @"<(script|object|embed|applet)\b[\s\S]*?(</\1\s*>|$)", "", o);
+        html = Regex.Replace(html, @"\son[a-z]+\s*=\s*(""[^""]*""|'[^']*'|[^\s>]+)", "", o);
+        return Regex.Replace(html, @"\b(href|src|action)\s*=\s*([""']?)\s*(javascript|vbscript):", "$1=$2about:blank#", o);
     }
 
     static void SilenceScriptErrors(WebBrowser browser)

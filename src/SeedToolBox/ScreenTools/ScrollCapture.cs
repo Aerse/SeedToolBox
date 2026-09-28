@@ -1,5 +1,6 @@
 using System;
 using System.Collections.Generic;
+using System.Runtime.InteropServices;
 using System.Windows;
 using System.Windows.Controls;
 using System.Windows.Input;
@@ -115,11 +116,17 @@ sealed class ScrollStitcher
         return row;
     }
 
+    /// <summary>The stitched image. Hands the rows over, so call it once, at the end.</summary>
     public BitmapSource ToImage()
     {
-        var pixels = new byte[_rows.Count * _stride];
-        for (int y = 0; y < _rows.Count; y++) Buffer.BlockCopy(_rows[y], 0, pixels, y * _stride, _stride);
-        var image = BitmapSource.Create(_width, _rows.Count, 96, 96, PixelFormats.Bgr32, null, pixels, _stride);
+        // Rows go straight into the bitmap's buffer and are dropped: no extra full-size copies at the peak
+        var image = new WriteableBitmap(_width, _rows.Count, 96, 96, PixelFormats.Bgr32, null);
+        image.Lock();
+        for (int y = 0; y < _rows.Count; y++) Marshal.Copy(_rows[y], 0, image.BackBuffer + y * image.BackBufferStride, _stride);
+        image.AddDirtyRect(new Int32Rect(0, 0, _width, _rows.Count));
+        image.Unlock();
+        _rows.Clear();
+        _rows.TrimExcess();
         image.Freeze();
         return image;
     }

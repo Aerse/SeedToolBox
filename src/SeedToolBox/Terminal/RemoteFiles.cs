@@ -103,7 +103,7 @@ sealed class FtpFiles : IRemoteFiles
     // Transfers get their own connection so the folder tree stays usable meanwhile.
     AsyncFtpClient? _transfer;
     readonly SemaphoreSlim _transferLock = new(1, 1);
-    /// <summary>Certificates the user accepted this run, by thumbprint.</summary>
+    /// <summary>Certificates the user accepted this run, by host:port and thumbprint.</summary>
     static readonly HashSet<string> Trusted = new();
 
     FtpFiles(HostEntry host, string password)
@@ -145,11 +145,13 @@ sealed class FtpFiles : IRemoteFiles
     bool Trust(System.Security.Cryptography.X509Certificates.X509Certificate cert)
     {
         var id = cert.GetCertHashString();
-        lock (Trusted) if (Trusted.Contains(id)) return true;
+        var key = $"{_host.Host}:{_host.Port}|{id}";
+        lock (Trusted) if (Trusted.Contains(key)) return true;
         var ok = Application.Current.Dispatcher.Invoke(() => MessageBox.Show(
+            Application.Current.Windows.OfType<Window>().FirstOrDefault(w => w.IsActive) ?? Application.Current.MainWindow,
             $"{_host.Host} 的证书没有通过校验（可能是自签名证书）。\n\n颁发给：{cert.Subject}\n颁发者：{cert.Issuer}\n指纹：{id}\n\n仍然连接吗？",
             "FTPS 证书", MessageBoxButton.YesNo, MessageBoxImage.Warning) == MessageBoxResult.Yes);
-        if (ok) lock (Trusted) Trusted.Add(id);
+        if (ok) lock (Trusted) Trusted.Add(key);
         return ok;
     }
 

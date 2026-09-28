@@ -225,7 +225,9 @@ sealed class EnvVarsPage : DockPanel
         bool expand = _expand.IsChecked == true || value.Contains('%') && _editing == null;
         bool system = _editingSystem;
         var existing = (system ? _system : _user).FirstOrDefault(v => v.Name.Equals(name, StringComparison.OrdinalIgnoreCase));
-        if (_editing == null && existing != null && MessageBox.Show(Window.GetWindow(this), $"{name} 已存在，覆盖？", "环境变量", MessageBoxButton.OKCancel, MessageBoxImage.Question) != MessageBoxResult.OK) return;
+        // Also when renaming onto another variable, which would otherwise be replaced silently
+        bool other = existing != null && (_editing == null || !_editing.Name.Equals(name, StringComparison.OrdinalIgnoreCase));
+        if (other && MessageBox.Show(Window.GetWindow(this), $"{name} 已存在，覆盖？", "环境变量", MessageBoxButton.OKCancel, MessageBoxImage.Question) != MessageBoxResult.OK) return;
         var renamedFrom = _editing != null && !_editing.Name.Equals(name, StringComparison.OrdinalIgnoreCase) ? _editing.Name : null;
         await Apply(system, $"已保存 {name}", reg =>
         {

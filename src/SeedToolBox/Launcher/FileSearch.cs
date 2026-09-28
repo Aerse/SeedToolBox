@@ -16,8 +16,8 @@ namespace SeedToolBox.Launcher;
 static class FileSearch
 {
     public const int MaxResults = 30;
-    static string? _es;
-    static bool _esChecked;
+    // Looked up once; the UI thread (Engine) and search threads may ask at the same time
+    static readonly Lazy<string?> Es = new(LocateEs, isThreadSafe: true);
 
     /// <summary>Which engine answers searches, for the hint line.</summary>
     public static string Engine => FindEs() != null ? "Everything" : "Windows 搜索";
@@ -35,10 +35,10 @@ static class FileSearch
         return WindowsSearch(query);
     }
 
-    static string? FindEs()
+    static string? FindEs() => Es.Value;
+
+    static string? LocateEs()
     {
-        if (_esChecked) return _es;
-        _esChecked = true;
         var candidates = (Environment.GetEnvironmentVariable("PATH") ?? "").Split(';')
             .Where(p => p.Length > 0).Select(p => Path.Combine(p.Trim(), "es.exe"))
             .Concat(new[]
@@ -48,7 +48,7 @@ static class FileSearch
             });
         foreach (var path in candidates)
         {
-            try { if (File.Exists(path)) return _es = path; }
+            try { if (File.Exists(path)) return path; }
             catch (ArgumentException) { }
         }
         return null;
@@ -64,11 +64,18 @@ static class FileSearch
             StandardOutputEncoding = Encoding.UTF8,
         };
         using var process = Process.Start(info)!;
-        var output = process.StandardOutput.ReadToEnd();
-        process.WaitForExit(3000);
+        // Read asynchronously so a hung es.exe can't block past the timeout
+        var output = process.StandardOutput.ReadToEndAsync();
+        if (!process.WaitForExit(3000))
+        {
+            try { process.Kill(); }
+            catch (Exception ex) when (ex is InvalidOperationException or System.ComponentModel.Win32Exception) { }
+            throw new TimeoutException("es.exe did not answer in time");
+        }
+        process.WaitForExit();
         // es.exe exits non-zero when Everything isn't running
         if (process.ExitCode != 0) throw new InvalidOperationException($"es.exe exited with {process.ExitCode}");
-        return output.Split(new[] { "\r\n", "\n" }, StringSplitOptions.RemoveEmptyEntries).ToList();
+        return output.Result.Split(new[] { "\r\n", "\n" }, StringSplitOptions.RemoveEmptyEntries).ToList();
     }
 
     static List<string> WindowsSearch(string query)

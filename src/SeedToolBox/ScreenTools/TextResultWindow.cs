@@ -134,13 +134,34 @@ sealed class TextResultWindow : Window
             var text = (_text.SelectionLength > 0 ? _text.SelectedText : _text.Text).Trim();
             if (text.Length == 0) return;
             // Browsers and servers reject very long URLs
-            if (text.Length > 1800) text = text.Substring(0, 1800);
-            var url = urlTemplate.Contains("{text}")
-                ? urlTemplate.Replace("{text}", Uri.EscapeDataString(text))
-                : urlTemplate + Uri.EscapeDataString(text);
-            ProcessLauncher.Start(url);
+            try
+            {
+                // Throws on a lone surrogate, which a broken paste can contain
+                var escaped = Uri.EscapeDataString(Shorten(text, 6000));
+                ProcessLauncher.Start(urlTemplate.Contains("{text}") ? urlTemplate.Replace("{text}", escaped) : urlTemplate + escaped);
+            }
+            catch (Exception ex) { Toast.Show($"无法打开翻译页面：{ex.Message}"); }
         };
         buttons.Children.Insert(0, translate);
+    }
+
+    /// <summary>
+    /// The start of the text that stays within <paramref name="limit"/> characters once URL-escaped
+    /// (a CJK character takes 9), never splitting a surrogate pair.
+    /// </summary>
+    static string Shorten(string text, int limit)
+    {
+        int length = 0;
+        for (int i = 0; i < text.Length; i++)
+        {
+            char c = text[i];
+            bool pair = char.IsHighSurrogate(c) && i + 1 < text.Length && char.IsLowSurrogate(text[i + 1]);
+            int cost = pair ? 12 : c < 0x80 ? (char.IsLetterOrDigit(c) || "-_.~".IndexOf(c) >= 0 ? 1 : 3) : c < 0x800 ? 6 : 9;
+            if (length + cost > limit) return text.Substring(0, i);
+            length += cost;
+            if (pair) i++;
+        }
+        return text;
     }
 
     /// <summary>Adds 交给 AI, which opens the automation mode with the recognized text.</summary>

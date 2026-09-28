@@ -27,6 +27,17 @@ static class ReminderParser
 
     public static bool TryParse(string input, DateTime now, out Reminder reminder)
     {
+        // Called on every keystroke of the preview: out-of-range dates such as year 0000 or 9999-12-31 24点 are just not a reminder
+        try { return Parse(input, now, out reminder); }
+        catch (Exception ex) when (ex is ArgumentOutOfRangeException or ArgumentException or FormatException or OverflowException)
+        {
+            reminder = null!;
+            return false;
+        }
+    }
+
+    static bool Parse(string input, DateTime now, out Reminder reminder)
+    {
         reminder = null!;
         var text = input.Trim();
         if (text.StartsWith("提醒我")) text = text.Substring(3).TrimStart();
@@ -69,7 +80,10 @@ static class ReminderParser
         var ampm = abs.Groups["ampm"].Value;
         var day = abs.Groups["day"].Value;
         if (day is "今晚" or "明晚") ampm = "晚上";
-        if (ampm is "下午" or "傍晚" or "晚上" or "夜里" && hour < 12) hour += 12;
+        // "晚上12点" / "夜里12点" is the midnight at the end of that day
+        int extraDays = 0;
+        if (ampm is "晚上" or "夜里" && hour == 12) { hour = 0; extraDays = 1; }
+        else if (ampm is "下午" or "傍晚" or "晚上" or "夜里" && hour < 12) hour += 12;
         else if (ampm == "中午" && hour < 5) hour += 12;
         else if (ampm is "上午" or "早上" or "早晨" or "早" or "凌晨" && hour == 12) hour = 0;
         if (hour == 24) hour = 0;
@@ -101,11 +115,12 @@ static class ReminderParser
             int y = abs.Groups["y"].Success ? int.Parse(abs.Groups["y"].Value) : now.Year;
             int m = int.Parse(abs.Groups["m"].Success ? abs.Groups["m"].Value : abs.Groups["m2"].Value);
             int d = int.Parse(abs.Groups["m"].Success ? abs.Groups["d"].Value : abs.Groups["d2"].Value);
-            if (m < 1 || m > 12 || d < 1 || d > DateTime.DaysInMonth(y, m)) return false;
+            if (y < 1 || y > 9998 || m < 1 || m > 12 || d < 1 || d > DateTime.DaysInMonth(y, m)) return false;
             date = new DateTime(y, m, d);
             if (!abs.Groups["y"].Success && date.AddHours(hour).AddMinutes(minute) <= now) date = date.AddYears(1);
         }
 
+        date = date.AddDays(extraDays);
         var due = date.AddHours(hour).AddMinutes(minute);
         if (due <= now && repeat != ReminderRepeat.None) due = Reminder.Next(due, repeat, now);
         else if (due <= now && !hasDate)

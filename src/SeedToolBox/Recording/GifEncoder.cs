@@ -121,9 +121,12 @@ sealed class GifEncoder : IDisposable
         }
         _previous = frame;
 
+        // A delay is 16 bits: longer ones are spread over transparent 1-pixel frames that follow
+        int parts = (delay + 65534) / 65535;
+
         // Graphic control: disposal 1 (leave in place), transparent index
         _stream.Write(new byte[] { 0x21, 0xF9, 4, (1 << 2) | 1 }, 0, 4);
-        Short(delay);
+        Short(delay / parts + (delay % parts > 0 ? 1 : 0));
         _stream.WriteByte(Transparent);
         _stream.WriteByte(0);
 
@@ -134,6 +137,16 @@ sealed class GifEncoder : IDisposable
         Short(_bottom - _top);
         _stream.WriteByte(0);
         Lzw.Encode(_stream, data);
+
+        for (int i = 1; i < parts; i++)
+        {
+            _stream.Write(new byte[] { 0x21, 0xF9, 4, (1 << 2) | 1 }, 0, 4);
+            Short(delay / parts + (i < delay % parts ? 1 : 0));
+            _stream.WriteByte(Transparent);
+            _stream.WriteByte(0);
+            _stream.Write(new byte[] { 0x2C, 0, 0, 0, 0, 1, 0, 1, 0, 0 }, 0, 10);
+            Lzw.Encode(_stream, new[] { Transparent });
+        }
     }
 
     void ChangedRect(byte[] frame)

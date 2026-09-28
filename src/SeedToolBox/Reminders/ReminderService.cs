@@ -78,6 +78,7 @@ sealed class ReminderService
     readonly ReminderData _data;
     readonly DispatcherTimer _timer = new() { Interval = TimeSpan.FromSeconds(1) };
     readonly List<ReminderPopup> _popups = new();
+    int _lastMinute = -1;
 
     public event Action? Changed;
     /// <summary>Runs reminders that carry an AI task.</summary>
@@ -119,8 +120,12 @@ sealed class ReminderService
         var due = _data.Items.Where(r => r.Due <= now).ToList();
         if (due.Count == 0)
         {
-            // Refresh the "N 分钟后" texts about once a minute
-            if (now.Second == 0) Changed?.Invoke();
+            // Refresh the "N 分钟后" texts once a minute; ticks can drift past second 0 while the UI is busy
+            if (now.Minute != _lastMinute)
+            {
+                _lastMinute = now.Minute;
+                Changed?.Invoke();
+            }
             return;
         }
         foreach (var reminder in due)

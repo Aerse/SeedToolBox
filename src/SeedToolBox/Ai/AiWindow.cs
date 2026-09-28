@@ -34,7 +34,9 @@ sealed class AiWindow : Window
     readonly DispatcherTimer _render = new() { Interval = TimeSpan.FromMilliseconds(80) };
     /// <summary>The answer being streamed, re-rendered from Markdown as text arrives; a tool call starts a new one.</summary>
     Section? _answer;
-    string _segment = "";
+    readonly System.Text.StringBuilder _segment = new();
+    /// <summary>The start of the answer that is rendered for good, and how many of the answer's blocks that made; only the rest is redone.</summary>
+    int _frozenLength, _frozenBlocks;
     ScrollViewer? _scroll;
     readonly TextBox _question = Ui.Area(wrap: true);
     readonly TextBlock _status = Ui.Status();
@@ -346,7 +348,8 @@ sealed class AiWindow : Window
 
     void StartSegment()
     {
-        _segment = "";
+        _segment.Clear();
+        _frozenLength = _frozenBlocks = 0;
         _answer = new Section { Margin = new Thickness(0, 0, 0, 12) };
         _chat.Blocks.Add(_answer);
     }
@@ -369,7 +372,7 @@ sealed class AiWindow : Window
         client.TextDelta += delta =>
         {
             if (_segment.Length == 0) Ui.SetStatus(_status, "正在回答…（Esc 停止）");
-            _segment += delta;
+            _segment.Append(delta);
             _lastAnswer += delta;
             if (!_render.IsEnabled) _render.Start();
         };
@@ -429,7 +432,9 @@ sealed class AiWindow : Window
         _chat.Blocks.Clear();
         _calls.Clear();
         _answer = null;
-        _lastAnswer = _segment = _firstQuestion = "";
+        _lastAnswer = _firstQuestion = "";
+        _segment.Clear();
+        _frozenLength = _frozenBlocks = 0;
         _server?.ResetSession();
         if (_client != null)
         {
@@ -644,8 +649,18 @@ sealed class AiWindow : Window
     {
         if (_answer == null) return;
         bool atEnd = _scroll == null || _scroll.VerticalOffset >= _scroll.ScrollableHeight - 24;
-        _answer.Blocks.Clear();
-        _answer.Blocks.AddRange(Markdown.Render(_segment).ToList());
+        // Closed paragraphs and code blocks stay as they are (with any selection in them); only the open tail is rendered again
+        var tail = _segment.ToString(_frozenLength, _segment.Length - _frozenLength);
+        while (_answer.Blocks.Count > _frozenBlocks) _answer.Blocks.Remove(_answer.Blocks.LastBlock);
+        int stable = Markdown.StableEnd(tail);
+        if (stable > 0)
+        {
+            _answer.Blocks.AddRange(Markdown.Render(tail.Substring(0, stable)).ToList());
+            _frozenBlocks = _answer.Blocks.Count;
+            _frozenLength += stable;
+            tail = tail.Substring(stable);
+        }
+        _answer.Blocks.AddRange(Markdown.Render(tail).ToList());
         if (atEnd) ScrollToEnd();
     }
 

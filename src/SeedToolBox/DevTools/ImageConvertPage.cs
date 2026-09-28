@@ -273,7 +273,13 @@ static class ImageConverter
             output = OutputPath(path, ext, o.Folder);
             File.WriteAllBytes(output, new byte[0]);
         }
-        File.WriteAllBytes(output, data);
+        try { File.WriteAllBytes(output, data); }
+        catch
+        {
+            // Don't leave the empty placeholder behind
+            try { File.Delete(output); } catch { }
+            throw;
+        }
         return (output, info, $"{image.PixelWidth}×{image.PixelHeight}，{Ui.FormatSize(data.Length)}");
     }
 

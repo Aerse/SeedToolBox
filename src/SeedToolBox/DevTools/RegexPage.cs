@@ -4,6 +4,7 @@ using System.IO;
 using System.Linq;
 using System.Text;
 using System.Text.RegularExpressions;
+using System.Threading.Tasks;
 using System.Windows;
 using System.Windows.Controls;
 using System.Windows.Documents;
@@ -191,7 +192,10 @@ sealed class RegexPage : DockPanel
         Color.FromArgb(0x70, 0x2E, 0xC4, 0xC4), Color.FromArgb(0x70, 0xFF, 0x9F, 0x40), Color.FromArgb(0x70, 0x9C, 0xCC, 0x3C),
     };
 
-    void Run()
+    const int TotalBudgetMs = 5000;
+    int _runVersion;
+
+    async void Run()
     {
         var text = _input.Text;
         var paragraph = new Paragraph();
@@ -199,6 +203,7 @@ sealed class RegexPage : DockPanel
         _highlight.Document.Blocks.Add(paragraph);
         _details.Clear();
         _preview.Clear();
+        int version = ++_runVersion;
         if (_pattern.Text.Length == 0)
         {
             paragraph.Inlines.Add(new Run(text));
@@ -207,39 +212,74 @@ sealed class RegexPage : DockPanel
         }
         var regex = Build();
         if (regex == null) { paragraph.Inlines.Add(new Run(text)); return; }
+        paragraph.Inlines.Add(new Run(text));
 
+        List<Match> matches;
+        string details, preview;
         try
         {
-            var matches = new List<Match>();
-            for (var m = regex.Match(text); m.Success && matches.Count < MaxMatches; m = m.NextMatch()) matches.Add(m);
-            var ordered = regex.RightToLeft ? matches.OrderBy(m => m.Index).ToList() : matches;
-            var numbers = regex.GetGroupNumbers().Where(n => n > 0).ToArray();
-
-            int pos = 0;
-            for (int i = 0; i < ordered.Count; i++)
-            {
-                var m = ordered[i];
-                if (m.Index < pos) continue;
-                if (m.Index > pos) paragraph.Inlines.Add(new Run(text.Substring(pos, m.Index - pos)));
-                var matchBrush = new SolidColorBrush(MatchColors[i % 2]);
-                if (m.Length == 0)
-                {
-                    paragraph.Inlines.Add(new Run("¦") { Background = matchBrush, Foreground = (Brush)Application.Current.Resources["AccentBrush"] });
-                    continue;
-                }
-                AddMatch(paragraph, m, numbers, matchBrush);
-                pos = m.Index + m.Length;
-            }
-            if (pos < text.Length) paragraph.Inlines.Add(new Run(text.Substring(pos)));
-
-            _details.Text = Describe(regex, matches);
-            _preview.Text = regex.Replace(text, _replace.Text);
-            Ui.SetStatus(_status, matches.Count == 0 ? "没有匹配" : $"{matches.Count}{(matches.Count >= MaxMatches ? "+" : "")} 处匹配，{numbers.Length} 个分组");
+            // Matching runs off the UI thread under a total time budget; the per-match timeout alone can add up to minutes
+            var replacement = _replace.Text;
+            (matches, details, preview) = await Task.Run(() => Compute(regex, text, replacement));
         }
         catch (RegexMatchTimeoutException)
         {
-            Ui.SetStatus(_status, "匹配超时（超过 1 秒），正则可能存在灾难性回溯", true);
+            if (version == _runVersion) Ui.SetStatus(_status, "匹配超时（超过 1 秒），正则可能存在灾难性回溯", true);
+            return;
         }
+        catch (TimeoutException)
+        {
+            if (version == _runVersion) Ui.SetStatus(_status, $"匹配总耗时超过 {TotalBudgetMs / 1000} 秒，已中止", true);
+            return;
+        }
+        if (version != _runVersion) return;
+
+        var ordered = regex.RightToLeft ? matches.OrderBy(m => m.Index).ToList() : matches;
+        var numbers = regex.GetGroupNumbers().Where(n => n > 0).ToArray();
+        paragraph.Inlines.Clear();
+        int pos = 0;
+        for (int i = 0; i < ordered.Count; i++)
+        {
+            var m = ordered[i];
+            if (m.Index < pos) continue;
+            if (m.Index > pos) paragraph.Inlines.Add(new Run(text.Substring(pos, m.Index - pos)));
+            var matchBrush = new SolidColorBrush(MatchColors[i % 2]);
+            if (m.Length == 0)
+            {
+                paragraph.Inlines.Add(new Run("¦") { Background = matchBrush, Foreground = (Brush)Application.Current.Resources["AccentBrush"] });
+                continue;
+            }
+            AddMatch(paragraph, m, numbers, matchBrush);
+            pos = m.Index + m.Length;
+        }
+        if (pos < text.Length) paragraph.Inlines.Add(new Run(text.Substring(pos)));
+
+        _details.Text = details;
+        _preview.Text = preview;
+        Ui.SetStatus(_status, matches.Count == 0 ? "没有匹配" : $"{matches.Count}{(matches.Count >= MaxMatches ? "+" : "")} 处匹配，{numbers.Length} 个分组");
+    }
+
+    /// <summary>Collects matches, the group listing and the replace preview; throws TimeoutException once the total budget is spent.</summary>
+    static (List<Match>, string, string) Compute(Regex regex, string text, string replacement)
+    {
+        var watch = System.Diagnostics.Stopwatch.StartNew();
+        void Check()
+        {
+            if (watch.ElapsedMilliseconds > TotalBudgetMs) throw new TimeoutException();
+        }
+        var matches = new List<Match>();
+        for (var m = regex.Match(text); m.Success && matches.Count < MaxMatches; m = m.NextMatch())
+        {
+            matches.Add(m);
+            Check();
+        }
+        var details = Describe(regex, matches);
+        var preview = regex.Replace(text, m =>
+        {
+            Check();
+            return m.Result(replacement);
+        });
+        return (matches, details, preview);
     }
 
     /// <summary>Colours each character of a match by the innermost group that captured it.</summary>
@@ -368,7 +408,12 @@ sealed class RegexPage : DockPanel
             if (File.Exists(FavoritesPath))
                 _saved = JsonConvert.DeserializeObject<List<Favorite>>(File.ReadAllText(FavoritesPath)) ?? new();
         }
-        catch (Exception ex) { Log.Error("Reading regex favorites failed", ex); }
+        catch (Exception ex)
+        {
+            // Keep the unreadable file aside so the next save doesn't overwrite it with an empty list
+            Log.Error("Reading regex favorites failed", ex);
+            try { File.Copy(FavoritesPath, FavoritesPath + ".broken", true); } catch (Exception copyEx) { Log.Error("Backing up regex favorites failed", copyEx); }
+        }
         RefreshFavorites();
     }
 
@@ -377,7 +422,10 @@ sealed class RegexPage : DockPanel
         try
         {
             Directory.CreateDirectory(AppPaths.Data);
-            File.WriteAllText(FavoritesPath, JsonConvert.SerializeObject(_saved, Formatting.Indented), new UTF8Encoding(false));
+            var tmp = FavoritesPath + ".tmp";
+            File.WriteAllText(tmp, JsonConvert.SerializeObject(_saved, Formatting.Indented), new UTF8Encoding(false));
+            if (File.Exists(FavoritesPath)) File.Replace(tmp, FavoritesPath, null);
+            else File.Move(tmp, FavoritesPath);
         }
         catch (Exception ex) { Ui.SetStatus(_status, "保存收藏失败：" + ex.Message, true); }
     }

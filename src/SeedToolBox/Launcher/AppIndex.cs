@@ -2,6 +2,9 @@ using System;
 using System.Collections.Generic;
 using System.IO;
 using System.Linq;
+using System.Reflection;
+using System.Runtime.InteropServices;
+using System.Threading;
 using System.Threading.Tasks;
 using System.Windows.Media;
 using SeedToolBox.Core.Services;
@@ -26,7 +29,7 @@ public sealed class SystemApp : ObservableObject
     public bool IsHighlighted { get => _isHighlighted; set => Set(ref _isHighlighted, value); }
 }
 
-/// <summary>Shortcuts from the Start Menu and desktops, scanned once in the background.</summary>
+/// <summary>Shortcuts from the Start Menu and desktops, scanned in the background and again when they change.</summary>
 public static class AppIndex
 {
     static volatile IReadOnlyList<SystemApp> _apps = Array.Empty<SystemApp>();
@@ -36,11 +39,53 @@ public static class AppIndex
     /// <summary>Raised on a worker thread when the scan has finished.</summary>
     public static event Action? Loaded;
 
-    public static void StartLoading() => Task.Run(() =>
+    static readonly object ScanLock = new();
+    static readonly List<FileSystemWatcher> Watchers = new();
+    static Timer? _rescan;
+
+    static readonly Environment.SpecialFolder[] Folders =
+    {
+        Environment.SpecialFolder.StartMenu, Environment.SpecialFolder.CommonStartMenu,
+        Environment.SpecialFolder.DesktopDirectory, Environment.SpecialFolder.CommonDesktopDirectory,
+    };
+
+    public static void StartLoading()
+    {
+        Load();
+        Watch();
+    }
+
+    /// <summary>Programs installed or removed later show up without a restart; bursts of changes are scanned once.</summary>
+    static void Watch()
+    {
+        _rescan = new Timer(_ => Load(), null, Timeout.Infinite, Timeout.Infinite);
+        foreach (var folder in Folders)
+        {
+            var root = Environment.GetFolderPath(folder);
+            if (root.Length == 0 || !Directory.Exists(root)) continue;
+            try
+            {
+                var watcher = new FileSystemWatcher(root, "*.lnk") { IncludeSubdirectories = true };
+                FileSystemEventHandler changed = (_, _) => _rescan?.Change(3000, Timeout.Infinite);
+                watcher.Created += changed;
+                watcher.Deleted += changed;
+                watcher.Changed += changed;
+                watcher.Renamed += (_, _) => _rescan?.Change(3000, Timeout.Infinite);
+                watcher.EnableRaisingEvents = true;
+                Watchers.Add(watcher);
+            }
+            catch (Exception ex) when (ex is ArgumentException or IOException or UnauthorizedAccessException)
+            {
+                Log.Error($"Failed to watch {root}", ex);
+            }
+        }
+    }
+
+    static void Load() => Task.Run(() =>
     {
         try
         {
-            _apps = Scan();
+            lock (ScanLock) _apps = Scan();
             Log.Info($"Indexed {_apps.Count} system apps");
             Loaded?.Invoke();
         }
@@ -52,24 +97,66 @@ public static class AppIndex
 
     static List<SystemApp> Scan()
     {
-        var folders = new[]
+        // The same shortcut often sits in the Start Menu and on the desktop: keep one per name and target
+        var byKey = new Dictionary<string, SystemApp>(StringComparer.OrdinalIgnoreCase);
+        object? shell = null;
+        try
         {
-            Environment.SpecialFolder.StartMenu, Environment.SpecialFolder.CommonStartMenu,
-            Environment.SpecialFolder.DesktopDirectory, Environment.SpecialFolder.CommonDesktopDirectory,
-        };
-        var byName = new Dictionary<string, SystemApp>(StringComparer.OrdinalIgnoreCase);
-        foreach (var folder in folders)
+            var type = Type.GetTypeFromProgID("WScript.Shell");
+            if (type != null) shell = Activator.CreateInstance(type);
+        }
+        catch (Exception ex) when (ex is COMException or TargetInvocationException) { }
+        try
         {
-            var root = Environment.GetFolderPath(folder);
-            if (root.Length == 0 || !Directory.Exists(root)) continue;
-            foreach (var file in Shortcuts(root))
+            foreach (var folder in Folders)
             {
-                var name = System.IO.Path.GetFileNameWithoutExtension(file);
-                if (name.IndexOf("uninstall", StringComparison.OrdinalIgnoreCase) >= 0 || name.Contains("卸载")) continue;
-                if (!byName.ContainsKey(name)) byName[name] = new SystemApp(name, file);
+                var root = Environment.GetFolderPath(folder);
+                if (root.Length == 0 || !Directory.Exists(root)) continue;
+                foreach (var file in Shortcuts(root))
+                {
+                    var name = System.IO.Path.GetFileNameWithoutExtension(file);
+                    var target = shell != null ? Target(shell, file) : null;
+                    if (IsUninstaller(name, target)) continue;
+                    var key = name + "|" + (target ?? "");
+                    if (!byKey.ContainsKey(key)) byKey[key] = new SystemApp(name, file);
+                }
             }
         }
-        return byName.Values.OrderBy(a => a.Name, StringComparer.CurrentCulture).ToList();
+        finally
+        {
+            if (shell != null) Marshal.ReleaseComObject(shell);
+        }
+        return byKey.Values.OrderBy(a => a.Name, StringComparer.CurrentCulture).ToList();
+    }
+
+    /// <summary>"Uninstall Foo", "卸载 Foo" or a shortcut to unins000.exe; "Revo Uninstaller" and the like stay.</summary>
+    static bool IsUninstaller(string name, string? target)
+    {
+        name = name.Trim();
+        if (name.StartsWith("uninstall", StringComparison.OrdinalIgnoreCase) || name.StartsWith("卸载")) return true;
+        if (name.EndsWith("uninstall", StringComparison.OrdinalIgnoreCase) || name.EndsWith("卸载")) return true;
+        if (target == null) return false;
+        var exe = System.IO.Path.GetFileNameWithoutExtension(target);
+        return exe.StartsWith("unins", StringComparison.OrdinalIgnoreCase) && !exe.StartsWith("uninstaller", StringComparison.OrdinalIgnoreCase);
+    }
+
+    static string? Target(object shell, string lnk)
+    {
+        object? shortcut = null;
+        try
+        {
+            shortcut = shell.GetType().InvokeMember("CreateShortcut", BindingFlags.InvokeMethod, null, shell, new object[] { lnk });
+            var target = shortcut?.GetType().InvokeMember("TargetPath", BindingFlags.GetProperty, null, shortcut, null) as string;
+            return string.IsNullOrEmpty(target) ? null : target;
+        }
+        catch (Exception ex) when (ex is COMException or TargetInvocationException or ArgumentException)
+        {
+            return null;
+        }
+        finally
+        {
+            if (shortcut != null && Marshal.IsComObject(shortcut)) Marshal.ReleaseComObject(shortcut);
+        }
     }
 
     static IEnumerable<string> Shortcuts(string dir)

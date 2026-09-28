@@ -82,7 +82,13 @@ static class SystemMonitor
         if (Interlocked.Exchange(ref _sampling, 1) == 1) return;
         // Reading the GPU counters can take seconds with many processes, so it runs on its own and the last value is shown
         if (Interlocked.Exchange(ref _gpuReading, 1) == 0)
-            ThreadPool.QueueUserWorkItem(_ => { try { _gpuValue = Gpu(); } finally { _gpuReading = 0; } });
+            ThreadPool.QueueUserWorkItem(_ =>
+            {
+                // An exception here would take the whole app down
+                try { _gpuValue = Gpu(); }
+                catch (Exception ex) { Log.Error("Reading the GPU counters failed", ex); _gpuValue = -1; }
+                finally { _gpuReading = 0; }
+            });
         try
         {
             var sample = new MonitorSample(Cpu(), 0, 0, 0, _gpuValue, 0, 0);
@@ -140,11 +146,13 @@ static class SystemMonitor
             var data = new PerformanceCounterCategory("GPU Engine").ReadCategory()["Utilization Percentage"];
             var current = new Dictionary<string, CounterSample>();
             var engines = new Dictionary<string, double>();
+            // Read once: Reset may clear it meanwhile
+            var last = _gpu;
             if (data != null)
                 foreach (InstanceData instance in data.Values)
                 {
                     current[instance.InstanceName] = instance.Sample;
-                    if (EngineOf(instance.InstanceName) is not { } engine || _gpu == null || !_gpu.TryGetValue(instance.InstanceName, out var previous)) continue;
+                    if (EngineOf(instance.InstanceName) is not { } engine || last == null || !last.TryGetValue(instance.InstanceName, out var previous)) continue;
                     engines.TryGetValue(engine, out var sum);
                     engines[engine] = sum + CounterSample.Calculate(previous, instance.Sample);
                 }

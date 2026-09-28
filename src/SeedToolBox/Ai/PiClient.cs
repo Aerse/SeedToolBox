@@ -225,7 +225,10 @@ sealed class PiClient : IDisposable
                     if (buffer[i] != (byte)'\n') { line.WriteByte(buffer[i]); continue; }
                     var text = Encoding.UTF8.GetString(line.GetBuffer(), 0, (int)line.Length).TrimEnd('\r');
                     line.SetLength(0);
-                    if (text.Length > 0) Handle(text);
+                    if (text.Length == 0) continue;
+                    // A record with unexpected field types must not take the whole app down with this thread
+                    try { Handle(text); }
+                    catch (Exception ex) { Log.Error("pi: bad record " + (text.Length > 500 ? text.Substring(0, 500) : text), ex); }
                 }
             }
         }
@@ -318,7 +321,8 @@ sealed class PiClient : IDisposable
         _disposed = true;
         try
         {
-            if (!_process.HasExited) _process.Kill();
+            // Extensions and tools pi started go too
+            ProcessTree.Kill(_process);
         }
         catch (Exception ex) when (ex is InvalidOperationException or System.ComponentModel.Win32Exception)
         {

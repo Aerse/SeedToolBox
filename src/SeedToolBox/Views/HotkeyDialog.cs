@@ -24,7 +24,8 @@ public static class HotkeyDialog
         };
         box.PreviewKeyDown += (_, e) =>
         {
-            var key = e.Key == Key.System ? e.SystemKey : e.Key;
+            // With a Chinese IME on, keys arrive as ImeProcessed
+            var key = e.Key == Key.System ? e.SystemKey : e.Key == Key.ImeProcessed ? e.ImeProcessedKey : e.Key;
             var modifiers = Keyboard.Modifiers;
             // Plain Tab/Enter/Esc keep their dialog meaning
             if (modifiers == ModifierKeys.None && key is Key.Tab or Key.Enter or Key.Escape) return;

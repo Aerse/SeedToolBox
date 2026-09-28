@@ -228,7 +228,7 @@ sealed partial class TerminalPage
                     ScheduleSave();
                     RefreshTree();
                 });
-                Item("复制 ssh 命令", () => TrySetClipboard(SshCommand(h)));
+                Item("复制 ssh 命令", () => { if (SshCommand(h) is { } cmd) TrySetClipboard(cmd); else Ui.SetStatus(_status, "主机名或用户名里有特殊字符，没法生成 ssh 命令", true); });
                 Item("在系统终端中打开 ssh", () => OpenLocalSsh(h));
                 menu.Items.Add(new Separator());
                 Item("删除", () => DeleteHost(h));
@@ -262,17 +262,23 @@ sealed partial class TerminalPage
         return menu;
     }
 
-    static string SshCommand(HostEntry h) =>
-        "ssh " + (h.Port != 22 ? $"-p {h.Port} " : "") + (h.Auth == AuthKinds.Key && h.KeyPath.Length > 0 ? $"-i \"{h.KeyPath}\" " : "") + $"{h.User}@{h.Host}";
+    /// <summary>The ssh command line, or null when the user or host name has characters a shell would act on (imported hosts are not trusted).</summary>
+    static string? SshCommand(HostEntry h)
+    {
+        static bool Plain(string s, string extra) => s.Length > 0 && s[0] != '-' && s.All(c => char.IsLetterOrDigit(c) || extra.IndexOf(c) >= 0);
+        if (!Plain(h.Host, ".-_:[]%") || (h.User.Length > 0 && !Plain(h.User, ".-_@\\"))) return null;
+        return "ssh " + (h.Port != 22 ? $"-p {h.Port} " : "") + (h.Auth == AuthKinds.Key && h.KeyPath.Length > 0 ? $"-i '{h.KeyPath.Replace("'", "''")}' " : "") + (h.User.Length > 0 ? h.User + "@" : "") + h.Host;
+    }
 
     void OpenLocalSsh(HostEntry h)
     {
+        if (SshCommand(h) is not { } command) { Ui.SetStatus(_status, "主机名或用户名里有特殊字符，不能交给本地 ssh", true); return; }
         var shell = _shells.FirstOrDefault(s => s.Id is "pwsh" or "powershell") ?? DefaultShell();
         var session = NewSession(null, shell);
         session.CustomTitle = h.Title;
         var pane = AddPane(NewTab(session), null, shell);
         SelectSession(session);
-        void Send(TerminalView _) { pane.View.Ready -= Send; Dispatcher.BeginInvoke(new Action(() => pane.View.Send(SshCommand(h) + "\r")), System.Windows.Threading.DispatcherPriority.Background); }
+        void Send(TerminalView _) { pane.View.Ready -= Send; Dispatcher.BeginInvoke(new Action(() => pane.View.Send(command + "\r")), System.Windows.Threading.DispatcherPriority.Background); }
         if (pane.View.IsReady) Send(pane.View); else pane.View.Ready += Send;
     }
 
@@ -295,6 +301,8 @@ sealed partial class TerminalPage
         _data.Hosts[_data.Hosts.IndexOf(h)] = edited;
         // Open panes keep their HostEntry; point them at the new one so reconnects use the new settings.
         foreach (var p in AllTabs.SelectMany(t => t.Panes).Where(p => p.Host == h)) p.Host = edited;
+        // New terminals, auto tunnels and favourites go through the session's host, so it must follow too.
+        foreach (var s in _sessions.Where(s => s.Host == h)) s.Host = edited;
         foreach (var t in AllTabs) UpdateTab(t);
         ScheduleSave();
         RefreshTree();

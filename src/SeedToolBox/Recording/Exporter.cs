@@ -105,25 +105,22 @@ static class Exporter
             return null;
         }
 
-        // Pass 1: gather colors for one palette shared by every kept frame
+        // Pass 1: gather colors for one palette shared by every kept frame. About two frames a second
+        // are enough for the histogram and skip most of the scaling
         var quantizer = new Quantizer();
-        int kept = 0;
-        ForEachGifFrame(source, start, end, fps, width, height, cancel, (time, pixels) =>
+        int kept = 0, every = Math.Max(1, fps / 2);
+        ForEachGifFrame(source, start, end, fps, width, height, cancel, time =>
         {
-            if (EditAt(time) is not { Remove: true })
-            {
-                quantizer.Add(pixels);
-                kept++;
-            }
             progress(0.4 * (time - start) / (end - start));
-        });
+            return EditAt(time) is not { Remove: true } && kept++ % every == 0;
+        }, (_, pixels) => quantizer.Add(pixels));
         if (kept == 0) throw new InvalidOperationException("所有帧都已被删除");
         quantizer.Build();
 
         // Pass 2: encode, laying kept frames out back to back with their delays
         using var gif = new GifEncoder(File.Create(path), width, height, quantizer.Palette);
         double output = 0, frame = (double)Second / fps;
-        ForEachGifFrame(source, start, end, fps, width, height, cancel, (time, pixels) =>
+        ForEachGifFrame(source, start, end, fps, width, height, cancel, null, (time, pixels) =>
         {
             var edit = EditAt(time);
             if (edit is not { Remove: true })
@@ -136,8 +133,8 @@ static class Exporter
         gif.Finish((long)output);
     }
 
-    /// <summary>Samples the video at a fixed rate, delivering scaled BGRA frames.</summary>
-    static void ForEachGifFrame(RecordedClip source, long start, long end, int fps, int width, int height, CancellationToken cancel, Action<long, byte[]> onFrame)
+    /// <summary>Samples the video at a fixed rate, delivering scaled BGRA frames for the times <paramref name="want"/> accepts (all if null).</summary>
+    static void ForEachGifFrame(RecordedClip source, long start, long end, int fps, int width, int height, CancellationToken cancel, Func<long, bool>? want, Action<long, byte[]> onFrame)
     {
         using var reader = new VideoReader(source.Path, source.Width, source.Height, false);
         reader.Seek(start);
@@ -156,7 +153,7 @@ static class Exporter
                 long t = start + index * Second / fps;
                 if (t >= until || t >= end) return;
                 cancel.ThrowIfCancellationRequested();
-                onFrame(t, scaler?.Scale(frame) ?? (byte[])frame.Clone());
+                if (want == null || want(t)) onFrame(t, scaler?.Scale(frame) ?? (byte[])frame.Clone());
                 index++;
             }
         }

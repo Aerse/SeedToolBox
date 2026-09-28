@@ -26,6 +26,8 @@ sealed class CaptureHistoryPage : DockPanel
     readonly TextBlock _empty;
     bool _dirty = true;
     int _generation;
+    // Built cards by file, so a new capture only decodes its own thumbnail
+    readonly Dictionary<string, FrameworkElement> _cards = new(StringComparer.OrdinalIgnoreCase);
 
     public CaptureHistoryPage(ScreenToolService service)
     {
@@ -80,12 +82,16 @@ sealed class CaptureHistoryPage : DockPanel
             Ui.SetStatus(_status, files.Count > 0 ? $"{files.Count} 张" : "");
         _empty.Visibility = files.Count == 0 ? Visibility.Visible : Visibility.Collapsed;
 
-        // Thumbnails decode off the UI thread; frozen bitmaps can cross over
-        var thumbs = await Task.Run(() => files.Select(f => (Path: f, Thumb: TryLoad(f))).ToList());
+        // Only new files are decoded, off the UI thread; frozen bitmaps can cross over
+        var missing = files.Where(f => !_cards.ContainsKey(f)).ToList();
+        var thumbs = await Task.Run(() => missing.Select(f => (Path: f, Thumb: TryLoad(f))).ToList());
         if (generation != _generation) return;
-        _items.Children.Clear();
         foreach (var (path, thumb) in thumbs)
-            if (thumb != null) _items.Children.Add(Item(path, thumb));
+            if (thumb != null) _cards[path] = Item(path, thumb);
+        foreach (var gone in _cards.Keys.Except(files).ToList()) _cards.Remove(gone);
+        _items.Children.Clear();
+        foreach (var path in files)
+            if (_cards.TryGetValue(path, out var card)) _items.Children.Add(card);
     }
 
     static BitmapSource? TryLoad(string path)

@@ -2,7 +2,7 @@
 
 ```
 SeedToolBox.sln
-├─ Directory.Build.props        公共编译配置：net48 / x64 / C# latest
+├─ Directory.Build.props        公共编译配置：net48 / AnyCPU / C# latest
 ├─ src/SeedToolBox.Core/        核心库（不依赖界面），插件只需引用它
 │   ├─ AppPaths.cs              目录约定：Data / Plugins / Native
 │   ├─ Modules/                 IModule（功能模块）、IAppHost（宿主提供给模块的能力）
@@ -42,7 +42,7 @@ Plugins/<名字>/<名字>.dll   外部插件及其依赖
 | **独立子进程** | 可能崩溃、要常驻后台、要管理员权限 | 编译成独立 exe，通过命名管道 / 标准输入输出通信 |
 
 约定：
-- 只出 **x64** 版本（主程序固定 x64）。
+- 主程序为 **AnyCPU**（64 位系统上以 x64 运行，32 位系统上以 x86 运行），原生组件须同时提供 x64 与 x86 两个版本。
 - 接口只用 C ABI（`extern "C"` / Rust `#[no_mangle] extern "C"`），字符串统一 UTF-16（`wchar_t*`），内存谁分配谁释放。
 - 启动时 `NativeLibraries.Init()` 已把 `Native/x64` 或 `Native/x86`（按进程位数）加入 DLL 搜索路径，`DllImport` 直接写文件名即可。
 

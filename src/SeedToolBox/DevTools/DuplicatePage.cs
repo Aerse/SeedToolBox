@@ -4,6 +4,7 @@ using System.Collections.Generic;
 using System.Collections.ObjectModel;
 using System.IO;
 using System.Linq;
+using System.Runtime.InteropServices;
 using System.Security.Cryptography;
 using System.Threading;
 using System.Threading.Tasks;
@@ -196,7 +197,7 @@ static class Duplicates
 
         if (filter.ByName)
             return files.GroupBy(f => f.Name, StringComparer.OrdinalIgnoreCase).Where(g => g.Count() > 1)
-                .Select(g => g.ToList()).OrderByDescending(g => g.Count).ThenBy(g => g[0].Name).ToList();
+                .Select(g => DistinctLinks(g)).Where(g => g.Count > 1).OrderByDescending(g => g.Count).ThenBy(g => g[0].Name).ToList();
 
         var options = new ParallelOptions { CancellationToken = cancel, MaxDegreeOfParallelism = Math.Max(2, Math.Min(Environment.ProcessorCount, 8)) };
         var candidates = files.GroupBy(f => f.Length).Where(g => g.Count() > 1).SelectMany(g => g).ToList();
@@ -231,8 +232,42 @@ static class Duplicates
             if (byHead.Key.Head.StartsWith("full:")) result.Add(byHead.ToList());
             else result.AddRange(byHead.Where(f => fulls[f] != null).GroupBy(f => fulls[f]).Where(g => g.Count() > 1).Select(g => g.ToList()));
         }
+        // Hard links are one file on disk: deleting one frees nothing, so keep only one path per file ID
+        result = result.Select(g => DistinctLinks(g)).Where(g => g.Count > 1).ToList();
         return result.OrderByDescending(g => g[0].Length * (g.Count - 1)).ToList();
     }
+
+    /// <summary>Drops extra hard links to the same file (same volume serial and file index), keeping the first path.</summary>
+    static List<FileInfo> DistinctLinks(IEnumerable<FileInfo> group)
+    {
+        var ids = new HashSet<(uint, ulong)>();
+        var kept = new List<FileInfo>();
+        foreach (var file in group)
+            if (FileId(file) is not { } id || ids.Add(id)) kept.Add(file);
+        return kept;
+    }
+
+    static (uint Volume, ulong Index)? FileId(FileInfo file)
+    {
+        try
+        {
+            using var stream = new FileStream(file.FullName, FileMode.Open, FileAccess.Read, FileShare.ReadWrite | FileShare.Delete);
+            if (!GetFileInformationByHandle(stream.SafeFileHandle, out var info)) return null;
+            return (info.VolumeSerialNumber, ((ulong)info.FileIndexHigh << 32) | info.FileIndexLow);
+        }
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException) { return null; }
+    }
+
+    [StructLayout(LayoutKind.Sequential)]
+    struct ByHandleFileInformation
+    {
+        public uint FileAttributes;
+        public System.Runtime.InteropServices.ComTypes.FILETIME CreationTime, LastAccessTime, LastWriteTime;
+        public uint VolumeSerialNumber, FileSizeHigh, FileSizeLow, NumberOfLinks, FileIndexHigh, FileIndexLow;
+    }
+
+    [DllImport("kernel32.dll", SetLastError = true)]
+    static extern bool GetFileInformationByHandle(Microsoft.Win32.SafeHandles.SafeFileHandle file, out ByHandleFileInformation info);
 
     /// <summary>SHA256 of the first <paramref name="limit"/> bytes; prefixed "full:" when that covered the whole file.</summary>
     static string? Hash(FileInfo file, long limit)

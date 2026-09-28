@@ -57,7 +57,7 @@ static class ApiTree
     }
 
     public static bool Contains(ApiFolder folder, object node) =>
-        ReferenceEquals(folder, node) || folder.Requests.Contains(node as ApiRequest) || folder.Folders.Any(f => Contains(f, node));
+        ReferenceEquals(folder, node) || (node is ApiRequest r && folder.Requests.Contains(r)) || folder.Folders.Any(f => Contains(f, node));
 
     public static bool Remove(ApiFolder folder, object node)
     {
@@ -181,7 +181,6 @@ sealed class EnvironmentWindow
         _name.TextChanged += (_, _) =>
         {
             if (_loading || Current is not ApiEnvironment e || _name.Text.Trim().Length == 0) return;
-            if (_data.ActiveEnvironment == e.Name) _data.ActiveEnvironment = _name.Text.Trim();
             e.Name = _name.Text.Trim();
             ((ListBoxItem)_list.SelectedItem).Content = e.Name;
             save();
@@ -248,7 +247,7 @@ sealed class EnvironmentWindow
     {
         if (Current is not ApiEnvironment e || !ApiDialogs.Confirm(_window, $"删除环境“{e.Name}”？")) return;
         _data.Environments.Remove(e);
-        if (_data.ActiveEnvironment == e.Name) _data.ActiveEnvironment = "";
+        if (_data.ActiveEnvironment == e.Id) _data.ActiveEnvironment = "";
         _save();
         Fill(null);
     }
@@ -387,7 +386,7 @@ sealed class RunnerWindow
         _stop.IsEnabled = false;
 
         var count = ApiTree.Flatten(root, _above).Count();
-        var env = data.Environments.FirstOrDefault(e => e.Name == data.ActiveEnvironment);
+        var env = data.Environments.FirstOrDefault(e => e.Id == data.ActiveEnvironment);
         var info = new TextBlock
         {
             Text = $"运行“{root.Name}”里的 {count} 个请求，环境：{env?.Name ?? "无"}",
@@ -491,7 +490,7 @@ sealed class RunnerWindow
             if (rows.Count > 0) iterations = rows.Count;
         }
 
-        var env = _data.Environments.FirstOrDefault(e => e.Name == _data.ActiveEnvironment);
+        var env = _data.Environments.FirstOrDefault(e => e.Id == _data.ActiveEnvironment);
         var collection = _above.Count > 0 ? _above[0] as ApiCollection : _root as ApiCollection;
         bool keep = _keepVars.IsChecked == true;
         var vars = new ApiVariables(
@@ -527,6 +526,7 @@ sealed class RunnerWindow
                     ExecResult result;
                     try { result = await ApiEngine.ExecuteAsync(request, ctx, cancel.Token); }
                     catch (OperationCanceledException) { break; }
+                    catch (Exception ex) { result = new ExecResult { Error = ex.Message }; }
                     var node = ResultNode(request, result);
                     iterationNode.Items.Add(node);
                     node.BringIntoView();

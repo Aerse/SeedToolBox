@@ -23,12 +23,17 @@ static class Brightness
 {
     static readonly object Lock = new();
     static List<Display>? _displays;
+    /// <summary>Screens were plugged, unplugged or rearranged since the list was made (WM_DISPLAYCHANGE).</summary>
+    static volatile bool _stale;
+
+    static Brightness() => Microsoft.Win32.SystemEvents.DisplaySettingsChanged += (_, _) => _stale = true;
 
     public static List<Display> Displays(bool refresh = false)
     {
         lock (Lock)
         {
-            if (_displays != null && !refresh) return _displays;
+            if (_displays != null && !refresh && !_stale) return _displays;
+            _stale = false;
             if (_displays != null) foreach (var d in _displays.Where(d => d.Physical != IntPtr.Zero)) DestroyPhysicalMonitor(d.Physical);
             _displays = Wmi().Concat(Ddc()).ToList();
             return _displays;
@@ -74,8 +79,8 @@ static class Brightness
         return list;
     }
 
-    /// <summary>Sets 0–100.</summary>
-    public static void Set(Display display, int percent)
+    /// <summary>Sets 0–100; false when the monitor didn't take it (unplugged, or its handle is out of date).</summary>
+    public static bool Set(Display display, int percent)
     {
         percent = Math.Max(0, Math.Min(100, percent));
         lock (Lock)
@@ -86,21 +91,37 @@ static class Brightness
                 foreach (ManagementObject o in searcher.Get())
                     using (o) o.InvokeMethod("WmiSetBrightness", new object[] { 1u, (byte)percent });
             }
-            else SetMonitorBrightness(display.Physical, (uint)(display.Min + (display.Max - display.Min) * percent / 100.0));
+            else if (!SetMonitorBrightness(display.Physical, (uint)(display.Min + (display.Max - display.Min) * percent / 100.0))) return false;
             display.Brightness = percent;
+            return true;
         }
     }
 
     /// <summary>Moves every screen by <paramref name="delta"/> points; returns the new level of the first one, or null when none can be set.</summary>
     public static int? Change(int delta)
     {
-        var displays = Displays();
-        foreach (var d in displays)
+        int? level = null;
+        bool failed = false;
+        var done = new HashSet<string>();
+        foreach (var d in Displays())
         {
-            try { Set(d, d.Brightness + delta); }
-            catch (Exception ex) when (ex is ManagementException or COMException) { Log.Error("Failed to set the brightness", ex); }
+            if (TrySet(d, d.Brightness + delta)) { level ??= d.Brightness; done.Add(d.Name); }
+            else failed = true;
         }
-        return displays.Count == 0 ? null : displays[0].Brightness;
+        if (!failed) return level;
+        // A screen went away or came back: list them again and retry the ones that didn't take it
+        foreach (var d in Displays(refresh: true).Where(x => !done.Contains(x.Name)))
+        {
+            if (TrySet(d, d.Brightness + delta)) level ??= d.Brightness;
+            else Log.Info($"Setting the brightness of {d.Name} failed");
+        }
+        return level;
+    }
+
+    static bool TrySet(Display display, int percent)
+    {
+        try { return Set(display, percent); }
+        catch (Exception ex) when (ex is ManagementException or COMException) { Log.Error("Failed to set the brightness", ex); return false; }
     }
 
     [StructLayout(LayoutKind.Sequential, CharSet = CharSet.Unicode)]

@@ -26,6 +26,34 @@ static class Markdown
 
     static Brush Res(string key) => (Brush)Application.Current.Resources[key];
 
+    /// <summary>
+    /// How much of a streamed answer won't render differently once more text arrives: up to the last blank line outside
+    /// a code block that is followed by a complete line starting a new, unindented, non-list block. 0 when there is none.
+    /// </summary>
+    public static int StableEnd(string markdown)
+    {
+        int end = 0, at = 0;
+        bool fenced = false, blank = false;
+        string fence = "";
+        while (at < markdown.Length)
+        {
+            int newline = markdown.IndexOf('\n', at);
+            if (newline < 0) break; // the last line may still grow
+            var line = markdown.Substring(at, newline - at).TrimEnd('\r');
+            var trimmed = line.TrimStart();
+            if (!fenced && blank && trimmed.Length > 0 && trimmed.Length == line.Length && !Bullet.IsMatch(line) && !Ordered.IsMatch(line))
+                end = at;
+            if (trimmed.StartsWith("```") || trimmed.StartsWith("~~~"))
+            {
+                if (!fenced) { fenced = true; fence = trimmed.Substring(0, 3); }
+                else if (trimmed.StartsWith(fence)) fenced = false;
+            }
+            blank = !fenced && trimmed.Length == 0;
+            at = newline + 1;
+        }
+        return end;
+    }
+
     public static IEnumerable<Block> Render(string markdown)
     {
         var lines = markdown.Replace("\r", "").Split('\n');
@@ -225,6 +253,8 @@ static class Markdown
                 var label = m.Groups["link"].Success ? m.Groups["link"].Value : url;
                 if (Uri.TryCreate(url, UriKind.Absolute, out var uri) && (uri.Scheme == "http" || uri.Scheme == "https"))
                 {
+                    // A label that reads like another address would hide where the link really goes, so show the real one
+                    if (label != url && PosesAsOtherHost(label, uri)) label = url;
                     var link = new Hyperlink(new Run(label)) { Foreground = Res("AccentBrush"), ToolTip = url, Cursor = System.Windows.Input.Cursors.Hand };
                     link.Click += (_, _) =>
                     {
@@ -237,5 +267,15 @@ static class Markdown
             }
         }
         if (at < text.Length) inlines.Add(new Run(text.Substring(at)));
+    }
+
+    static readonly Regex HostLike = new(@"^(?:[a-z][a-z0-9+.-]*://)?(?:www\.)?((?:[\p{L}\p{N}-]+\.)+[\p{L}]{2,})(?:[:/?#]|$)", RegexOptions.IgnoreCase);
+
+    static bool PosesAsOtherHost(string label, Uri uri)
+    {
+        var m = HostLike.Match(label.Trim());
+        if (!m.Success) return false;
+        var host = uri.Host.StartsWith("www.", StringComparison.OrdinalIgnoreCase) ? uri.Host.Substring(4) : uri.Host;
+        return !m.Groups[1].Value.Equals(host, StringComparison.OrdinalIgnoreCase);
     }
 }

@@ -94,7 +94,8 @@ sealed class AiService
         if (Reminders == null) return;
         var input = AskText(owner, "定时运行「" + task.Name + "」", "什么时候运行？例如「每天9点」「工作日18:00」「明天上午10点」；留空表示取消定时。\n到时间会打开自动化窗口运行，改动仍然要你确认。", task.Schedule);
         if (input == null) return;
-        Unschedule(task);
+        // Check the new time first: an answer that doesn't parse leaves the old schedule as it was
+        Reminder? next = null;
         if (input.Trim().Length > 0)
         {
             if (!ReminderParser.TryParse(input.Trim() + " " + task.Name, DateTime.Now, out var reminder) || reminder.Due <= DateTime.Now)
@@ -102,9 +103,14 @@ sealed class AiService
                 MessageBox.Show(owner, "看不懂这个时间：" + input, "定时运行", MessageBoxButton.OK, MessageBoxImage.Information);
                 return;
             }
-            reminder.Text = "AI 任务：" + task.Name;
-            reminder.AiTask = task.Id;
-            Reminders.Add(reminder);
+            next = reminder;
+        }
+        Unschedule(task);
+        if (next != null)
+        {
+            next.Text = "AI 任务：" + task.Name;
+            next.AiTask = task.Id;
+            Reminders.Add(next);
             task.Schedule = input.Trim();
         }
         Save();

@@ -118,11 +118,17 @@ sealed class DockerPanel : DockPanel
     /// <summary>Runs docker with the given arguments; falls back to sudo -n when the socket needs root.</summary>
     string Docker(SshConnection c, string args, int timeout = 20)
     {
-        var output = c.Run(_docker + " " + args + " 2>&1", timeout);
-        if (_docker == "docker" && output.Contains("permission denied") && output.Contains("docker"))
+        var docker = _docker;
+        var output = c.Run(docker + " " + args + " 2>&1", timeout);
+        if (docker == "docker" && output.Contains("permission denied") && output.Contains("docker"))
         {
             var retry = c.Run("sudo -n docker " + args + " 2>&1", timeout);
-            if (!retry.Contains("a password is required") && !retry.Contains("sudo:")) { _docker = "sudo -n docker"; return retry; }
+            if (!retry.Contains("a password is required") && !retry.Contains("sudo:"))
+            {
+                // Runs on a worker thread; the field belongs to the UI thread.
+                Dispatcher.BeginInvoke(() => { if (_connection == c) _docker = "sudo -n docker"; });
+                return retry;
+            }
         }
         return output;
     }
@@ -232,7 +238,7 @@ sealed class DockerPanel : DockPanel
         if (_connection == null) return;
         var name = TerminalDialogs.Ask(_owner(), "拉取镜像", "镜像名称，例如 nginx:latest", false);
         if (string.IsNullOrWhiteSpace(name)) return;
-        _runInTerminal("拉取 " + name!.Trim(), $"{_docker} pull {name.Trim()}");
+        _runInTerminal("拉取 " + name!.Trim(), $"{_docker} pull {Packer.Quote(name.Trim())}");
     }
 
     async void Act(Container c, string verb, string? confirm = null)
@@ -248,9 +254,10 @@ sealed class DockerPanel : DockPanel
         Ui.SetStatus(_status, "正在执行 docker " + args.Split(' ')[0] + "…");
         try
         {
-            var output = await Task.Run(() => Docker(c, args, 60));
-            var failed = output.Contains("Error") || output.Contains("error");
-            Ui.SetStatus(_status, failed ? output.Trim() : done, failed);
+            var output = (await Task.Run(() => Docker(c, args + " 2>&1; echo __rc=$?", 60))).Trim();
+            var failed = !output.EndsWith("__rc=0");
+            var marker = output.LastIndexOf("__rc=", StringComparison.Ordinal);
+            Ui.SetStatus(_status, failed ? (marker >= 0 ? output.Substring(0, marker) : output).Trim() : done, failed);
             await RefreshAsync(quiet: true);
         }
         catch (Exception ex) when (ex is Renci.SshNet.Common.SshException or InvalidOperationException or ObjectDisposedException or System.Net.Sockets.SocketException or TimeoutException)

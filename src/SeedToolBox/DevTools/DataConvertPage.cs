@@ -57,7 +57,7 @@ sealed class DataConvertPage : DockPanel
             if (_to.SelectedIndex == i) _to.SelectedIndex = i == 0 ? 2 : 0;
         });
 
-        var format = Ui.Button("整理输入", () => { try { if (_from.SelectedIndex == 0) _input.Text = JToken.Parse(_input.Text).ToString(Newtonsoft.Json.Formatting.Indented); } catch (Exception ex) { Ui.SetStatus(_status, ex.Message, true); } });
+        var format = Ui.Button("整理输入", () => { try { if (_from.SelectedIndex == 0) _input.Text = ParseJson(_input.Text).ToString(Newtonsoft.Json.Formatting.Indented); } catch (Exception ex) { Ui.SetStatus(_status, ex.Message, true); } });
         format.Margin = new Thickness(0);
         var copy = Ui.Button("复制结果", () => { if (_output.Text.Length > 0) ScreenToolService.CopyText(_output.Text); });
         copy.Margin = new Thickness(0);
@@ -102,7 +102,7 @@ sealed class DataConvertPage : DockPanel
                 3 => FromCsv(text, sep, infer, flatten),
                 4 => Toml.Read(text),
                 5 => FromIni(text, infer),
-                _ => JToken.Parse(text),
+                _ => ParseJson(text),
             };
             return to switch
             {
@@ -125,6 +125,15 @@ sealed class DataConvertPage : DockPanel
         }, ex => Ui.SetStatus(_status, "转换失败：" + ex.Message.Replace("\r", " ").Replace("\n", " "), true));
     }
 
+    /// <summary>Parses JSON keeping date-like strings as written, instead of turning them into local DateTime values.</summary>
+    static JToken ParseJson(string text)
+    {
+        using var reader = new JsonTextReader(new StringReader(text)) { DateParseHandling = DateParseHandling.None };
+        var token = JToken.ReadFrom(reader);
+        if (reader.Read() && reader.TokenType != JsonToken.Comment) throw new JsonReaderException("JSON 末尾有多余内容");
+        return token;
+    }
+
     // XML
 
     static JToken FromXml(string text)
@@ -132,7 +141,7 @@ sealed class DataConvertPage : DockPanel
         var doc = new XmlDocument();
         doc.LoadXml(text);
         var json = JsonConvert.SerializeXmlNode(doc, Newtonsoft.Json.Formatting.None, omitRootObject: false);
-        var token = JToken.Parse(json);
+        var token = ParseJson(json);
         // Drop the <?xml ...?> declaration, which is not data
         if (token is JObject o) o.Remove("?xml");
         return token;
@@ -189,7 +198,8 @@ sealed class DataConvertPage : DockPanel
 
     static JValue? Number(string value)
     {
-        if (Regex.IsMatch(value, @"^[-+]?\d+$") && long.TryParse(value, NumberStyles.AllowLeadingSign, CultureInfo.InvariantCulture, out var l)) return new JValue(l);
+        // Integers beyond long stay text rather than losing digits as a double
+        if (Regex.IsMatch(value, @"^[-+]?\d+$")) return long.TryParse(value, NumberStyles.AllowLeadingSign, CultureInfo.InvariantCulture, out var l) ? new JValue(l) : null;
         if (Regex.IsMatch(value, @"^[-+]?(\d+\.?\d*|\.\d+)([eE][-+]?\d+)?$") && double.TryParse(value, NumberStyles.Float, CultureInfo.InvariantCulture, out var d)) return new JValue(d);
         return null;
     }
@@ -699,14 +709,27 @@ static class TypeGenerator
     static JObject? Merge(JArray array)
     {
         var objects = array.OfType<JObject>().ToList();
-        if (objects.Count == 0) return null;
+        return objects.Count == 0 ? null : Merge(objects);
+    }
+
+    static JObject Merge(List<JObject> objects)
+    {
         var merged = new JObject();
-        foreach (var o in objects)
-            foreach (var p in o.Properties())
-                if (merged[p.Name] == null || merged[p.Name]!.Type == JTokenType.Null) merged[p.Name] = p.Value;
+        foreach (var name in objects.SelectMany(o => o.Properties().Select(p => p.Name)).Distinct().ToList())
+            merged[name] = MergeValues(objects.Select(o => o[name]).Where(v => v != null).Select(v => v!).ToList());
         foreach (var p in merged.Properties())
             if (objects.Any(o => o[p.Name] == null || o[p.Name]!.Type == JTokenType.Null)) p.AddAnnotation(new Optional());
         return merged;
+    }
+
+    /// <summary>Nested objects are merged recursively and nested arrays concatenated, so every sample contributes.</summary>
+    static JToken MergeValues(List<JToken> values)
+    {
+        var present = values.Where(v => v.Type != JTokenType.Null).ToList();
+        if (present.Count == 0) return JValue.CreateNull();
+        if (present.All(v => v is JObject)) return Merge(present.Cast<JObject>().ToList());
+        if (present.All(v => v is JArray)) return new JArray(present.SelectMany(v => (JArray)v));
+        return present[0];
     }
 
     sealed class Optional { }
@@ -795,7 +818,8 @@ static class TypeGenerator
             Kind.Array => $"List<{CsType(s.Item!, false)}>",
             _ => "object",
         };
-        return nullable && (s.Nullable || s.Kind == Kind.Any) ? type + "?" : type;
+        // Value types must be nullable when a sample has null or lacks the field, or deserializing it throws
+        return (nullable && (s.Nullable || s.Kind == Kind.Any)) || (s.Nullable && IsValueType(type)) ? type + "?" : type;
     }
 
     // TypeScript
@@ -836,7 +860,7 @@ static class TypeGenerator
         {
             sb.Append($"\npublic class {c.Name} {{\n");
             var used = new HashSet<string>();
-            var props = c.Fields.Select(f => (f.JsonName, Name: Unique(Camel(f.JsonName), used), Type: JavaType(f.Shape, false))).ToList();
+            var props = c.Fields.Select(f => (f.JsonName, Name: Unique(JavaName(f.JsonName), used), Type: JavaType(f.Shape, false))).ToList();
             foreach (var p in props)
             {
                 if (p.Name != p.JsonName) sb.Append($"    @JsonProperty(\"{Escape(p.JsonName)}\")\n");
@@ -871,13 +895,28 @@ static class TypeGenerator
         };
     }
 
+    static readonly HashSet<string> JavaKeywords = new(StringComparer.Ordinal)
+    {
+        "abstract", "assert", "boolean", "break", "byte", "case", "catch", "char", "class", "const", "continue", "default", "do", "double",
+        "else", "enum", "extends", "final", "finally", "float", "for", "goto", "if", "implements", "import", "instanceof", "int", "interface",
+        "long", "native", "new", "package", "private", "protected", "public", "return", "short", "static", "strictfp", "super", "switch",
+        "synchronized", "this", "throw", "throws", "transient", "try", "void", "volatile", "while", "true", "false", "null", "var", "record", "yield",
+    };
+
+    /// <summary>Keywords get a suffix; the differing name makes @JsonProperty map the original.</summary>
+    static string JavaName(string jsonName)
+    {
+        var name = Camel(jsonName);
+        return JavaKeywords.Contains(name) ? name + "Value" : name;
+    }
+
     // Go
 
     public static string Go(JToken token)
     {
         var sb = new StringBuilder();
         var classes = Analyze(token);
-        if (classes.Any(c => c.Fields.Any(f => f.Shape.Kind == Kind.Date))) sb.Append("import \"time\"\n\n");
+        if (classes.Any(c => c.Fields.Any(f => UsesDate(f.Shape)))) sb.Append("import \"time\"\n\n");
         foreach (var c in classes)
         {
             sb.Append($"type {c.Name} struct {{\n");
@@ -891,6 +930,8 @@ static class TypeGenerator
         }
         return sb.ToString().TrimEnd() + "\n";
     }
+
+    static bool UsesDate(Shape s) => s.Kind == Kind.Date || (s.Item != null && UsesDate(s.Item));
 
     static string GoType(Shape s)
     {
@@ -988,15 +1029,22 @@ static class JsonSchema
     /// <summary>Only properties present and non-null in every object are required.</summary>
     static JObject MergeObjects(List<JObject> objects)
     {
-        var merged = new JObject();
-        foreach (var o in objects)
-            foreach (var p in o.Properties())
-                if (merged[p.Name] == null || merged[p.Name]!.Type == JTokenType.Null) merged[p.Name] = p.Value;
-        var schema = Of(merged);
-        var required = merged.Properties().Select(p => p.Name)
-            .Where(n => objects.All(o => o[n] != null && o[n]!.Type != JTokenType.Null)).Select(n => (JToken)n).ToList();
-        schema.Remove("required");
+        var names = objects.SelectMany(o => o.Properties().Select(p => p.Name)).Distinct().ToList();
+        var props = new JObject();
+        foreach (var n in names) props[n] = OfAll(objects.Select(o => o[n]).Where(v => v != null).Select(v => v!).ToList());
+        var required = names.Where(n => objects.All(o => o[n] != null && o[n]!.Type != JTokenType.Null)).Select(n => (JToken)n).ToList();
+        var schema = new JObject { ["type"] = "object", ["properties"] = props };
         if (required.Count > 0) schema["required"] = new JArray(required);
         return schema;
+    }
+
+    /// <summary>Schema of one property across all samples: nested objects merge recursively, arrays pool their items.</summary>
+    static JObject OfAll(List<JToken> values)
+    {
+        var present = values.Where(v => v.Type != JTokenType.Null).ToList();
+        if (present.Count == 0) return Of(values[0]);
+        if (present.All(v => v is JObject)) return MergeObjects(present.Cast<JObject>().ToList());
+        if (present.All(v => v is JArray)) return Of(new JArray(present.SelectMany(v => (JArray)v)));
+        return Of(present[0]);
     }
 }

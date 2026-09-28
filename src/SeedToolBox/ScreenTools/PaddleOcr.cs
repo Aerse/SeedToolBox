@@ -20,8 +20,8 @@ namespace SeedToolBox.ScreenTools;
 static class PaddleOcr
 {
     static readonly string Folder = Path.Combine(AppPaths.Base, "Ocr");
-    static readonly object Lock = new();
-    static bool? _available;
+    static readonly object LoadLock = new(), RunLock = new();
+    static volatile bool _loaded, _available;
     static InferenceSession? _detector, _recognizer;
     static string[] _keys = new string[0];
 
@@ -30,9 +30,11 @@ static class PaddleOcr
     {
         get
         {
-            lock (Lock)
+            // Once known, no lock: a recognition in progress holds RunLock for seconds
+            if (_loaded) return _available;
+            lock (LoadLock)
             {
-                if (_available == null)
+                if (!_loaded)
                 {
                     try
                     {
@@ -43,22 +45,40 @@ static class PaddleOcr
                         Log.Error("PaddleOCR unavailable", ex);
                         _available = false;
                     }
+                    _loaded = true;
                 }
-                return _available.Value;
+                return _available;
             }
         }
     }
+
+    /// <summary>Whether <see cref="IsAvailable"/> is known, i.e. reading it won't load the models.</summary>
+    public static bool IsLoaded => _loaded;
+
+    /// <summary>Loads the models in the background so the first recognition doesn't stall the UI.</summary>
+    public static void Preload() => System.Threading.Tasks.Task.Run(() => IsAvailable);
 
     // Separate method so a missing runtime fails here, inside the try, rather than when the caller is compiled
     [MethodImpl(MethodImplOptions.NoInlining)]
     static bool Load()
     {
-        var options = new SessionOptions { InterOpNumThreads = 1, IntraOpNumThreads = Math.Min(4, Environment.ProcessorCount) };
-        _detector = new InferenceSession(Path.Combine(Folder, "det.onnx"), options);
-        _recognizer = new InferenceSession(Path.Combine(Folder, "rec.onnx"), options);
-        // Index 0 is the CTC blank, then the dictionary, then a space
-        _keys = new[] { "" }.Concat(File.ReadAllLines(Path.Combine(Folder, "keys.txt"))).Concat(new[] { " " }).ToArray();
-        return true;
+        using var options = new SessionOptions { InterOpNumThreads = 1, IntraOpNumThreads = Math.Min(4, Environment.ProcessorCount) };
+        try
+        {
+            _detector = new InferenceSession(Path.Combine(Folder, "det.onnx"), options);
+            _recognizer = new InferenceSession(Path.Combine(Folder, "rec.onnx"), options);
+            // Index 0 is the CTC blank, then the dictionary, then a space
+            _keys = new[] { "" }.Concat(File.ReadAllLines(Path.Combine(Folder, "keys.txt"))).Concat(new[] { " " }).ToArray();
+            return true;
+        }
+        catch
+        {
+            // Never used after a failed load: give back the native memory
+            _detector?.Dispose();
+            _recognizer?.Dispose();
+            _detector = _recognizer = null;
+            throw;
+        }
     }
 
     /// <summary>Text lines with their boxes in image pixels. Takes a while: call off the UI thread.</summary>
@@ -71,7 +91,7 @@ static class PaddleOcr
         source.CopyPixels(pixels, stride, 0);
 
         var result = new List<(Rect, string)>();
-        lock (Lock)
+        lock (RunLock)
         {
             foreach (var box in Detect(pixels, width, height))
             {
@@ -159,6 +179,8 @@ static class PaddleOcr
         int height = pixels.Length / 3 / width;
         double scale = LineHeight / box.Height;
         int w = Math.Max(LineHeight / 4, Math.Min(4000, (int)Math.Ceiling(box.Width * scale)));
+        // A very long line is squeezed horizontally to fit the width limit rather than cut off
+        double scaleX = Math.Min(scale, w / box.Width);
         var input = new DenseTensor<float>(new[] { 1, 3, LineHeight, w });
         var buffer = input.Buffer.Span;
         var color = new float[3];
@@ -166,7 +188,7 @@ static class PaddleOcr
         {
             for (int x = 0; x < w; x++)
             {
-                Sample(pixels, width, height, box.X + (x + 0.5) / scale - 0.5, box.Y + (y + 0.5) / scale - 0.5, color);
+                Sample(pixels, width, height, box.X + (x + 0.5) / scaleX - 0.5, box.Y + (y + 0.5) / scale - 0.5, color);
                 for (int c = 0; c < 3; c++)
                     buffer[(c * LineHeight + y) * w + x] = color[c] / 127.5f - 1;
             }

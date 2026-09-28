@@ -112,7 +112,7 @@ sealed partial class ApiPage : DockPanel
         _data.Tabs = _tabs.Select(t => new ApiTabState { RequestId = t.Saved?.Id ?? "", Draft = t.Draft }).ToList();
         _data.ActiveTab = _current != null ? _tabs.IndexOf(_current) : 0;
         try { ApiStore.Save(_data); }
-        catch (Exception ex) when (ex is System.IO.IOException or UnauthorizedAccessException) { Ui.SetStatus(_status, "保存失败：" + ex.Message, true); }
+        catch (Exception ex) when (ex is System.IO.IOException or UnauthorizedAccessException or InvalidOperationException) { Ui.SetStatus(_status, "保存失败：" + ex.Message, true); }
     }
 
     /// <summary>Saves right away; for structural changes such as the tree or environments.</summary>
@@ -154,7 +154,7 @@ sealed partial class ApiPage : DockPanel
 
     void ManageEnvironments()
     {
-        new EnvironmentWindow(Owner, _data, Persist, ActiveEnvironment).ShowDialog();
+        new EnvironmentWindow(Owner, _data, ScheduleSave, ActiveEnvironment).ShowDialog();
         if (ActiveEnvironment == null) _data.ActiveEnvironment = "";
         RefreshEnvironments();
         Persist();

@@ -64,7 +64,7 @@ sealed class ToolServer : IDisposable
     {
         while (!_stop.IsCancellationRequested)
         {
-            NamedPipeServerStream pipe;
+            NamedPipeServerStream? pipe = null;
             try
             {
                 pipe = new NamedPipeServerStream(PipeName, PipeDirection.InOut, NamedPipeServerStream.MaxAllowedServerInstances, PipeTransmissionMode.Byte, PipeOptions.Asynchronous);
@@ -72,12 +72,13 @@ sealed class ToolServer : IDisposable
             }
             catch (Exception ex) when (ex is AggregateException or ObjectDisposedException or IOException)
             {
+                pipe?.Dispose();
                 if (_stop.IsCancellationRequested) return;
                 Log.Error("AI tool pipe failed", ex);
                 Thread.Sleep(500);
                 continue;
             }
-            _ = Serve(pipe);
+            _ = Serve(pipe!);
         }
     }
 
@@ -99,6 +100,12 @@ sealed class ToolServer : IDisposable
             {
                 reply = new JObject { ["error"] = ex.Message };
             }
+            catch (Exception ex)
+            {
+                // Nobody awaits this task: log it and still answer, so the call doesn't just hang up
+                Log.Error("AI tool call failed", ex);
+                reply = new JObject { ["error"] = ex.Message };
+            }
             try
             {
                 var bytes = new UTF8Encoding(false).GetBytes(reply.ToString(Formatting.None));
@@ -106,7 +113,7 @@ sealed class ToolServer : IDisposable
                 await pipe.FlushAsync();
                 pipe.WaitForPipeDrain();
             }
-            catch (IOException) { } // the call was cancelled
+            catch (Exception ex) when (ex is IOException or ObjectDisposedException or InvalidOperationException) { } // the call was cancelled
         }
     }
 

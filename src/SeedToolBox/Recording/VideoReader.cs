@@ -31,45 +31,54 @@ sealed class VideoReader : IDisposable
 
         var attributes = MF.CreateAttributes();
         attributes.SetUINT32(ref MF.SOURCE_READER_ENABLE_VIDEO_PROCESSING, 1);
-        MF.MFCreateSourceReaderFromURL(path, attributes, out _reader);
-        MF.Release(attributes);
+        try { MF.MFCreateSourceReaderFromURL(path, attributes, out _reader); }
+        finally { MF.Release(attributes); }
 
-        _reader.SetStreamSelection(MF.SourceReaderAllStreams, false);
-        _reader.SetStreamSelection(MF.SourceReaderFirstVideoStream, true);
-        var video = MF.CreateMediaType();
-        video.SetGUID(ref MF.MT_MAJOR_TYPE, ref MF.MediaTypeVideo);
-        video.SetGUID(ref MF.MT_SUBTYPE, ref MF.VideoFormatRGB32);
-        _reader.SetCurrentMediaType(MF.SourceReaderFirstVideoStream, IntPtr.Zero, video);
-        MF.Release(video);
-        UpdateVideoFormat();
-
-        // ReadSample reports real stream indexes, so find which one is the audio
-        for (int i = 0; audio && _reader.GetNativeMediaType(i, 0, out var native) >= 0; i++)
+        // Nobody can dispose a half-built reader, and it keeps the file open
+        try
         {
-            native.GetGUID(ref MF.MT_MAJOR_TYPE, out var major);
-            MF.Release(native);
-            if (major == MF.MediaTypeAudio)
+            _reader.SetStreamSelection(MF.SourceReaderAllStreams, false);
+            _reader.SetStreamSelection(MF.SourceReaderFirstVideoStream, true);
+            var video = MF.CreateMediaType();
+            video.SetGUID(ref MF.MT_MAJOR_TYPE, ref MF.MediaTypeVideo);
+            video.SetGUID(ref MF.MT_SUBTYPE, ref MF.VideoFormatRGB32);
+            _reader.SetCurrentMediaType(MF.SourceReaderFirstVideoStream, IntPtr.Zero, video);
+            MF.Release(video);
+            UpdateVideoFormat();
+
+            // ReadSample reports real stream indexes, so find which one is the audio
+            for (int i = 0; audio && _reader.GetNativeMediaType(i, 0, out var native) >= 0; i++)
             {
-                _audioStream = i;
-                break;
+                native.GetGUID(ref MF.MT_MAJOR_TYPE, out var major);
+                MF.Release(native);
+                if (major == MF.MediaTypeAudio)
+                {
+                    _audioStream = i;
+                    break;
+                }
             }
-        }
-        if (_audioStream >= 0)
-        {
-            _reader.SetStreamSelection(MF.SourceReaderFirstAudioStream, true);
-            var pcm = MF.CreateMediaType();
-            pcm.SetGUID(ref MF.MT_MAJOR_TYPE, ref MF.MediaTypeAudio);
-            pcm.SetGUID(ref MF.MT_SUBTYPE, ref MF.AudioFormatPCM);
-            pcm.SetUINT32(ref MF.MT_AUDIO_BITS_PER_SAMPLE, 16);
-            pcm.SetUINT32(ref MF.MT_AUDIO_SAMPLES_PER_SECOND, Mp4Writer.AudioRate);
-            pcm.SetUINT32(ref MF.MT_AUDIO_NUM_CHANNELS, Mp4Writer.AudioChannels);
-            _reader.SetCurrentMediaType(MF.SourceReaderFirstAudioStream, IntPtr.Zero, pcm);
-            MF.Release(pcm);
-            HasAudio = true;
-        }
+            if (_audioStream >= 0)
+            {
+                _reader.SetStreamSelection(MF.SourceReaderFirstAudioStream, true);
+                var pcm = MF.CreateMediaType();
+                pcm.SetGUID(ref MF.MT_MAJOR_TYPE, ref MF.MediaTypeAudio);
+                pcm.SetGUID(ref MF.MT_SUBTYPE, ref MF.AudioFormatPCM);
+                pcm.SetUINT32(ref MF.MT_AUDIO_BITS_PER_SAMPLE, 16);
+                pcm.SetUINT32(ref MF.MT_AUDIO_SAMPLES_PER_SECOND, Mp4Writer.AudioRate);
+                pcm.SetUINT32(ref MF.MT_AUDIO_NUM_CHANNELS, Mp4Writer.AudioChannels);
+                _reader.SetCurrentMediaType(MF.SourceReaderFirstAudioStream, IntPtr.Zero, pcm);
+                MF.Release(pcm);
+                HasAudio = true;
+            }
 
-        _reader.GetPresentationAttribute(-1 /* MF_SOURCE_READER_MEDIASOURCE */, ref MF.PD_DURATION, out var duration);
-        Duration = duration.Value;
+            _reader.GetPresentationAttribute(-1 /* MF_SOURCE_READER_MEDIASOURCE */, ref MF.PD_DURATION, out var duration);
+            Duration = duration.Value;
+        }
+        catch
+        {
+            MF.Release(_reader);
+            throw;
+        }
     }
 
     void UpdateVideoFormat()

@@ -2,6 +2,7 @@ using System;
 using System.Collections.Generic;
 using System.Diagnostics;
 using System.Globalization;
+using System.IO;
 using System.Linq;
 using System.Net;
 using System.Net.Http;
@@ -392,7 +393,18 @@ sealed partial class NetworkPage
             using (var response = await Http.SendAsync(request, HttpCompletionOption.ResponseHeadersRead, cts.Token))
             {
                 var headersTime = watch.ElapsedMilliseconds;
-                var bytes = await response.Content.ReadAsByteArrayAsync();
+                // Read at most the displayed limit; cancelling disposes the response since the stream may ignore the token
+                byte[] bytes;
+                using (cts.Token.Register(() => response.Dispose()))
+                using (var stream = await response.Content.ReadAsStreamAsync())
+                using (var ms = new MemoryStream())
+                {
+                    var buffer = new byte[81920];
+                    int read;
+                    while (ms.Length <= MaxBody && (read = await stream.ReadAsync(buffer, 0, (int)Math.Min(buffer.Length, MaxBody + 1 - ms.Length), cts.Token)) > 0)
+                        ms.Write(buffer, 0, read);
+                    bytes = ms.ToArray();
+                }
                 watch.Stop();
                 var sb = new StringBuilder();
                 sb.AppendLine($"HTTP/{response.Version} {(int)response.StatusCode} {response.ReasonPhrase}");
@@ -401,14 +413,14 @@ sealed partial class NetworkPage
                 sb.AppendLine();
                 sb.Append(DecodeBody(bytes, response.Content.Headers.ContentType?.CharSet));
                 _httpResponse.Text = sb.ToString();
-                Ui.SetStatus(_httpStatus, $"{(int)response.StatusCode} {response.ReasonPhrase}  首字节 {headersTime} ms，总计 {watch.ElapsedMilliseconds} ms，{Ui.FormatSize(bytes.Length)}", !response.IsSuccessStatusCode && (int)response.StatusCode >= 400);
+                Ui.SetStatus(_httpStatus, $"{(int)response.StatusCode} {response.ReasonPhrase}  首字节 {headersTime} ms，总计 {watch.ElapsedMilliseconds} ms，{(bytes.Length > MaxBody ? "超过 " + Ui.FormatSize(MaxBody) : Ui.FormatSize(bytes.Length))}", !response.IsSuccessStatusCode && (int)response.StatusCode >= 400);
             }
         }
-        catch (TaskCanceledException)
+        catch (Exception ex) when (ex is OperationCanceledException || cts.IsCancellationRequested && ex is ObjectDisposedException or IOException)
         {
             Ui.SetStatus(_httpStatus, cts.IsCancellationRequested ? "已取消" : "请求超时（60 秒）", true);
         }
-        catch (Exception ex) when (ex is HttpRequestException or InvalidOperationException or FormatException)
+        catch (Exception ex) when (ex is HttpRequestException or InvalidOperationException or FormatException or IOException)
         {
             Ui.SetStatus(_httpStatus, "请求失败：" + (ex.InnerException?.Message ?? ex.Message), true);
         }
@@ -418,11 +430,12 @@ sealed partial class NetworkPage
         }
     }
 
+    const int MaxBody = 2 * 1024 * 1024;
+
     static string DecodeBody(byte[] bytes, string? charset)
     {
-        const int Max = 2 * 1024 * 1024;
-        bool truncated = bytes.Length > Max;
-        if (truncated) Array.Resize(ref bytes, Max);
+        bool truncated = bytes.Length > MaxBody;
+        if (truncated) Array.Resize(ref bytes, MaxBody);
         string text;
         try { text = charset is { Length: > 0 } ? Encoding.GetEncoding(charset.Trim('"')).GetString(bytes) : TextFiles.Decode(bytes, out _); }
         catch (ArgumentException) { text = TextFiles.Decode(bytes, out _); }

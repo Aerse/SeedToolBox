@@ -25,6 +25,8 @@ sealed class ProcessEntry
     public string MemoryText => Ui.FormatSize(Memory);
     public string Title { get; set; } = "";
     public string Path { get; set; } = "";
+    /// <summary>When it started, to tell it from a new process that got the same PID after it exited.</summary>
+    public DateTime? Started { get; set; }
 }
 
 sealed class ProcessPage : DockPanel
@@ -123,12 +125,19 @@ sealed class ProcessPage : DockPanel
                         Memory = p.WorkingSet64,
                         Title = p.MainWindowTitle,
                         Path = ImagePath(p.Id) ?? "",
+                        Started = StartTime(p),
                     });
                 }
                 catch (InvalidOperationException) { }
             }
         }
         return list;
+    }
+
+    static DateTime? StartTime(Process p)
+    {
+        try { return p.StartTime; }
+        catch (Exception ex) when (ex is Win32Exception or InvalidOperationException or NotSupportedException) { return null; }
     }
 
     static string? ImagePath(int pid)
@@ -178,6 +187,13 @@ sealed class ProcessPage : DockPanel
         try
         {
             using var process = Process.GetProcessById(entry.Pid);
+            // The list may be stale: the PID could belong to another process by now
+            if (!process.ProcessName.Equals(entry.Name, StringComparison.OrdinalIgnoreCase) || entry.Started is { } started && StartTime(process) is { } now && now != started)
+            {
+                Ui.SetStatus(_status, $"{entry.Name}（PID {entry.Pid}）已经退出，列表已刷新", true);
+                Refresh();
+                return;
+            }
             process.Kill();
             process.WaitForExit(3000);
             Ui.SetStatus(_status, $"已结束 {entry.Name}（PID {entry.Pid}）");

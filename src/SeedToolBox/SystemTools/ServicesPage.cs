@@ -57,7 +57,7 @@ sealed class ServiceRun
         Line?.Invoke(line);
     }
 
-    public string Text { get { lock (_lines) return string.Join("\r\n", _lines); } }
+    public List<string> Lines { get { lock (_lines) return _lines.ToList(); } }
 }
 
 /// <summary>The saved services and the ones running; runs outlive the page and are stopped when the app exits.</summary>
@@ -66,23 +66,49 @@ static class LocalServices
     static readonly string FilePath = Path.Combine(AppPaths.Data, "services.json");
     static readonly Dictionary<LocalService, ServiceRun> Runs = new();
     static List<LocalService>? _items;
+    /// <summary>The file exists but couldn't be read (locked): saving would replace it with what little is in memory.</summary>
+    static bool _unreadable;
 
     public static List<LocalService> Items => _items ??= Load();
 
     static List<LocalService> Load()
     {
+        if (!File.Exists(FilePath)) return new();
+        string text;
+        try { text = File.ReadAllText(FilePath, Encoding.UTF8); }
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
+        {
+            Log.Error("Reading services failed", ex);
+            _unreadable = true;
+            return new();
+        }
+        if (Parse(text) is { } items) return items;
+        // Broken (e.g. cut off by a power loss): keep it aside before anything is saved over it, then try the last good copy
+        try { File.Copy(FilePath, FilePath + ".broken", true); }
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException) { Log.Error("Backing up services.json failed", ex); _unreadable = true; }
         try
         {
-            if (File.Exists(FilePath)) return JsonConvert.DeserializeObject<List<LocalService>>(File.ReadAllText(FilePath)) ?? new();
+            if (File.Exists(FilePath + ".bak") && Parse(File.ReadAllText(FilePath + ".bak", Encoding.UTF8)) is { } backup) return backup;
         }
-        catch (Exception ex) { Log.Error("Reading services failed", ex); }
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException) { Log.Error("Reading services.json.bak failed", ex); }
         return new();
+    }
+
+    static List<LocalService>? Parse(string text)
+    {
+        try { return JsonConvert.DeserializeObject<List<LocalService>>(text); }
+        catch (JsonException ex) { Log.Error("services.json is broken", ex); return null; }
     }
 
     public static void Save()
     {
+        if (_unreadable) throw new IOException("services.json 读取失败，为免覆盖原有内容，这次不保存；重启程序再试");
         Directory.CreateDirectory(AppPaths.Data);
-        File.WriteAllText(FilePath, JsonConvert.SerializeObject(Items, Formatting.Indented), new UTF8Encoding(false));
+        // Written aside and swapped in, so a crash mid-write leaves the old file (and the one before it as .bak)
+        var tmp = FilePath + ".tmp";
+        File.WriteAllText(tmp, JsonConvert.SerializeObject(Items, Formatting.Indented), new UTF8Encoding(false));
+        if (File.Exists(FilePath)) File.Replace(tmp, FilePath, FilePath + ".bak");
+        else File.Move(tmp, FilePath);
     }
 
     public static ServiceRun? Run(LocalService s) => Runs.TryGetValue(s, out var r) ? r : null;
@@ -212,6 +238,13 @@ sealed class ServicesPage : DockPanel
     readonly TextBlock _status = Ui.Status();
     readonly DispatcherTimer _timer = new() { Interval = TimeSpan.FromSeconds(2) };
     ServiceRun? _shown;
+    const int LogLines = 3000;
+    /// <summary>Lines printed since the last refresh, added to the box in one go.</summary>
+    readonly List<string> _newLines = new();
+    /// <summary>Length of each line in the box, to cut the oldest ones without reading the whole text back.</summary>
+    readonly Queue<int> _logLengths = new();
+    readonly DispatcherTimer _logTimer = new() { Interval = TimeSpan.FromMilliseconds(200) };
+    readonly WrapPanel _toolbar = new() { Margin = new Thickness(0, 10, 0, 6) };
 
     readonly ObservableCollection<DockerContainer> _containers = new();
     readonly ListView _dockerList = new();
@@ -231,18 +264,19 @@ sealed class ServicesPage : DockPanel
         tabs.SelectionChanged += (_, e) => { if (e.Source == tabs && tabs.SelectedItem == docker && _containers.Count == 0) _ = RefreshDocker(); };
         Children.Add(tabs);
         _timer.Tick += (_, _) => UpdateStates();
-        Loaded += (_, _) => { UpdateStates(); _timer.Start(); };
-        Unloaded += (_, _) => _timer.Stop();
+        _logTimer.Tick += (_, _) => FlushLog();
+        Loaded += (_, _) => { UpdateStates(); _timer.Start(); _logTimer.Start(); };
+        Unloaded += (_, _) => { _timer.Stop(); _logTimer.Stop(); };
     }
 
     // My services
 
     FrameworkElement BuildServices()
     {
-        var toolbar = new WrapPanel { Margin = new Thickness(0, 10, 0, 6) };
+        var toolbar = _toolbar;
         foreach (var b in new[]
                  {
-                     Ui.Button("启动", () => Act(StartSelected), accent: true), Ui.Button("停止", () => Act(StopSelected)), Ui.Button("重启", () => Act(Restart)),
+                     Ui.Button("启动", () => _ = Act(StartSelected), accent: true), Ui.Button("停止", () => _ = Act(StopSelected)), Ui.Button("重启", () => _ = Act(Restart)),
                      Ui.Button("打开网址", OpenUrl), Ui.Button("打开文件夹", OpenFolder),
                      Ui.Button("新建", () => Edit(null)), Ui.Button("编辑", () => { if (Selected is { } r) Edit(r.Service); }), Ui.Button("删除", Delete),
                  })
@@ -262,12 +296,12 @@ sealed class ServicesPage : DockPanel
         Column("命令", nameof(ServiceRow.Command), 380);
         _list.View = view;
         _list.SelectionChanged += (_, _) => ShowLog();
-        _list.MouseDoubleClick += (_, _) => { if (Selected is { } r) Act(LocalServices.IsRunning(r.Service) ? StopSelected : StartSelected); };
+        _list.MouseDoubleClick += (_, _) => { if (Selected is { } r && _toolbar.IsEnabled) _ = Act(LocalServices.IsRunning(r.Service) ? StopSelected : StartSelected); };
         foreach (var s in LocalServices.Items) _rows.Add(new ServiceRow(s));
 
         _log.IsReadOnly = true;
         _log.FontFamily = Ui.Mono;
-        var logActions = Ui.Row(Ui.CopyButton(() => _log.Text, "复制输出"), Ui.Button("清空", () => _log.Clear()));
+        var logActions = Ui.Row(Ui.CopyButton(() => _log.Text, "复制输出"), Ui.Button("清空", () => { _log.Clear(); _logLengths.Clear(); }));
         var panel = new DockPanel();
         SetDock(toolbar, Dock.Top);
         SetDock(_list, Dock.Top);
@@ -284,38 +318,44 @@ sealed class ServicesPage : DockPanel
 
     ServiceRow? Selected => _list.SelectedItem as ServiceRow;
 
-    void Act(Action<LocalService> action)
+    /// <summary>Runs an action on the selected service with the buttons off, since stopping waits for the process tree.</summary>
+    async Task Act(Func<LocalService, Task> action)
     {
         if (Selected is not { } row) { Ui.SetStatus(_status, "先选一个服务", true); return; }
-        try { action(row.Service); }
+        _toolbar.IsEnabled = false;
+        try { await action(row.Service); }
         catch (Exception ex) when (ex is IOException or Win32Exception or InvalidOperationException)
         {
             Ui.SetStatus(_status, "失败：" + ex.Message, true);
         }
+        finally { _toolbar.IsEnabled = true; }
         UpdateStates();
         ShowLog();
     }
 
-    void StartSelected(LocalService s)
+    Task StartSelected(LocalService s)
     {
         LocalServices.Start(s);
         Ui.SetStatus(_status, "已启动 " + s.Name);
+        return Task.CompletedTask;
     }
 
-    void StopSelected(LocalService s)
+    async Task StopSelected(LocalService s)
     {
         if (!LocalServices.IsRunning(s))
         {
             Ui.SetStatus(_status, s.Port > 0 && LocalServices.ListeningPorts().Contains(s.Port) ? "这个端口上的程序不是从这里启动的，去“端口/网络”页结束它" : "没有在运行", true);
             return;
         }
-        LocalServices.Stop(s);
+        Ui.SetStatus(_status, "正在停止 " + s.Name + "…");
+        await Task.Run(() => LocalServices.Stop(s));
         Ui.SetStatus(_status, "已停止 " + s.Name);
     }
 
-    void Restart(LocalService s)
+    async Task Restart(LocalService s)
     {
-        LocalServices.Stop(s);
+        Ui.SetStatus(_status, "正在重启 " + s.Name + "…");
+        await Task.Run(() => LocalServices.Stop(s));
         LocalServices.Start(s);
         Ui.SetStatus(_status, "已重启 " + s.Name);
     }
@@ -337,11 +377,14 @@ sealed class ServicesPage : DockPanel
         else Ui.SetStatus(_status, "文件夹不存在：" + folder, true);
     }
 
-    void Delete()
+    async void Delete()
     {
         if (Selected is not { } row) return;
         if (MessageBox.Show(Window.GetWindow(this), $"删除服务“{row.Name}”？（只删除这条记录，不删任何文件）", "删除", MessageBoxButton.YesNo, MessageBoxImage.Question) != MessageBoxResult.Yes) return;
-        LocalServices.Stop(row.Service);
+        _toolbar.IsEnabled = false;
+        try { await Task.Run(() => LocalServices.Stop(row.Service)); }
+        catch (Exception ex) when (ex is Win32Exception or InvalidOperationException) { Log.Error("Stopping a service failed", ex); }
+        finally { _toolbar.IsEnabled = true; }
         LocalServices.Items.Remove(row.Service);
         _rows.Remove(row);
         SaveAll();
@@ -429,17 +472,41 @@ sealed class ServicesPage : DockPanel
     {
         if (_shown != null) _shown.Line -= OnLine;
         _shown = Selected is { } row ? LocalServices.Run(row.Service) : null;
-        _log.Text = _shown?.Text ?? "";
+        lock (_newLines) _newLines.Clear();
+        var lines = _shown?.Lines ?? new List<string>();
+        _logLengths.Clear();
+        foreach (var line in lines) _logLengths.Enqueue(line.Length);
+        _log.Text = string.Join("\r\n", lines);
         _log.ScrollToEnd();
         if (_shown != null) _shown.Line += OnLine;
     }
 
-    void OnLine(string line) => Dispatcher.BeginInvoke(new Action(() =>
+    // From the process's reader threads; busy services print hundreds of lines a second
+    void OnLine(string line)
     {
-        if (_log.LineCount > 3000) _log.Text = _shown?.Text ?? "";
-        else _log.AppendText((_log.Text.Length > 0 ? "\r\n" : "") + line);
+        lock (_newLines) _newLines.Add(line);
+    }
+
+    void FlushLog()
+    {
+        List<string> lines;
+        lock (_newLines)
+        {
+            if (_newLines.Count == 0) return;
+            lines = _newLines.ToList();
+            _newLines.Clear();
+        }
+        _log.AppendText((_logLengths.Count > 0 ? "\r\n" : "") + string.Join("\r\n", lines));
+        foreach (var line in lines) _logLengths.Enqueue(line.Length);
+        // Over the limit: drop the oldest fifth at once rather than a line at a time
+        if (_logLengths.Count > LogLines)
+        {
+            int cut = 0;
+            while (_logLengths.Count > LogLines * 4 / 5) cut += _logLengths.Dequeue() + 2;
+            _log.Text = _log.Text.Substring(Math.Min(cut, _log.Text.Length));
+        }
         _log.ScrollToEnd();
-    }));
+    }
 
     // Docker
 
@@ -487,10 +554,17 @@ sealed class ServicesPage : DockPanel
             StandardErrorEncoding = Encoding.UTF8,
         };
         using var p = Process.Start(info)!;
+        // Both read in the background, so a docker that hangs with its output open still times out
         var err = p.StandardError.ReadToEndAsync();
-        var output = p.StandardOutput.ReadToEnd();
-        if (!p.WaitForExit(60000)) { try { p.Kill(); } catch (InvalidOperationException) { } return (-1, "docker 超过 60 秒没有响应"); }
-        return (p.ExitCode, output + err.Result);
+        var output = p.StandardOutput.ReadToEndAsync();
+        if (!p.WaitForExit(60000))
+        {
+            try { p.Kill(); } catch (Exception ex) when (ex is InvalidOperationException or Win32Exception) { }
+            return (-1, "docker 超过 60 秒没有响应");
+        }
+        // Output still in the pipes after exit
+        Task.WaitAll(new Task[] { err, output }, 5000);
+        return (p.ExitCode, (output.IsCompleted ? output.Result : "") + (err.IsCompleted ? err.Result : ""));
     });
 
     static string Arg(string a) => a.Length > 0 && a.All(c => char.IsLetterOrDigit(c) || "-_.:/{}=".Contains(c)) ? a : "\"" + a.Replace("\"", "\\\"") + "\"";

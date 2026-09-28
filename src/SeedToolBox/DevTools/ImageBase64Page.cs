@@ -114,15 +114,23 @@ sealed class ImageBase64Page : DockPanel
 
     void Paste()
     {
-        if (!Clipboard.ContainsImage()) { Ui.SetStatus(_status, "剪贴板里没有图片", true); return; }
-        var image = Clipboard.GetImage();
-        if (image == null) return;
-        var encoder = new PngBitmapEncoder();
-        encoder.Frames.Add(BitmapFrame.Create(image));
-        using var ms = new MemoryStream();
-        encoder.Save(ms);
-        SetImage(ms.ToArray(), "image/png");
-        ShowBase64();
+        try
+        {
+            if (!Clipboard.ContainsImage()) { Ui.SetStatus(_status, "剪贴板里没有图片", true); return; }
+            var image = Clipboard.GetImage();
+            if (image == null) return;
+            var encoder = new PngBitmapEncoder();
+            encoder.Frames.Add(BitmapFrame.Create(image));
+            using var ms = new MemoryStream();
+            encoder.Save(ms);
+            SetImage(ms.ToArray(), "image/png");
+            ShowBase64();
+        }
+        catch (Exception ex)
+        {
+            // Another process may hold the clipboard, or the bitmap data may be malformed
+            Ui.SetStatus(_status, "剪贴板暂时不可用：" + ex.Message, true);
+        }
     }
 
     void Decode()

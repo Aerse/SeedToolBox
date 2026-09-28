@@ -4,6 +4,7 @@ using System.IO;
 using System.Linq;
 using System.Net.Sockets;
 using System.Text;
+using System.Text.RegularExpressions;
 using System.Threading;
 using System.Threading.Tasks;
 using Renci.SshNet;
@@ -35,6 +36,7 @@ sealed class SshConnection : IDisposable
     string _endpoint = "";
     string? _systemInfo;
     int _disposed;
+    int _authRound; // keyboard-interactive rounds on the connection being made
 
     SshConnection(HostEntry host, TerminalData data, IConnectPrompts prompts)
     {
@@ -96,6 +98,7 @@ sealed class SshConnection : IDisposable
             e.CanTrust = _prompts.TrustHostKey(endpoint, fp, known);
             if (e.CanTrust) lock (_data) _data.KnownHosts[endpoint] = fp;
         };
+        _authRound = 0;
         var watch = System.Diagnostics.Stopwatch.StartNew();
         try { client.Connect(); Log.Info($"SSH {endpoint} connected in {watch.ElapsedMilliseconds} ms ({client.ConnectionInfo.CurrentKeyExchangeAlgorithm}, {client.ConnectionInfo.CurrentServerEncryption})"); }
         catch (SshAuthenticationException ex) { client.Dispose(); throw new InvalidOperationException("登录失败：" + ex.Message, ex); }
@@ -114,7 +117,8 @@ sealed class SshConnection : IDisposable
             {
                 var passphrase = Secret.Reveal(host.KeyPassphrase);
                 PrivateKeyFile key;
-                var path = Environment.ExpandEnvironmentVariables(host.KeyPath.Replace("~", Environment.GetFolderPath(Environment.SpecialFolder.UserProfile)));
+                var path = Environment.ExpandEnvironmentVariables(host.KeyPath.StartsWith("~")
+                    ? Environment.GetFolderPath(Environment.SpecialFolder.UserProfile) + host.KeyPath.Substring(1) : host.KeyPath);
                 try { key = passphrase.Length > 0 ? new PrivateKeyFile(path, passphrase) : new PrivateKeyFile(path); }
                 catch (Exception ex) when (ex is SshPassPhraseNullOrEmptyException or SshException)
                 {
@@ -138,11 +142,14 @@ sealed class SshConnection : IDisposable
         var interactive = new KeyboardInteractiveAuthenticationMethod(host.User);
         interactive.AuthenticationPrompt += (_, e) =>
         {
+            // Servers that only allow keyboard-interactive usually ask for the password this way. Only a lone prompt in the
+            // first round gets the saved one; retries, password changes and second factors are asked of the user.
+            var first = _authRound++ == 0 && e.Prompts.Count() == 1;
             foreach (var p in e.Prompts)
             {
-                // Servers that only allow keyboard-interactive usually ask for the password this way.
                 var saved = Secret.Reveal(host.Password);
-                p.Response = !p.IsEchoed && saved.Length > 0 && p.Request.IndexOf("password", StringComparison.OrdinalIgnoreCase) >= 0
+                p.Response = first && !p.IsEchoed && saved.Length > 0 && p.Request.IndexOf("password", StringComparison.OrdinalIgnoreCase) >= 0
+                    && !Regex.IsMatch(p.Request, "new|retype|again|current|old|code|token|otp", RegexOptions.IgnoreCase)
                     ? saved
                     : _prompts.Ask("登录 " + host.Title, (e.Instruction.Length > 0 ? e.Instruction + "\n" : "") + p.Request, !p.IsEchoed) ?? "";
             }
@@ -162,6 +169,7 @@ sealed class SshConnection : IDisposable
     {
         var sftp = new SftpClient(_info) { KeepAliveInterval = Client.KeepAliveInterval, OperationTimeout = TimeSpan.FromSeconds(30) };
         sftp.HostKeyReceived += (_, e) => e.CanTrust = _data.KnownHosts.TryGetValue(_endpoint, out var k) && k == e.HostKeyName + " SHA256:" + e.FingerPrintSHA256;
+        _authRound = 0;
         sftp.Connect();
         return sftp;
     }
@@ -216,6 +224,7 @@ sealed class SshSession : ISession
     readonly Encoding _encoding;
     readonly Decoder? _decoder;
     readonly bool _ownsConnection;
+    readonly WriteQueue _writes;
     int _closed;
 
     public bool IsOpen => _closed == 0;
@@ -228,6 +237,7 @@ sealed class SshSession : ISession
         if (_encoding.CodePage != 65001) _decoder = _encoding.GetDecoder();
         var modes = new Dictionary<TerminalModes, uint> { [TerminalModes.ECHO] = 1, [TerminalModes.TTY_OP_ISPEED] = 38400, [TerminalModes.TTY_OP_OSPEED] = 38400 };
         _stream = connection.Client.CreateShellStream("xterm-256color", (uint)cols, (uint)rows, 0, 0, 64 * 1024, modes);
+        _writes = new WriteQueue(Send, "SSH writer");
         _stream.Closed += (_, _) => Close("连接已关闭");
         connection.Lost += Close;
     }
@@ -274,7 +284,13 @@ sealed class SshSession : ISession
 
     public void Write(string text) => WriteBytes(_encoding.GetBytes(text));
 
+    // Flush waits for the SSH window, so writes go through the queue rather than the UI thread.
     public void WriteBytes(byte[] bytes)
+    {
+        if (IsOpen) _writes.Add(bytes);
+    }
+
+    void Send(byte[] bytes)
     {
         if (!IsOpen) return;
         try
@@ -302,6 +318,7 @@ sealed class SshSession : ISession
     {
         var wasOpen = IsOpen;
         _closed = 1;
+        _writes.Complete();
         Connection.Lost -= Close;
         try { _stream.Dispose(); } catch (Exception ex) when (ex is SshException or ObjectDisposedException or IOException) { }
         if (_ownsConnection) Connection.Dispose();

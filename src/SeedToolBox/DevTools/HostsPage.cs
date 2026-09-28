@@ -3,6 +3,9 @@ using System.Collections.ObjectModel;
 using System.ComponentModel;
 using System.Diagnostics;
 using System.IO;
+using System.Net;
+using System.Security.Cryptography;
+using System.Threading.Tasks;
 using System.Linq;
 using System.Text;
 using System.Text.RegularExpressions;
@@ -35,6 +38,9 @@ sealed partial class HostsPage : DockPanel
     static readonly string HostsPath = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.System), @"drivers\etc\hosts");
     static readonly Regex EntryLine = new(@"^(?<off>\s*#\s*)?(?<ip>(?:\d{1,3}\.){3}\d{1,3}|[0-9a-fA-F:]*:[0-9a-fA-F:.%\w]*)\s+(?<hosts>[^#]+?)\s*(?:#\s*(?<comment>.*))?$");
 
+    /// <summary>The regex alone also takes comments like "# cafe: note" for IPv6, so the address has to parse too.</summary>
+    static bool IsAddress(string ip) => EntryLine.IsMatch(ip + " x") && IPAddress.TryParse(ip, out _);
+
     readonly ObservableCollection<HostEntry> _entries = new();
     readonly ListView _list = new();
     readonly TextBox _raw = Ui.Area();
@@ -57,7 +63,7 @@ sealed partial class HostsPage : DockPanel
         var header = Ui.Header("Hosts 管理", HostsPath + "（保存时需要管理员权限，会自动刷新 DNS 缓存）");
         var toolbar = Ui.Row(
             _listMode, _rawMode,
-            Ui.Button("保存", Save, accent: true),
+            Ui.Button("保存", () => _ = SaveAsync(), accent: true),
             Ui.Button("重新载入", () => { if (ConfirmDiscard()) Load(); }),
             Ui.Button("打开所在文件夹", () => ProcessLauncher.OpenLocation(HostsPath)),
             Ui.Button("从备份恢复…", RestoreBackup),
@@ -152,7 +158,7 @@ sealed partial class HostsPage : DockPanel
         for (int i = 0; i < _lines.Length; i++)
         {
             var m = EntryLine.Match(_lines[i]);
-            if (!m.Success) continue;
+            if (!m.Success || !IsAddress(m.Groups["ip"].Value)) continue;
             var entry = new HostEntry
             {
                 Enabled = !m.Groups["off"].Success,
@@ -171,13 +177,13 @@ sealed partial class HostsPage : DockPanel
     {
         if (e.PropertyName == nameof(HostEntry.Warning)) return;
         var entry = (HostEntry)sender!;
-        if (e.PropertyName == nameof(HostEntry.Ip) && !EntryLine.IsMatch(entry.Ip + " x"))
+        if (e.PropertyName == nameof(HostEntry.Ip) && !IsAddress(entry.Ip))
             Ui.SetStatus(_status, $"IP 地址格式不正确：{entry.Ip}，保存后这一行不再被识别为记录", true);
         if (entry.Hosts.Contains('#')) entry.Hosts = entry.Hosts.Replace("#", "");
         CheckConflicts();
         _lines[entry.Line] = Format(entry);
         _dirty = true;
-        if (e.PropertyName != nameof(HostEntry.Ip) || EntryLine.IsMatch(entry.Ip + " x")) Ui.SetStatus(_status, "有未保存的修改");
+        if (e.PropertyName != nameof(HostEntry.Ip) || IsAddress(entry.Ip)) Ui.SetStatus(_status, "有未保存的修改");
     }
 
     static string Format(HostEntry e) =>
@@ -202,7 +208,7 @@ sealed partial class HostsPage : DockPanel
     {
         var ip = _ip.Text.Trim();
         var host = _host.Text.Trim();
-        if (!EntryLine.IsMatch(ip + " x")) { Ui.SetStatus(_status, "IP 地址格式不正确", true); return; }
+        if (!IsAddress(ip)) { Ui.SetStatus(_status, "IP 地址格式不正确", true); return; }
         if (host.Length == 0 || host.Contains('#')) { Ui.SetStatus(_status, "请输入域名", true); return; }
         var entry = new HostEntry { Enabled = true, Ip = ip, Hosts = Regex.Replace(host, @"\s+", " "), Comment = _comment.Text.Trim() };
         // Drop trailing blank lines so the new entry sits right after the last one
@@ -235,10 +241,10 @@ sealed partial class HostsPage : DockPanel
 
     bool ConfirmDiscard() => !_dirty || MessageBox.Show(Window.GetWindow(this), "放弃未保存的修改？", "Hosts 管理", MessageBoxButton.OKCancel, MessageBoxImage.Question) == MessageBoxResult.OK;
 
-    void Save()
+    async Task SaveAsync()
     {
         var text = _rawMode.IsChecked == true ? _raw.Text : string.Join(_newline, _lines);
-        var temp = Path.Combine(Path.GetTempPath(), "SeedToolBox.hosts");
+        var bytes = TextFiles.Encode(text, _encoding);
         try
         {
             // Keep the previous file in case the edit breaks something
@@ -246,8 +252,6 @@ sealed partial class HostsPage : DockPanel
             Directory.CreateDirectory(backups);
             if (File.Exists(HostsPath)) File.Copy(HostsPath, Path.Combine(backups, $"hosts-{DateTime.Now:yyyyMMdd-HHmmss}"), true);
             foreach (var old in new DirectoryInfo(backups).GetFiles("hosts-*").OrderByDescending(f => f.Name).Skip(20)) old.Delete();
-
-            File.WriteAllBytes(temp, TextFiles.Encode(text, _encoding));
         }
         catch (Exception ex)
         {
@@ -255,18 +259,19 @@ sealed partial class HostsPage : DockPanel
             return;
         }
 
-        if (!TryWriteDirect(temp) && !WriteElevated(temp)) return;
+        Ui.SetStatus(_status, "正在保存…");
+        if (!await Task.Run(() => TryWriteDirect(bytes)) && !await WriteElevated(bytes)) return;
         _dirty = false;
         Load();
         Ui.SetStatus(_status, $"已保存并刷新 DNS 缓存（{DateTime.Now:HH:mm:ss}），原文件已备份到 Data\\hosts-backup");
     }
 
     /// <summary>Works when the app already runs as administrator.</summary>
-    static bool TryWriteDirect(string temp)
+    static bool TryWriteDirect(byte[] bytes)
     {
         try
         {
-            File.Copy(temp, HostsPath, true);
+            File.WriteAllBytes(HostsPath, bytes);
             using var p = Process.Start(new ProcessStartInfo("ipconfig", "/flushdns") { CreateNoWindow = true, UseShellExecute = false });
             p?.WaitForExit(5000);
             return true;
@@ -275,19 +280,41 @@ sealed partial class HostsPage : DockPanel
         catch (IOException) { return false; }
     }
 
-    bool WriteElevated(string temp)
+    async Task<bool> WriteElevated(byte[] bytes)
     {
-        var psi = new ProcessStartInfo("cmd.exe", $"/c copy /y \"{temp}\" \"{HostsPath}\" && ipconfig /flushdns")
+        // The staging file is writable by this user, so another process could swap it before the UAC prompt is
+        // accepted. The elevated side reads it once, checks the hash of exactly those bytes and only then writes them.
+        var dir = Path.Combine(Path.GetTempPath(), "SeedToolBox-" + Guid.NewGuid().ToString("N"));
+        var temp = Path.Combine(dir, "hosts");
+        string hash;
+        using (var sha = SHA256.Create()) hash = BitConverter.ToString(sha.ComputeHash(bytes)).Replace("-", "");
+        var script =
+            $"$b=[IO.File]::ReadAllBytes('{temp.Replace("'", "''")}');" +
+            "$h=[BitConverter]::ToString([Security.Cryptography.SHA256]::Create().ComputeHash($b)).Replace('-','');" +
+            $"if($h -ne '{hash}'){{exit 3}};" +
+            $"[IO.File]::WriteAllBytes('{HostsPath.Replace("'", "''")}',$b);" +
+            "ipconfig /flushdns | Out-Null;exit 0";
+        var psi = new ProcessStartInfo("powershell.exe", "-NoProfile -NonInteractive -ExecutionPolicy Bypass -EncodedCommand " + Convert.ToBase64String(Encoding.Unicode.GetBytes(script)))
         {
             UseShellExecute = true,
             Verb = "runas",
             WindowStyle = ProcessWindowStyle.Hidden,
         };
+        bool pending = false;
         try
         {
+            Directory.CreateDirectory(dir);
+            File.WriteAllBytes(temp, bytes);
             using var p = Process.Start(psi);
             if (p == null) return false;
-            p.WaitForExit(15000);
+            // Wait off the UI thread; only read ExitCode once the process has really exited
+            if (!await Task.Run(() => p.WaitForExit(60000)))
+            {
+                pending = true;
+                Ui.SetStatus(_status, "写入仍在进行（可能被安全软件拦截或扫描），稍后点「重新载入」确认结果", true);
+                return false;
+            }
+            if (p.ExitCode == 3) { Ui.SetStatus(_status, "保存失败：中转文件在提权前被改动，已拒绝写入", true); return false; }
             if (p.ExitCode != 0) { Ui.SetStatus(_status, $"保存失败（错误码 {p.ExitCode}），文件可能被安全软件锁定", true); return false; }
             return true;
         }
@@ -300,6 +327,11 @@ sealed partial class HostsPage : DockPanel
         {
             Ui.SetStatus(_status, "保存失败：" + ex.Message, true);
             return false;
+        }
+        finally
+        {
+            // Still running: the elevated side has yet to read the staging file
+            if (!pending) try { Directory.Delete(dir, true); } catch (IOException) { } catch (UnauthorizedAccessException) { }
         }
     }
 }

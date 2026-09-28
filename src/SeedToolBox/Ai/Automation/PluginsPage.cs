@@ -109,8 +109,10 @@ sealed class PluginsPage : DockPanel
             _results = await PluginMarket.SearchAsync(_search.Text);
             Ui.SetStatus(_marketStatus, _results.Count == 0 ? "没有找到" : $"{_results.Count} 个");
         }
-        catch (System.Net.Http.HttpRequestException ex)
+        catch (Exception ex)
         {
+            // Nothing awaits this task, so every failure has to end up here
+            if (ex is not System.Net.Http.HttpRequestException) Log.Error("plugin search failed", ex);
             _results = new();
             Ui.SetStatus(_marketStatus, ex.Message, true);
         }
@@ -307,20 +309,20 @@ sealed class PluginsPage : DockPanel
         foreach (var b in _actions) b.IsEnabled = false;
         Ui.SetStatus(_status, verb + "中…");
         _output.Clear();
-        var info = PiRuntime.StartInfo(install, _service.Settings, args);
-        var registry = PiMirrors.Order(_service.Settings).First().Registry;
-        // Our own npmrc like the installer's, so a stale proxy or registry in the user's npm settings doesn't break installs
-        Directory.CreateDirectory(PiRuntime.Root);
-        var npmrc = Path.Combine(PiRuntime.Root, "plugins.npmrc");
-        File.WriteAllText(npmrc, $"registry={registry}\nfund=false\naudit=false\nupdate-notifier=false\n");
-        info.EnvironmentVariables["npm_config_userconfig"] = npmrc;
-        info.EnvironmentVariables["npm_config_registry"] = registry;
-        info.EnvironmentVariables["NO_COLOR"] = "1";
-        info.RedirectStandardOutput = info.RedirectStandardError = true;
-        info.StandardOutputEncoding = info.StandardErrorEncoding = new UTF8Encoding(false);
         int code = -1;
         try
         {
+            var info = PiRuntime.StartInfo(install, _service.Settings, args);
+            var registry = PiMirrors.Order(_service.Settings).First().Registry;
+            // Our own npmrc like the installer's, so a stale proxy or registry in the user's npm settings doesn't break installs
+            Directory.CreateDirectory(PiRuntime.Root);
+            var npmrc = Path.Combine(PiRuntime.Root, "plugins.npmrc");
+            File.WriteAllText(npmrc, $"registry={registry}\nfund=false\naudit=false\nupdate-notifier=false\n");
+            info.EnvironmentVariables["npm_config_userconfig"] = npmrc;
+            info.EnvironmentVariables["npm_config_registry"] = registry;
+            info.EnvironmentVariables["NO_COLOR"] = "1";
+            info.RedirectStandardOutput = info.RedirectStandardError = true;
+            info.StandardOutputEncoding = info.StandardErrorEncoding = new UTF8Encoding(false);
             using var process = new Process { StartInfo = info, EnableRaisingEvents = true };
             void Append(string? line)
             {
@@ -333,15 +335,20 @@ sealed class PluginsPage : DockPanel
             process.Start();
             process.BeginOutputReadLine();
             process.BeginErrorReadLine();
-            await Task.Run(() => { if (!process.WaitForExit(10 * 60 * 1000)) process.Kill(); process.WaitForExit(); });
+            // On a timeout the npm and git that pi started go too
+            await Task.Run(() => { if (!process.WaitForExit(10 * 60 * 1000)) ProcessTree.Kill(process); process.WaitForExit(); });
             code = process.ExitCode;
         }
-        catch (Exception ex) when (ex is System.ComponentModel.Win32Exception or InvalidOperationException or IOException)
+        catch (Exception ex)
         {
+            // Nothing awaits this task: whatever goes wrong must still give the buttons back
             Log.Error("pi " + verb + " failed", ex);
             _output.AppendText(ex.Message + "\n");
         }
-        _busy = false;
+        finally
+        {
+            _busy = false;
+        }
         Ui.SetStatus(_status, code == 0 ? verb + "完成，新开的自动化对话里生效" : verb + "失败，看下面的输出", code != 0);
         Refresh();
     }

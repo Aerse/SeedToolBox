@@ -339,7 +339,9 @@ sealed class DiskUsagePage : DockPanel
         var watch = System.Diagnostics.Stopwatch.StartNew();
         try
         {
-            var items = await Task.Run(() => Measure(folder, fresh, progress, cancel.Token));
+            // Hand this scan its own stats so a cancelled older scan can't write into the new one's
+            var stats = fresh ? new Stats(_extStats!, _top!) : null;
+            var items = await Task.Run(() => Measure(folder, stats, progress, cancel.Token));
             if (cancel.IsCancellationRequested) return;
             long total = items.Sum(i => i.Size);
             foreach (var item in items.OrderByDescending(i => i.Size))
@@ -370,7 +372,9 @@ sealed class DiskUsagePage : DockPanel
         foreach (var file in _top.OrderByDescending(f => f.Size).Take(TopCount)) _largest.Add(file);
     }
 
-    List<UsageItem> Measure(string folder, bool collect, IProgress<string> progress, CancellationToken cancel)
+    sealed record Stats(Dictionary<string, ExtensionUsage> Extensions, List<UsageItem> Top);
+
+    List<UsageItem> Measure(string folder, Stats? stats, IProgress<string> progress, CancellationToken cancel)
     {
         var result = new List<UsageItem>();
         var dir = new DirectoryInfo(folder);
@@ -382,21 +386,22 @@ sealed class DiskUsagePage : DockPanel
         int done = 0;
         Parallel.ForEach(subfolders, new ParallelOptions { MaxDegreeOfParallelism = 4, CancellationToken = cancel }, sub =>
         {
-            var (size, onDisk, files) = _sizes.TryGetValue(sub.FullName, out var cached) ? cached : SizeOf(sub, collect, cancel);
+            var (size, onDisk, files) = _sizes.TryGetValue(sub.FullName, out var cached) ? cached : SizeOf(sub, stats, cancel);
             lock (result) result.Add(new UsageItem { Path = sub.FullName, Name = sub.Name, IsFolder = true, Size = size, OnDisk = onDisk, Files = files });
             progress.Report($"分析中… {Interlocked.Increment(ref done)} / {subfolders.Count} 个文件夹");
         });
         foreach (var file in entries.OfType<FileInfo>())
         {
+            cancel.ThrowIfCancellationRequested();
             var item = new UsageItem { Path = file.FullName, Name = file.Name, Size = file.Length, OnDisk = OnDisk(file), Modified = file.LastWriteTime };
-            if (collect) Record(file, item.OnDisk);
+            if (stats != null) Record(stats, file, item.OnDisk);
             result.Add(item);
         }
         return result;
     }
 
     /// <summary>Total size of a folder, caching every folder beneath it along the way.</summary>
-    (long, long, int) SizeOf(DirectoryInfo dir, bool collect, CancellationToken cancel)
+    (long, long, int) SizeOf(DirectoryInfo dir, Stats? stats, CancellationToken cancel)
     {
         cancel.ThrowIfCancellationRequested();
         long size = 0, onDisk = 0;
@@ -406,17 +411,18 @@ sealed class DiskUsagePage : DockPanel
         catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or System.Security.SecurityException) { return (0, 0, 0); }
         foreach (var entry in entries)
         {
+            cancel.ThrowIfCancellationRequested();
             if (entry is FileInfo file)
             {
                 long disk = OnDisk(file);
                 size += file.Length;
                 onDisk += disk;
                 files++;
-                if (collect) Record(file, disk);
+                if (stats != null) Record(stats, file, disk);
             }
             else if (entry is DirectoryInfo sub && (sub.Attributes & FileAttributes.ReparsePoint) == 0)
             {
-                var (s, d, f) = SizeOf(sub, collect, cancel);
+                var (s, d, f) = SizeOf(sub, stats, cancel);
                 size += s;
                 onDisk += d;
                 files += f;
@@ -426,11 +432,10 @@ sealed class DiskUsagePage : DockPanel
         return (size, onDisk, files);
     }
 
-    void Record(FileInfo file, long onDisk)
+    static void Record(Stats stats, FileInfo file, long onDisk)
     {
-        var extStats = _extStats;
-        var top = _top;
-        if (extStats == null || top == null) return;
+        var extStats = stats.Extensions;
+        var top = stats.Top;
         var ext = file.Extension.Length > 0 ? file.Extension.ToLowerInvariant() : "（无扩展名）";
         lock (extStats)
         {

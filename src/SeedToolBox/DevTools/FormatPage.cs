@@ -28,6 +28,7 @@ sealed class FormatPage : DockPanel
     readonly ComboBox _indent = new() { Width = 100, ItemsSource = new[] { "2 空格", "4 空格", "Tab" }, SelectedIndex = 1 };
     readonly TextBlock _status = Ui.Status();
     readonly AsyncToken _busy = new();
+    readonly AsyncToken _treeBusy = new();
     readonly CheckBox _sortKeys = new() { Content = "排序键", VerticalAlignment = VerticalAlignment.Center, Margin = new Thickness(0, 0, 16, 0) };
     readonly CheckBox _treeView = new() { Content = "树视图", VerticalAlignment = VerticalAlignment.Center, Margin = new Thickness(0, 0, 16, 0) };
     readonly TextBox _path = Ui.Field(220);
@@ -56,7 +57,7 @@ sealed class FormatPage : DockPanel
         _treeView.Click += (_, _) => ShowTree();
         _language.SelectionChanged += (_, _) =>
         {
-            _jsonRow.Visibility = Language == "JSON" ? Visibility.Visible : Visibility.Collapsed;
+            _jsonRow.Visibility = SelectedLanguage == "JSON" ? Visibility.Visible : Visibility.Collapsed;
             ShowTree();
         };
 
@@ -65,7 +66,20 @@ sealed class FormatPage : DockPanel
         var copy = Ui.CopyButton(() => _output.Text);
         copy.Margin = new Thickness(0);
         var swap = Ui.Button("结果放回输入", () => _input.Text = _output.Text);
-        var save = Ui.SaveButton(() => _output.Text, _status, "result" + Extension);
+        // The default name follows the language picked at save time, not at construction
+        var save = Ui.Button("保存…", () =>
+        {
+            var content = _output.Text;
+            if (content.Length == 0) { Ui.SetStatus(_status, "没有可保存的内容", true); return; }
+            var dialog = new Microsoft.Win32.SaveFileDialog { FileName = "result" + Extension, Filter = "所有文件|*.*" };
+            if (dialog.ShowDialog(Application.Current.MainWindow) != true) return;
+            try
+            {
+                File.WriteAllText(dialog.FileName, content, new UTF8Encoding(false));
+                Ui.SetStatus(_status, "已保存到 " + dialog.FileName);
+            }
+            catch (Exception ex) { Ui.SetStatus(_status, "保存失败：" + ex.Message, true); }
+        });
         var buttons = new StackPanel { Orientation = Orientation.Horizontal, Children = { swap, save, copy } };
 
         var result = new Grid { Children = { _output, _tree } };
@@ -81,9 +95,9 @@ sealed class FormatPage : DockPanel
         Children.Add(body);
     }
 
-    string Language => (string)_language.SelectedItem;
+    string SelectedLanguage => (string)_language.SelectedItem;
 
-    string Extension => Language switch
+    string Extension => SelectedLanguage switch
     {
         "JavaScript" => ".js", "CSS" => ".css", "XML" => ".xml", "HTML" => ".html", "SQL" => ".sql", "YAML" => ".yaml", _ => ".json",
     };
@@ -115,7 +129,7 @@ sealed class FormatPage : DockPanel
     {
         var text = _input.Text;
         if (text.Trim().Length == 0) { Ui.SetStatus(_status, "请先输入内容", true); return; }
-        var language = Language;
+        var language = SelectedLanguage;
         int indent = _indent.SelectedIndex;
         bool sort = _sortKeys.IsChecked == true;
         Ui.SetStatus(_status, "处理中…");
@@ -132,7 +146,8 @@ sealed class FormatPage : DockPanel
         {
             _output.Text = result;
             ShowTree();
-            Ui.SetStatus(_status, $"完成：{text.Length:N0} → {result.Length:N0} 字符");
+            var note = language == "YAML" && HasYamlComments(text) ? "（注意：YAML 注释已被去掉，放回输入前请留意）" : "";
+            Ui.SetStatus(_status, $"完成：{text.Length:N0} → {result.Length:N0} 字符{note}");
         }, ex => Ui.SetStatus(_status, ex.Message, true));
     }
 
@@ -142,7 +157,7 @@ sealed class FormatPage : DockPanel
         if (text.Trim().Length == 0) { Ui.SetStatus(_status, "请先输入内容", true); return; }
         try
         {
-            switch (Language)
+            switch (SelectedLanguage)
             {
                 case "JSON": ParseJson(text); break;
                 case "JavaScript": Check(Uglify.Js(text)); break;
@@ -152,7 +167,7 @@ sealed class FormatPage : DockPanel
                 case "SQL": Ui.SetStatus(_status, "SQL 只做排版，不做语法校验"); return;
                 default: Check(Uglify.Css(text)); break;
             }
-            Ui.SetStatus(_status, $"{Language} 语法正确");
+            Ui.SetStatus(_status, $"{SelectedLanguage} 语法正确");
         }
         catch (Exception ex)
         {
@@ -207,20 +222,26 @@ sealed class FormatPage : DockPanel
 
     void ShowTree()
     {
-        bool show = _treeView.IsChecked == true && Language == "JSON";
+        bool show = _treeView.IsChecked == true && SelectedLanguage == "JSON";
         _tree.Visibility = show ? Visibility.Visible : Visibility.Collapsed;
         _output.Visibility = show ? Visibility.Collapsed : Visibility.Visible;
         if (!show) return;
         _tree.Items.Clear();
         var source = _output.Text.Trim().Length > 0 ? _output.Text : _input.Text;
-        if (source.Trim().Length == 0) return;
-        try
+        if (source.Trim().Length == 0) { _treeBusy.Current++; return; }
+        // Parse off the UI thread; nodes below the root are built lazily on expand
+        _tree.Items.Add(new TreeViewItem { Header = "解析中…" });
+        Ui.RunAsync(_treeBusy, () => ParseJson(source), token =>
         {
-            var root = TreeNode("$", ParseJson(source));
+            _tree.Items.Clear();
+            var root = TreeNode("$", token);
             root.IsExpanded = true;
             _tree.Items.Add(root);
-        }
-        catch (Exception ex) { _tree.Items.Add(new TreeViewItem { Header = ex.Message }); }
+        }, ex =>
+        {
+            _tree.Items.Clear();
+            _tree.Items.Add(new TreeViewItem { Header = ex.Message });
+        });
     }
 
     static TreeViewItem TreeNode(string name, JToken token)
@@ -235,6 +256,9 @@ sealed class FormatPage : DockPanel
             case JArray a:
                 item.Header = $"{name} [{a.Count}]";
                 AddLazy(item, () => a.Select((t, i) => TreeNode($"[{i}]", t)));
+                break;
+            case JValue { Value: string raw } when raw.StartsWith(BigNumber):
+                item.Header = $"{name}: {raw.Substring(BigNumber.Length)}";
                 break;
             default:
                 item.Header = $"{name}: {token.ToString(Formatting.None)}";
@@ -271,7 +295,36 @@ sealed class FormatPage : DockPanel
 
     static string IndentText(int indent) => indent switch { 0 => "  ", 2 => "\t", _ => "    " };
 
+    /// <summary>Marks numbers too large for decimal, kept as their original text inside a string placeholder.</summary>
+    const string BigNumber = "\u0001num:";
+
+    static readonly Regex JsonStringOrNumber = new(@"""(?:[^""\]|\.)*""|-?\d+(?:\.\d+)?(?:[eE][+-]?\d+)?", RegexOptions.Compiled);
+
+    /// <summary>Wraps numbers outside decimal's range in placeholder strings, so they survive parsing with their exact text.</summary>
+    static string ProtectBigNumbers(string text) => JsonStringOrNumber.Replace(text, m =>
+        m.Value[0] == '"' || decimal.TryParse(m.Value, System.Globalization.NumberStyles.Float, System.Globalization.CultureInfo.InvariantCulture, out _)
+            ? m.Value
+            : JsonConvert.ToString(BigNumber + m.Value));
+
+    /// <summary>Turns placeholder strings from <see cref="ProtectBigNumbers"/> back into bare numbers.</summary>
+    static string RestoreBigNumbers(string json) =>
+        json.Contains(@"\u0001num:") ? Regex.Replace(json, @"""\\u0001num:([^""]*)""", "$1") : json;
+
     static JToken ParseJson(string text)
+    {
+        try { return ParseJsonCore(text); }
+        catch (FormatException)
+        {
+            // Retry with oversized numbers (e.g. 1e400) protected; keep the original error if that doesn't help
+            var protectedText = ProtectBigNumbers(text);
+            if (protectedText == text) throw;
+            try { return ParseJsonCore(protectedText); }
+            catch (FormatException) { }
+            throw;
+        }
+    }
+
+    static JToken ParseJsonCore(string text)
     {
         try
         {
@@ -290,14 +343,14 @@ sealed class FormatPage : DockPanel
     {
         var token = ParseJson(text);
         if (sort) token = SortKeys(token);
-        if (!beautify) return token.ToString(Formatting.None);
+        if (!beautify) return RestoreBigNumbers(token.ToString(Formatting.None));
         using var writer = new StringWriter();
         using var json = new JsonTextWriter(writer) { Formatting = Formatting.Indented };
         if (indent == 2) { json.IndentChar = '\t'; json.Indentation = 1; }
         else json.Indentation = indent == 0 ? 2 : 4;
         token.WriteTo(json);
         json.Flush();
-        return writer.ToString();
+        return RestoreBigNumbers(writer.ToString());
     }
 
     static string FormatJs(string text, bool beautify, int indent)
@@ -436,7 +489,7 @@ sealed class FormatPage : DockPanel
         "select", "from", "where", "and", "or", "not", "in", "is", "null", "like", "between", "exists", "as", "on", "join", "inner", "left", "right", "full",
         "outer", "cross", "group", "by", "order", "having", "limit", "offset", "union", "all", "distinct", "insert", "into", "values", "update", "set",
         "delete", "create", "table", "alter", "drop", "index", "view", "primary", "key", "foreign", "references", "default", "case", "when", "then",
-        "else", "end", "asc", "desc", "top", "with", "returning", "count", "sum", "avg", "min", "max", "if", "begin", "commit", "rollback", "truncate",
+        "else", "end", "asc", "desc", "top", "with", "returning", "if", "begin", "commit", "rollback", "truncate",
         "except", "intersect", "over", "partition", "unique", "constraint", "check", "add", "column", "fetch", "next", "rows", "only", "declare", "using",
     };
 
@@ -453,9 +506,21 @@ sealed class FormatPage : DockPanel
         var keywords = new HashSet<string>(SqlKeywords, StringComparer.OrdinalIgnoreCase);
         var tokens = Regex.Matches(text, @"--[^\n]*|/\*[\s\S]*?\*/|'(?:[^']|'')*'|""(?:[^""]|"""")*""|`[^`]*`|\[[^\]]*\]|\d+(?:\.\d+)?|[\w@#$]+|<=|>=|<>|!=|\|\||::|\S")
             .Cast<Match>().Select(m => m.Value).ToList();
+        // A keyword next to "." or after AS is a name (t.key, AS index) and keeps its case
+        string Word(int i)
+        {
+            var t = tokens[i];
+            if (!keywords.Contains(t)) return t;
+            bool name = (i > 0 && (tokens[i - 1] == "." || tokens[i - 1].Equals("as", StringComparison.OrdinalIgnoreCase)))
+                || (i + 1 < tokens.Count && tokens[i + 1] == ".");
+            return name ? t : t.ToUpperInvariant();
+        }
         if (!beautify)
         {
-            var parts = tokens.Where(t => !t.StartsWith("--") && !t.StartsWith("/*")).Select(t => keywords.Contains(t) ? t.ToUpperInvariant() : t);
+            // Optimizer hints (/*+ ... */) and MySQL executable comments (/*! ... */) are part of the statement
+            var parts = tokens.Select((t, i) => (t, i))
+                .Where(x => !x.t.StartsWith("--") && !(x.t.StartsWith("/*") && !x.t.StartsWith("/*+") && !x.t.StartsWith("/*!")))
+                .Select(x => Word(x.i));
             var min = new StringBuilder();
             foreach (var t in parts)
             {
@@ -525,7 +590,7 @@ sealed class FormatPage : DockPanel
             }
             if (t == ",") { sb.Append(','); if (levels.Count == 0 || levels.Peek() == 1) NewLine(1); else sb.Append(' '); lineStart = levels.Count == 0 || levels.Peek() == 1; continue; }
             if (t == ";") { sb.Append(';'); sb.Append('\n'); depth = 0; levels.Clear(); lineStart = true; continue; }
-            Emit(keywords.Contains(t) ? t.ToUpperInvariant() : t);
+            Emit(Word(i));
         }
         return Regex.Replace(sb.ToString(), @"\n{3,}", "\n\n").Trim() + "\n";
     }
@@ -541,6 +606,19 @@ sealed class FormatPage : DockPanel
         try { stream.Load(new StringReader(text)); }
         catch (YamlDotNet.Core.YamlException ex) { throw new FormatException($"YAML 错误（第 {ex.Start.Line} 行，第 {ex.Start.Column} 列）：{ex.Message}"); }
         return stream;
+    }
+
+    /// <summary>Whether the YAML has # comments, which YamlStream drops on save.</summary>
+    static bool HasYamlComments(string text)
+    {
+        try
+        {
+            var scanner = new YamlDotNet.Core.Scanner(new StringReader(text), skipComments: false);
+            while (scanner.MoveNext())
+                if (scanner.Current is YamlDotNet.Core.Tokens.Comment) return true;
+        }
+        catch (YamlDotNet.Core.YamlException) { }
+        return false;
     }
 
     static string FormatYaml(string text, bool beautify)

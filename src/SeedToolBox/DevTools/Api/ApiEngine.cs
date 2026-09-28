@@ -27,14 +27,15 @@ sealed class ApiVariables
     public List<KeyValue> Collection { get; }
     public List<KeyValue> Environment { get; }
     public Dictionary<string, string> Data { get; }
-    public Dictionary<string, string> Locals { get; } = new();
+    public Dictionary<string, string> Locals { get; }
 
-    public ApiVariables(List<KeyValue>? globals, List<KeyValue>? collection, List<KeyValue>? environment, Dictionary<string, string>? data = null)
+    public ApiVariables(List<KeyValue>? globals, List<KeyValue>? collection, List<KeyValue>? environment, Dictionary<string, string>? data = null, Dictionary<string, string>? locals = null)
     {
         Globals = globals ?? new();
         Collection = collection ?? new();
         Environment = environment ?? new();
         Data = data ?? new();
+        Locals = locals ?? new();
     }
 
     public List<KeyValue>? Scope(string name) => name switch
@@ -44,6 +45,41 @@ sealed class ApiVariables
         "environment" => Environment,
         _ => null,
     };
+
+    string[]? _taken;
+
+    /// <summary>Copies of the variable lists for a script to change off the UI thread; locals and data are shared.</summary>
+    public ApiVariables Snapshot()
+    {
+        var copy = new ApiVariables(Globals.Clone(), Collection.Clone(), Environment.Clone(), Data, Locals);
+        copy._taken = copy.Signatures();
+        return copy;
+    }
+
+    /// <summary>Takes over the lists a script changed in <paramref name="copy"/>.</summary>
+    public void Merge(ApiVariables copy)
+    {
+        if (copy._taken == null) return;
+        var now = copy.Signatures();
+        if (now[0] != copy._taken[0]) Replace(Globals, copy.Globals);
+        if (now[1] != copy._taken[1]) Replace(Collection, copy.Collection);
+        if (now[2] != copy._taken[2]) Replace(Environment, copy.Environment);
+    }
+
+    string[] Signatures() => new[] { JsonConvert.SerializeObject(Globals), JsonConvert.SerializeObject(Collection), JsonConvert.SerializeObject(Environment) };
+
+    /// <summary>Copies row by row so editors holding the existing rows keep working.</summary>
+    static void Replace(List<KeyValue> target, List<KeyValue> source)
+    {
+        for (int i = 0; i < source.Count; i++)
+        {
+            if (i >= target.Count) { target.Add(source[i]); continue; }
+            var t = target[i];
+            var s = source[i];
+            t.Enabled = s.Enabled; t.Key = s.Key; t.Value = s.Value; t.Description = s.Description; t.Type = s.Type; t.Secret = s.Secret;
+        }
+        if (target.Count > source.Count) target.RemoveRange(source.Count, target.Count - source.Count);
+    }
 
     /// <summary>The value and the scope it came from, or null when no scope has it.</summary>
     public (string Value, string Scope)? Find(string name)
@@ -145,7 +181,25 @@ sealed class ApiResponse
     public string? Header(string name) => Headers.FirstOrDefault(h => h.Key.Equals(name, StringComparison.OrdinalIgnoreCase)).Value;
     public bool IsJson => ContentType.Contains("json") || Text.TrimStart().StartsWith("{") || Text.TrimStart().StartsWith("[");
     public bool IsImage => ContentType.StartsWith("image/");
+    /// <summary>An image with no text to show; SVG is XML and stays readable.</summary>
+    public bool IsBitmap => IsImage && !ContentType.Contains("svg");
     public bool IsHtml => ContentType.Contains("html");
+
+    JToken? _json;
+    bool _parsed;
+
+    /// <summary>The body as JSON, parsed once; null when it isn't JSON or is over 20 MB. Sending parses it off the UI thread.</summary>
+    public JToken? Json
+    {
+        get
+        {
+            if (_parsed) return _json;
+            _parsed = true;
+            if (IsJson && Text.Length < 20 * 1024 * 1024)
+                try { _json = JToken.Parse(Text); } catch (JsonReaderException) { }
+            return _json;
+        }
+    }
 }
 
 sealed class TestResult
@@ -228,11 +282,14 @@ static class ApiEngine
     public static string FormEncode(IEnumerable<KeyValue> fields) =>
         string.Join("&", fields.Select(f => Uri.EscapeDataString(f.Key) + "=" + Uri.EscapeDataString(f.Value)));
 
+    static readonly Regex MethodToken = new(@"^[!#$%&'*+.^_`|~0-9A-Za-z-]+$", RegexOptions.Compiled);
+
     /// <summary>Fills in variables, applies auth and default headers.</summary>
     public static PreparedRequest Prepare(ApiRequest r, ApiAuth auth, ApiVariables vars, ISet<string> missing)
     {
         string X(string s) => vars.Expand(s, missing);
         var p = new PreparedRequest { Method = (r.Method.Trim().Length > 0 ? r.Method.Trim() : "GET").ToUpperInvariant(), Options = r.Options.Clone() };
+        if (!MethodToken.IsMatch(p.Method)) throw new InvalidOperationException("请求方法不对：" + p.Method);
         p.Options.Proxy = X(p.Options.Proxy);
 
         var url = X(r.Url.Trim());
@@ -359,7 +416,8 @@ static class ApiEngine
             };
             foreach (var h in response.Headers.Concat(response.Content.Headers))
                 foreach (var v in h.Value) r.Headers.Add(new(h.Key, v));
-            r.Text = r.IsImage ? "" : Decode(bytes, response.Content.Headers.ContentType?.CharSet);
+            r.Text = r.IsBitmap ? "" : Decode(bytes, response.Content.Headers.ContentType?.CharSet);
+            _ = r.Json;
             foreach (Cookie c in Cookies.GetCookies(finalUri))
                 r.Cookies.Add(new ApiCookie
                 {
@@ -404,16 +462,16 @@ static class ApiEngine
         var pre = ctx.Path.Select(f => f.PreScript).Append(work.PreScript).Where(s => s.Trim().Length > 0).ToList();
         foreach (var script in pre)
         {
-            var host = new ScriptHost("prerequest", ctx.Variables, work, null, null, info, result);
-            if (!await Task.Run(() => ApiScript.Run(script, host), cancel).ConfigureAwait(false)) return result;
+            if (!await RunScript(script, "prerequest", ctx.Variables, work, null, null, info, result, cancel)) return result;
             if (result.Skipped) return result;
         }
 
-        var auth = ResolveAuth(work.Auth, ctx.Path);
-        var prepared = result.Request = Prepare(work, auth, ctx.Variables, result.Missing);
+        PreparedRequest prepared;
         try
         {
-            result.Response = await SendAsync(prepared, cancel).ConfigureAwait(false);
+            var auth = ResolveAuth(work.Auth, ctx.Path);
+            prepared = result.Request = Prepare(work, auth, ctx.Variables, result.Missing);
+            result.Response = await SendAsync(prepared, cancel);
         }
         catch (Exception ex) when (ex is HttpRequestException or InvalidOperationException or TimeoutException or IOException or WebException or ArgumentException or UriFormatException or ProtocolViolationException)
         {
@@ -425,11 +483,27 @@ static class ApiEngine
 
         var tests = ctx.Path.Select(f => f.TestScript).Append(work.TestScript).Where(s => s.Trim().Length > 0).ToList();
         foreach (var script in tests)
-        {
-            var host = new ScriptHost("test", ctx.Variables, work, prepared, result.Response, info, result);
-            if (!await Task.Run(() => ApiScript.Run(script, host), cancel).ConfigureAwait(false)) break;
-        }
+            if (!await RunScript(script, "test", ctx.Variables, work, prepared, result.Response, info, result, cancel)) break;
         return result;
+    }
+
+    /// <summary>
+    /// Runs a script on the thread pool against copies of the variable lists, which the UI may be saving or editing meanwhile;
+    /// the changes are copied back once the script is done, on the caller's thread.
+    /// </summary>
+    static async Task<bool> RunScript(string script, string phase, ApiVariables vars, ApiRequest work, PreparedRequest? prepared, ApiResponse? response, ScriptInfo info, ExecResult result, CancellationToken cancel)
+    {
+        var copy = vars.Snapshot();
+        var scriptResult = new ExecResult();
+        var host = new ScriptHost(phase, copy, work, prepared, response, info, scriptResult);
+        var ok = await Task.Run(() => ApiScript.Run(script, host, cancel), cancel);
+        vars.Merge(copy);
+        result.Console.AddRange(scriptResult.Console);
+        result.Tests.AddRange(scriptResult.Tests);
+        if (scriptResult.Error != null) result.Error = scriptResult.Error;
+        if (scriptResult.NextRequest != null) result.NextRequest = scriptResult.NextRequest;
+        if (scriptResult.Skipped) result.Skipped = true;
+        return ok;
     }
 }
 
@@ -500,7 +574,35 @@ static class ApiStore
     {
         var root = JObject.Parse(json);
         if ((int?)root["Version"] is null or < 2) Migrate(root);
+        Secrets(root, Reveal);
         return root.ToObject<ApiData>() ?? new ApiData();
+    }
+
+    // Auth fields, secret variables and credential headers are stored with DPAPI; files from before are read as plain text.
+    const string ProtectedPrefix = "dpapi:";
+    static readonly HashSet<string> SecretHeaders = new(StringComparer.OrdinalIgnoreCase) { "Authorization", "Proxy-Authorization", "Cookie", "X-Api-Key", "Api-Key" };
+
+    static string Protect(string value) => value.Length == 0 || value.StartsWith(ProtectedPrefix) ? value : ProtectedPrefix + Sync.SyncCrypto.Protect(value);
+    static string Reveal(string stored) => stored.StartsWith(ProtectedPrefix) ? Sync.SyncCrypto.Unprotect(stored.Substring(ProtectedPrefix.Length)) : stored;
+
+    /// <summary>Applies <paramref name="convert"/> to every secret string in the file: auth fields anywhere (requests, tabs, history) and secret or credential rows.</summary>
+    static void Secrets(JToken token, Func<string, string> convert)
+    {
+        void Apply(JObject o, string name)
+        {
+            if (o[name] is JValue { Type: JTokenType.String } v) o[name] = convert((string)v!);
+        }
+        foreach (var o in (token is JContainer c ? c.DescendantsAndSelf() : new[] { token }).OfType<JObject>().ToList())
+        {
+            if (o["Auth"] is JObject auth)
+            {
+                Apply(auth, nameof(ApiAuth.Token));
+                Apply(auth, nameof(ApiAuth.Password));
+                Apply(auth, nameof(ApiAuth.Value));
+            }
+            if (o["Key"] is JValue { Type: JTokenType.String } key && o["Secret"] is JValue secret && ((bool?)secret == true || SecretHeaders.Contains((string)key!)))
+                Apply(o, nameof(KeyValue.Value));
+        }
     }
 
     static void Migrate(JObject root)
@@ -569,7 +671,9 @@ static class ApiStore
         if (data.History.Count > MaxHistory) data.History.RemoveRange(0, data.History.Count - MaxHistory);
         Directory.CreateDirectory(AppPaths.Data);
         var tmp = FilePath + ".tmp";
-        File.WriteAllText(tmp, JsonConvert.SerializeObject(data, Formatting.Indented), new UTF8Encoding(false));
+        var root = JObject.FromObject(data);
+        Secrets(root, Protect);
+        File.WriteAllText(tmp, root.ToString(Formatting.Indented), new UTF8Encoding(false));
         if (File.Exists(FilePath)) File.Replace(tmp, FilePath, null);
         else File.Move(tmp, FilePath);
     }

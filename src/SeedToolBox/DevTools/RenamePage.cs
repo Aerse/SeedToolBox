@@ -138,14 +138,15 @@ sealed class RenamePage : DockPanel
         Preview();
     }
 
-    Dictionary<string, RenamePreset> ReadPresets()
+    /// <summary>Null when the file exists but can't be read, so callers don't write an empty set over it.</summary>
+    Dictionary<string, RenamePreset>? ReadPresets()
     {
         try
         {
             if (File.Exists(PresetFile))
                 return JsonConvert.DeserializeObject<Dictionary<string, RenamePreset>>(File.ReadAllText(PresetFile)) ?? new();
         }
-        catch (Exception ex) { Ui.SetStatus(_status, "读取预设失败：" + ex.Message, true); }
+        catch (Exception ex) { Ui.SetStatus(_status, "读取预设失败：" + ex.Message, true); return null; }
         return new();
     }
 
@@ -154,7 +155,10 @@ sealed class RenamePage : DockPanel
         try
         {
             Directory.CreateDirectory(AppPaths.Data);
-            File.WriteAllText(PresetFile, JsonConvert.SerializeObject(presets, Formatting.Indented));
+            var tmp = PresetFile + ".tmp";
+            File.WriteAllText(tmp, JsonConvert.SerializeObject(presets, Formatting.Indented));
+            if (File.Exists(PresetFile)) File.Replace(tmp, PresetFile, null);
+            else File.Move(tmp, PresetFile);
             return true;
         }
         catch (Exception ex) { Ui.SetStatus(_status, "保存预设失败：" + ex.Message, true); return false; }
@@ -163,7 +167,7 @@ sealed class RenamePage : DockPanel
     void LoadPresetNames()
     {
         var text = _presets.Text;
-        _presets.ItemsSource = ReadPresets().Keys.OrderBy(k => k, NaturalComparer.Instance).ToList();
+        _presets.ItemsSource = (ReadPresets() ?? new()).Keys.OrderBy(k => k, NaturalComparer.Instance).ToList();
         _presets.Text = text;
     }
 
@@ -172,6 +176,7 @@ sealed class RenamePage : DockPanel
         var name = _presets.Text.Trim();
         if (name.Length == 0) { Ui.SetStatus(_status, "请先在预设框里输入名称", true); return; }
         var presets = ReadPresets();
+        if (presets == null) return;
         presets[name] = new RenamePreset
         {
             Find = _find.Text, Replace = _replace.Text, Template = _template.Text, Start = _start.Text, Digits = _digits.Text, NewExt = _newExt.Text,
@@ -186,7 +191,7 @@ sealed class RenamePage : DockPanel
     void LoadPreset()
     {
         var name = _presets.Text.Trim();
-        if (!ReadPresets().TryGetValue(name, out var p)) { Ui.SetStatus(_status, "没有这个预设", true); return; }
+        if (ReadPresets() is not { } all || !all.TryGetValue(name, out var p)) { Ui.SetStatus(_status, "没有这个预设", true); return; }
         _find.Text = p.Find;
         _replace.Text = p.Replace;
         _template.Text = p.Template;
@@ -204,6 +209,7 @@ sealed class RenamePage : DockPanel
     {
         var name = _presets.Text.Trim();
         var presets = ReadPresets();
+        if (presets == null) return;
         if (!presets.Remove(name)) { Ui.SetStatus(_status, "没有这个预设", true); return; }
         if (MessageBox.Show(Window.GetWindow(this), $"删除预设「{name}」？", "批量重命名", MessageBoxButton.OKCancel, MessageBoxImage.Question) != MessageBoxResult.OK) return;
         if (!WritePresets(presets)) return;
@@ -214,9 +220,24 @@ sealed class RenamePage : DockPanel
 
     static readonly Regex DateToken = new(@"\{(date|exif)(?::([^}]*))?\}", RegexOptions.IgnoreCase);
 
-    (DateTime Modified, DateTime? Taken) Dates(string path)
+    bool _prefetching;
+
+    /// <summary>Reads the dates of every listed file not yet cached on a background thread, then previews again.</summary>
+    async void PrefetchDates()
     {
-        if (_dates.TryGetValue(path, out var cached)) return cached;
+        if (_prefetching) return;
+        var missing = _items.Select(i => i.Path).Where(p => !_dates.ContainsKey(p)).Distinct(StringComparer.OrdinalIgnoreCase).ToList();
+        if (missing.Count == 0) return;
+        _prefetching = true;
+        Ui.SetStatus(_status, $"正在读取 {missing.Count} 个文件的日期…");
+        var read = await System.Threading.Tasks.Task.Run(() => missing.Select(p => (Path: p, Dates: ReadDates(p))).ToList());
+        foreach (var (path, dates) in read) _dates[path] = dates;
+        _prefetching = false;
+        Preview();
+    }
+
+    static (DateTime Modified, DateTime? Taken) ReadDates(string path)
+    {
         DateTime modified = DateTime.MinValue;
         DateTime? taken = null;
         try { modified = File.GetLastWriteTime(path); } catch (Exception) { }
@@ -227,15 +248,17 @@ sealed class RenamePage : DockPanel
             if (decoder.Frames.Count > 0 && decoder.Frames[0].Metadata is System.Windows.Media.Imaging.BitmapMetadata meta && DateTime.TryParse(meta.DateTaken, out var d)) taken = d;
         }
         catch (Exception) { }
-        return _dates[path] = (modified, taken);
+        return (modified, taken);
     }
 
+    /// <summary>Uses cached dates only; uncached files keep the token and trigger a background read.</summary>
     string ExpandDates(string template, string path)
     {
         if (template.IndexOf('{') < 0) return template;
         return DateToken.Replace(template, m =>
         {
-            var (modified, taken) = Dates(path);
+            if (!_dates.TryGetValue(path, out var cached)) { PrefetchDates(); return m.Value; }
+            var (modified, taken) = cached;
             var date = m.Groups[1].Value.ToLowerInvariant() == "exif" ? taken ?? modified : modified;
             var format = m.Groups[2].Success && m.Groups[2].Value.Length > 0 ? m.Groups[2].Value : "yyyyMMdd";
             try { return date.ToString(format); }
@@ -264,11 +287,18 @@ sealed class RenamePage : DockPanel
         {
             var sorted = _sort.SelectedIndex == 1
                 ? _items.OrderBy(i => i.Name, NaturalComparer.Instance).ToList()
-                : _items.OrderBy(i => File.GetLastWriteTime(i.Path)).ToList();
+                : _items.Select(i => (Item: i, Time: LastWrite(i.Path))).OrderBy(x => x.Time).Select(x => x.Item).ToList();
             _items.Clear();
             foreach (var item in sorted) _items.Add(item);
         }
         Preview();
+    }
+
+    DateTime LastWrite(string path)
+    {
+        if (_dates.TryGetValue(path, out var cached)) return cached.Modified;
+        try { return File.GetLastWriteTime(path); }
+        catch (Exception) { return DateTime.MinValue; }
     }
 
     /// <summary>Computes every new name; returns false when a rule is invalid.</summary>
@@ -334,6 +364,7 @@ sealed class RenamePage : DockPanel
 
     void Apply()
     {
+        if (_prefetching) { Ui.SetStatus(_status, "正在读取文件日期，请稍候", true); return; }
         if (!Preview()) return;
         var work = _items.Where(i => i.State == "将重命名").ToList();
         if (work.Count == 0) { Ui.SetStatus(_status, "没有需要重命名的文件"); return; }
@@ -342,6 +373,7 @@ sealed class RenamePage : DockPanel
         var temps = new List<(RenameItem Item, string Temp, string Target)>();
         _undo.Clear();
         int failed = 0;
+        var stranded = new List<string>();
         foreach (var item in work)
         {
             var dir = Path.GetDirectoryName(item.Path)!;
@@ -364,27 +396,35 @@ sealed class RenamePage : DockPanel
             }
             catch (Exception ex)
             {
-                try { File.Move(temp, item.Path); } catch (IOException) { }
+                try { File.Move(temp, item.Path); }
+                catch (Exception)
+                {
+                    // Couldn't put it back either: point the item at where the file really is and say so
+                    stranded.Add($"{item.Name} → {Path.GetFileName(temp)}");
+                    item.Path = temp;
+                }
                 item.State = "✗ " + ex.Message;
                 failed++;
             }
         }
         RefreshNames();
-        Ui.SetStatus(_status, $"已重命名 {work.Count - failed} 个文件" + (failed > 0 ? $"，{failed} 个失败" : ""), failed > 0);
+        Ui.SetStatus(_status, $"已重命名 {work.Count - failed} 个文件" + (failed > 0 ? $"，{failed} 个失败" : "")
+            + (stranded.Count > 0 ? "；以下文件停留在临时名：" + string.Join("，", stranded) : ""), failed > 0);
     }
 
     void Undo()
     {
         if (_undo.Count == 0) { Ui.SetStatus(_status, "没有可撤销的操作"); return; }
-        var temps = new List<(RenameItem Item, string Temp, string Original)>();
+        var temps = new List<(RenameItem Item, string Temp, string Original, string Renamed)>();
+        var failures = new List<string>();
         foreach (var (item, from, to) in _undo)
         {
             var temp = Path.Combine(Path.GetDirectoryName(to)!, $"~stb{Guid.NewGuid():N}.tmp");
-            try { File.Move(to, temp); temps.Add((item, temp, from)); }
-            catch (IOException) { }
+            try { File.Move(to, temp); temps.Add((item, temp, from, to)); }
+            catch (Exception ex) { failures.Add($"{Path.GetFileName(to)}（{ex.Message}）"); }
         }
         int done = 0;
-        foreach (var (item, temp, original) in temps)
+        foreach (var (item, temp, original, renamed) in temps)
         {
             try
             {
@@ -392,11 +432,16 @@ sealed class RenamePage : DockPanel
                 item.Path = original;
                 done++;
             }
-            catch (IOException) { item.Path = temp; }
+            catch (Exception ex)
+            {
+                // Put it back under the renamed name rather than leaving it at the temp name
+                try { File.Move(temp, renamed); item.Path = renamed; failures.Add($"{Path.GetFileName(renamed)}（{ex.Message}）"); }
+                catch (Exception) { item.Path = temp; failures.Add($"{Path.GetFileName(original)} 停留在临时名 {Path.GetFileName(temp)}（{ex.Message}）"); }
+            }
         }
         _undo.Clear();
         RefreshNames();
-        Ui.SetStatus(_status, $"已撤销 {done} 个文件的重命名");
+        Ui.SetStatus(_status, $"已撤销 {done} 个文件的重命名" + (failures.Count > 0 ? $"，{failures.Count} 个失败：" + string.Join("，", failures) : ""), failures.Count > 0);
     }
 
     /// <summary>Re-adds the items so the Name column picks up changed paths.</summary>

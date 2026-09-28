@@ -86,16 +86,39 @@ public abstract class OverlayWindow : Window
         return true;
     }
 
-    /// <summary>Places a UI element next to the cursor, flipping sides near the screen edge.</summary>
+    /// <summary>Places a UI element next to the cursor, flipping sides near the edge of the cursor's monitor.</summary>
     protected void PlaceNear(FrameworkElement element, Point uiPoint, double offset = 18)
     {
         element.Measure(new Size(double.PositiveInfinity, double.PositiveInfinity));
         var size = element.DesiredSize;
+        var screen = MonitorUi(new Point(uiPoint.X * Scale, uiPoint.Y * Scale));
         double x = uiPoint.X + offset, y = uiPoint.Y + offset;
-        if (x + size.Width > ActualWidth) x = uiPoint.X - offset - size.Width;
-        if (y + size.Height > ActualHeight) y = uiPoint.Y - offset - size.Height;
-        Canvas.SetLeft(element, Math.Max(0, x));
-        Canvas.SetTop(element, Math.Max(0, y));
+        if (x + size.Width > screen.Right) x = uiPoint.X - offset - size.Width;
+        if (y + size.Height > screen.Bottom) y = uiPoint.Y - offset - size.Height;
+        Canvas.SetLeft(element, Math.Max(screen.Left, x));
+        Canvas.SetTop(element, Math.Max(screen.Top, y));
+    }
+
+    /// <summary>Bounds of the monitor containing a screenshot pixel, in <see cref="Ui"/> coordinates.</summary>
+    protected Rect MonitorUi(Point pixel)
+    {
+        var b = System.Windows.Forms.Screen.FromPoint(new System.Drawing.Point((int)pixel.X + Shot.X, (int)pixel.Y + Shot.Y)).Bounds;
+        return new Rect((b.X - Shot.X) / Scale, (b.Y - Shot.Y) / Scale, b.Width / Scale, b.Height / Scale);
+    }
+
+    /// <summary>
+    /// DPI scale of the monitor containing a screenshot pixel. The overlay spans every monitor
+    /// but only gets one of their DPIs, so content that ends up on a particular monitor asks here.
+    /// </summary>
+    protected double ScaleAt(Point pixel)
+    {
+        try
+        {
+            var monitor = MonitorFromPoint(new POINT { X = (int)pixel.X + Shot.X, Y = (int)pixel.Y + Shot.Y }, MONITOR_DEFAULTTONEAREST);
+            if (GetDpiForMonitor(monitor, 0, out uint dpi, out _) == 0 && dpi > 0) return dpi / 96.0;
+        }
+        catch (Exception) { } // shcore.dll is Windows 8.1+
+        return Scale;
     }
 
     static readonly IntPtr HWND_TOPMOST = new(-1);
@@ -109,4 +132,8 @@ public abstract class OverlayWindow : Window
 
     [DllImport("user32.dll")] static extern bool GetCursorPos(out POINT point);
     [DllImport("user32.dll")] static extern bool SetCursorPos(int x, int y);
+
+    const uint MONITOR_DEFAULTTONEAREST = 2;
+    [DllImport("user32.dll")] static extern IntPtr MonitorFromPoint(POINT point, uint flags);
+    [DllImport("shcore.dll")] static extern int GetDpiForMonitor(IntPtr monitor, int type, out uint dpiX, out uint dpiY);
 }

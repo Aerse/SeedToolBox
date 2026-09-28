@@ -3,6 +3,7 @@ using System.Windows;
 using System.Windows.Controls;
 using System.Windows.Media;
 using System.Windows.Media.Imaging;
+using System.Windows.Threading;
 using SeedToolBox.Views;
 using WinForms = System.Windows.Forms;
 
@@ -29,6 +30,8 @@ sealed class QrGeneratorWindow : Window
     readonly Button _save = new() { Content = "保存…", MinWidth = 88, Margin = new Thickness(8, 0, 0, 0) };
     readonly Button _pin = new() { Content = "贴到屏幕", MinWidth = 88, Margin = new Thickness(8, 0, 0, 0) };
     BitmapSource? _image;
+    // Encoding a long text at a large size allocates tens of MB: wait for a pause in typing
+    readonly DispatcherTimer _typing = new() { Interval = TimeSpan.FromMilliseconds(200) };
 
     public QrGeneratorWindow(ScreenToolService service, string text)
     {
@@ -72,19 +75,28 @@ sealed class QrGeneratorWindow : Window
         root.Children.Add(grid);
         Content = root;
 
-        _input.TextChanged += (_, _) => Update();
+        _typing.Tick += (_, _) => Update();
+        _input.TextChanged += (_, _) => { _typing.Stop(); _typing.Start(); };
         _size.SelectionChanged += (_, _) => Update();
-        _copy.Click += (_, _) => { if (_image != null) ScreenToolService.CopyImage(_image); _info.Text = "已复制"; };
-        _save.Click += (_, _) => { if (_image != null) _service.SaveImage(_image, this, "保存二维码", "二维码"); };
-        _pin.Click += (_, _) => Pin();
+        _copy.Click += (_, _) => { Flush(); if (_image != null) ScreenToolService.CopyImage(_image); _info.Text = "已复制"; };
+        _save.Click += (_, _) => { Flush(); if (_image != null) _service.SaveImage(_image, this, "保存二维码", "二维码"); };
+        _pin.Click += (_, _) => { Flush(); Pin(); };
         Loaded += (_, _) => { Activate(); _input.Focus(); _input.SelectAll(); };
+        Closed += (_, _) => _typing.Stop();
 
         _input.Text = text;
         Update();
     }
 
+    /// <summary>Applies a change still waiting for the typing pause, so the buttons act on what's shown.</summary>
+    void Flush()
+    {
+        if (_typing.IsEnabled) Update();
+    }
+
     void Update()
     {
+        _typing.Stop();
         var text = _input.Text;
         _image = text.Length > 0 ? QrCodes.Encode(text, ModuleSizes[Math.Max(0, _size.SelectedIndex)]) : null;
         _preview.Source = _image;

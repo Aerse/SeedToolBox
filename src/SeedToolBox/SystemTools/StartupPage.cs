@@ -248,7 +248,10 @@ sealed class StartupPage : DockPanel
         }
         catch (UnauthorizedAccessException) when (item.NeedsAdmin)
         {
-            return Elevation.Cmd($"move /y \"{item.File}\" \"{target}\"");
+            // Not through cmd, which would expand %...% in the paths; the elevated PowerShell gets them as literal strings
+            static string Quote(string s) => "'" + s.Replace("'", "''") + "'";
+            var script = $"Move-Item -LiteralPath {Quote(item.File!)} -Destination {Quote(target)} -Force -ErrorAction Stop";
+            return Elevation.Run("powershell.exe", "-NoProfile -NonInteractive -ExecutionPolicy Bypass -EncodedCommand " + Convert.ToBase64String(System.Text.Encoding.Unicode.GetBytes(script)));
         }
         catch (Exception ex) when (ex is IOException or UnauthorizedAccessException) { return ex.Message; }
     }

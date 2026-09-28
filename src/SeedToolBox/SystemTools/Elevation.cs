@@ -50,9 +50,18 @@ static class Elevation
     public static string? ImportReg(RegFile reg)
     {
         var path = Path.Combine(Path.GetTempPath(), $"SeedToolBox-{Guid.NewGuid():N}.reg");
+        FileStream? file = null;
         try
         {
-            File.WriteAllText(path, reg.ToString(), Encoding.Unicode);
+            var bytes = Encoding.Unicode.GetPreamble().Concat(Encoding.Unicode.GetBytes(reg.ToString())).ToArray();
+            using (var write = new FileStream(path, FileMode.CreateNew, FileAccess.Write, FileShare.None)) write.Write(bytes, 0, bytes.Length);
+            // Held open (read-only sharing) until reg.exe is done, so nothing can rewrite or swap the file before the
+            // elevated import; checked after opening, in case it was changed in the moment it was closed
+            file = new FileStream(path, FileMode.Open, FileAccess.Read, FileShare.Read);
+            var check = new byte[bytes.Length + 1];
+            int read = 0, n;
+            while (read < check.Length && (n = file.Read(check, read, check.Length - read)) > 0) read += n;
+            if (read != bytes.Length || !check.Take(read).SequenceEqual(bytes)) return "临时文件被改动，已取消";
             return Run("reg.exe", $"import \"{path}\"" + (Environment.Is64BitOperatingSystem ? " /reg:64" : ""));
         }
         catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
@@ -61,6 +70,7 @@ static class Elevation
         }
         finally
         {
+            file?.Dispose();
             try { File.Delete(path); } catch (IOException) { } catch (UnauthorizedAccessException) { }
         }
     }

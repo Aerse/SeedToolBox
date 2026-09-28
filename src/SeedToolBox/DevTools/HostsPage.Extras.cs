@@ -138,14 +138,14 @@ sealed partial class HostsPage
         catch (Exception ex) { Ui.SetStatus(_status, "保存方案失败：" + ex.Message, true); }
     }
 
-    void ApplyProfile()
+    async void ApplyProfile()
     {
         if (SelectedProfile() is not { } path) return;
         var name = Path.GetFileNameWithoutExtension(path);
         if (MessageBox.Show(Window.GetWindow(this), $"用方案「{name}」替换当前 hosts 文件？{(_dirty ? "\n未保存的修改会丢失。" : "")}\n原文件会先备份。", "Hosts 管理", MessageBoxButton.OKCancel, MessageBoxImage.Question) != MessageBoxResult.OK) return;
         try { SetText(TextFiles.Read(path, out _)); }
         catch (Exception ex) { Ui.SetStatus(_status, "读取方案失败：" + ex.Message, true); return; }
-        Save();
+        await SaveAsync();
         if (!_dirty) Ui.SetStatus(_status, $"已切换到方案「{name}」并刷新 DNS 缓存");
     }
 
@@ -194,8 +194,12 @@ sealed partial class HostsPage
         window.WindowStartupLocation = WindowStartupLocation.CenterOwner;
         ok.Click += (_, _) => window.DialogResult = true;
         list.MouseDoubleClick += (_, _) => window.DialogResult = true;
-        if (window.ShowDialog() != true || !ConfirmDiscard()) return;
-        SetText(preview.Text);
+        if (window.ShowDialog() != true || list.SelectedItem is not ListBoxItem { Tag: string chosen } || !ConfirmDiscard()) return;
+        // Re-read instead of taking the preview, which holds an error message when the read failed
+        string text;
+        try { text = TextFiles.Read(chosen, out _); }
+        catch (Exception ex) { Ui.SetStatus(_status, "读取备份失败：" + ex.Message, true); return; }
+        SetText(text);
         Ui.SetStatus(_status, $"已载入备份（{((ListBoxItem)list.SelectedItem).Content}），点「保存」写回 hosts");
     }
 }

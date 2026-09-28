@@ -23,7 +23,10 @@ public static class IconHelper
         if (!string.IsNullOrWhiteSpace(iconPath))
         {
             var custom = Environment.ExpandEnvironmentVariables(iconPath!);
-            if (ImageExtensions.Contains(Path.GetExtension(custom).ToLowerInvariant()) && File.Exists(custom))
+            string ext;
+            try { ext = Path.GetExtension(custom).ToLowerInvariant(); }
+            catch (ArgumentException) { return GetIcon(path); }
+            if (ImageExtensions.Contains(ext) && File.Exists(custom))
                 return LoadImageFile(custom) ?? GetIcon(path);
             if (File.Exists(custom))
                 return GetIcon(custom);
@@ -33,6 +36,16 @@ public static class IconHelper
 
     /// <summary>Gets the 48px shell icon (falls back to 32px) for a file, folder, shortcut or URL.</summary>
     public static ImageSource? GetIcon(string path)
+    {
+        try { return GetShellIcon(path); }
+        catch (Exception ex) when (ex is ArgumentException or NotSupportedException or PathTooLongException)
+        {
+            // Characters such as " < > | in the path: .NET Framework path APIs throw; show a generic program icon
+            return GetExtraLargeIcon(".exe", FILE_ATTRIBUTE_NORMAL, SHGFI_USEFILEATTRIBUTES) ?? GetLargeIcon(".exe", FILE_ATTRIBUTE_NORMAL, SHGFI_USEFILEATTRIBUTES);
+        }
+    }
+
+    static ImageSource? GetShellIcon(string path)
     {
         uint flags = 0;
         uint attributes = 0;

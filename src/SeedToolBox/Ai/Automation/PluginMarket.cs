@@ -29,7 +29,7 @@ static class PluginMarket
             try
             {
                 var json = JObject.Parse(await Http.GetStringAsync(url));
-                var list = (json["objects"] as JArray ?? new JArray()).OfType<JObject>().Select(Parse)
+                var list = (json["objects"] as JArray ?? new JArray()).OfType<JObject>().Select(TryParse)
                     .Where(p => p != null).Select(p => p!).ToList();
                 if (list.Count > 0 || url == sources[sources.Length - 1]) return list;
             }
@@ -39,6 +39,13 @@ static class PluginMarket
             }
         }
         throw new HttpRequestException("连不上 npm：" + last?.Message, last);
+    }
+
+    /// <summary>An entry of an unexpected shape (like a plain string author) is skipped instead of failing the search.</summary>
+    static Package? TryParse(JObject item)
+    {
+        try { return Parse(item); }
+        catch (Exception ex) when (ex is InvalidOperationException or ArgumentException or FormatException or OverflowException) { return null; }
     }
 
     static Package? Parse(JObject item)

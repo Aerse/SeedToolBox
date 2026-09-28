@@ -25,11 +25,15 @@ public static class Pinyin
         return index == 0 ? null : _syllables![index - 1];
     }
 
-    /// <summary>Search keys: initials ("jsb") and full pinyin ("jishiben"). Letters/digits pass through lowercased.</summary>
+    /// <summary>
+    /// Search keys: initials ("jsb") and full pinyin ("jishiben"). Letters/digits pass through lowercased;
+    /// other words add only their first letter to the initials, so "Visual Studio Code" gives "vsc".
+    /// </summary>
     public static (string Initials, string Full) Keys(string text)
     {
         var initials = new StringBuilder(text.Length);
         var full = new StringBuilder(text.Length * 3);
+        char prev = ' ';
         foreach (var c in text)
         {
             if (Of(c) is { } py)
@@ -40,9 +44,12 @@ public static class Pinyin
             else if (char.IsLetterOrDigit(c))
             {
                 var lower = char.ToLowerInvariant(c);
-                initials.Append(lower);
+                // A word starts after a non-letter, or at a capital in CamelCase
+                bool wordStart = !char.IsLetter(prev) || Of(prev) != null || (char.IsUpper(c) && char.IsLower(prev));
+                if (char.IsDigit(c) || wordStart) initials.Append(lower);
                 full.Append(lower);
             }
+            prev = c;
         }
         return (initials.ToString(), full.ToString());
     }

@@ -69,8 +69,9 @@ public partial class ToolboxWindow : Window
         _runHidden = runHidden;
         Tools.ItemsSource = _tools;
         SourceInitialized += (_, _) => WindowEffects.RoundCorners(this);
-        BuildNav();
-        Loaded += (_, _) => { if (NavList.SelectedItem != null) NavList.ScrollIntoView(NavList.SelectedItem); };
+        // Built when first needed: selecting the saved page creates it, which isn't wanted for a window that may never open
+        IsVisibleChanged += (_, _) => { if (IsVisible) EnsureNav(); };
+        Loaded += (_, _) => { EnsureNav(); if (NavList.SelectedItem != null) NavList.ScrollIntoView(NavList.SelectedItem); };
         PreviewKeyDown += (_, e) => { if (e.Key == Key.Escape && Keyboard.FocusedElement is not TextBox) Hide(); };
     }
 
@@ -113,12 +114,27 @@ public partial class ToolboxWindow : Window
     const string FooterGroup = "footer";
 
     bool _buildingNav;
+    bool _navDirty = true;
+
+    /// <summary>Pages are registered one by one at startup; the sidebar is rebuilt once, when it's next needed.</summary>
+    void InvalidateNav()
+    {
+        _navDirty = true;
+        if (IsVisible) EnsureNav();
+    }
+
+    void EnsureNav()
+    {
+        if (!_navDirty) return;
+        _navDirty = false;
+        BuildNav();
+    }
 
     /// <summary>Adds a top-level page (below the screen tools) for a feature owned by the app.</summary>
     public void AddPage(string id, string glyph, string name, Func<FrameworkElement> create)
     {
         _pages.Insert(_pages.FindLastIndex(p => p.Group == "") + 1, new Page(id, "", glyph, name, create));
-        BuildNav();
+        InvalidateNav();
     }
 
     /// <summary>Adds a page at the end of <paramref name="group"/>, creating the group if it is new.</summary>
@@ -127,14 +143,14 @@ public partial class ToolboxWindow : Window
         int last = _pages.FindLastIndex(p => p.Group == group);
         if (last < 0) last = _pages.FindLastIndex(p => p.Group != FooterGroup);
         _pages.Insert(last + 1, new Page(id, group, glyph, name, create));
-        BuildNav();
+        InvalidateNav();
     }
 
     /// <summary>Adds a page pinned to the bottom of the sidebar, such as settings.</summary>
     public void AddFooterPage(string id, string glyph, string name, Func<FrameworkElement> create)
     {
         _pages.Add(new Page(id, FooterGroup, glyph, name, create));
-        BuildNav();
+        InvalidateNav();
     }
 
     void BuildNav()
@@ -192,6 +208,7 @@ public partial class ToolboxWindow : Window
     /// <summary>Switches to a page by id; unknown ids fall back to the first page.</summary>
     public void ShowPage(string id)
     {
+        EnsureNav();
         var items = NavList.Items.OfType<ListBoxItem>().Concat(FooterList.Items.OfType<ListBoxItem>());
         var item = items.FirstOrDefault(i => i.Tag is Page p && p.Id == id) ?? items.First(i => i.Tag is Page);
         (NavList.Items.Contains(item) ? NavList : FooterList).SelectedItem = item;

@@ -3,6 +3,7 @@ using SeedToolBox.Core;
 using SeedToolBox.Core.Services;
 using System.Collections.Generic;
 using System.IO;
+using System.Linq;
 using System.Runtime.InteropServices;
 using System.Threading.Tasks;
 using System.Windows;
@@ -152,11 +153,13 @@ sealed partial class TerminalView : Border
                 Input?.Invoke(this, (string?)m["d"] ?? "");
                 break;
             case "binary":
-                // Mouse reports in X10 mode; one byte per char.
+                // Mouse reports in X10 mode; one byte per char. Send passes them on as raw bytes, not re-encoded.
                 var raw = Convert.FromBase64String((string?)m["d"] ?? "");
                 var chars = new char[raw.Length];
                 for (var i = 0; i < raw.Length; i++) chars[i] = (char)raw[i];
-                Input?.Invoke(this, new string(chars));
+                _binaryInput = true;
+                try { Input?.Invoke(this, new string(chars)); }
+                finally { _binaryInput = false; }
                 break;
             case "resize":
                 Cols = (int?)m["c"] ?? Cols;
@@ -244,7 +247,16 @@ sealed partial class TerminalView : Border
     }
 
     /// <summary>Sends keys to the session as if typed here.</summary>
-    public void Send(string text) => _session?.Write(text);
+    // Set while a binary report is handed out (UI thread), so Send in every pane it is broadcast to writes bytes.
+    static bool _binaryInput;
+
+    public void Send(string text)
+    {
+        if (!_binaryInput) { _session?.Write(text); return; }
+        var bytes = new byte[text.Length];
+        for (var i = 0; i < text.Length; i++) bytes[i] = (byte)text[i];
+        _session?.WriteBytes(bytes);
+    }
 
     /// <summary>Writes text on the screen only (status messages); the session doesn't see it.</summary>
     public void WriteText(string text)
@@ -320,6 +332,8 @@ sealed partial class TerminalView : Border
     {
         StopLog();
         _flush.Stop();
+        // A receive cut short: release the files and remove the partial ones.
+        foreach (var id in _zwrites.Keys.ToList()) CloseWrite(id, false);
         Detach()?.Dispose();
         _web.Dispose();
     }

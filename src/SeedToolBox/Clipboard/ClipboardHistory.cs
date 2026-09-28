@@ -8,6 +8,7 @@ using System.Linq;
 using System.Runtime.InteropServices;
 using System.Security.Cryptography;
 using System.Text;
+using System.Threading.Tasks;
 using System.Windows;
 using System.Windows.Interop;
 using System.Windows.Media.Imaging;
@@ -71,7 +72,8 @@ public sealed class ClipboardHistory : IDisposable
 {
     const int WM_CLIPBOARDUPDATE = 0x031D;
     const long MaxImageBytes = 40L * 1024 * 1024;
-    const int MaxRichChars = 4 * 1024 * 1024;
+    // Html and Rtf are kept per entry and the whole history is rewritten on every change; keep them small
+    const int MaxRichChars = 256 * 1024;
     static readonly IntPtr HWND_MESSAGE = new(-3);
 
     public static string Folder { get; } = Path.Combine(AppPaths.Data, "Clipboard");
@@ -83,6 +85,10 @@ public sealed class ClipboardHistory : IDisposable
     readonly DispatcherTimer _saveTimer = new() { Interval = TimeSpan.FromSeconds(1) };
     readonly DispatcherTimer _expireTimer = new() { Interval = TimeSpan.FromHours(1) };
     bool _lastEnabled;
+    readonly object _writeLock = new();
+    int _saveVersion, _writtenVersion;
+    /// <summary>List thumbnails by entry id, so a refresh doesn't decode them from disk again.</summary>
+    readonly Dictionary<string, BitmapSource> _thumbs = new();
 
     public ClipboardSettings Settings { get; }
     public ObservableCollection<ClipboardEntry> Entries { get; } = new();
@@ -157,6 +163,9 @@ public sealed class ClipboardHistory : IDisposable
 
     void ReadClipboard()
     {
+        // Only the first change after Copy can be our own write coming back
+        var copied = _copiedHash;
+        _copiedHash = null;
         try
         {
             var data = System.Windows.Clipboard.GetDataObject();
@@ -169,18 +178,20 @@ public sealed class ClipboardHistory : IDisposable
 
             if (data.GetDataPresent(DataFormats.FileDrop))
             {
-                if (data.GetData(DataFormats.FileDrop) is string[] { Length: > 0 } files) AddFiles(files);
+                if (data.GetData(DataFormats.FileDrop) is string[] { Length: > 0 } files) AddFiles(files, copied);
             }
             else if (data.GetDataPresent(DataFormats.UnicodeText))
             {
                 var text = data.GetData(DataFormats.UnicodeText) as string;
                 if (!string.IsNullOrEmpty(text) && text!.Trim().Length > 0)
-                    AddText(text, ReadRich(data, formats, DataFormats.Html), ReadRich(data, formats, DataFormats.Rtf));
+                    AddText(text, ReadRich(data, formats, DataFormats.Html), ReadRich(data, formats, DataFormats.Rtf), copied);
             }
             else if (data.GetDataPresent(DataFormats.Bitmap))
             {
+                // Check the size from the DIB header before the whole bitmap is converted
+                if (DibTooLarge(data, formats)) return;
                 var image = System.Windows.Clipboard.GetImage();
-                if (image != null) AddImage(image);
+                if (image != null) AddImage(image, copied);
             }
         }
         catch (Exception ex) when (ex is COMException or ExternalException or OutOfMemoryException)
@@ -195,6 +206,21 @@ public sealed class ClipboardHistory : IDisposable
         if (!formats.Contains(format)) return null;
         try { return data.GetData(format) is string { Length: > 0 and <= MaxRichChars } s ? s : null; }
         catch (Exception ex) when (ex is COMException or ExternalException) { return null; }
+    }
+
+    static bool DibTooLarge(IDataObject data, string[] formats)
+    {
+        if (!formats.Contains(DataFormats.Dib)) return false;
+        try
+        {
+            if (data.GetData(DataFormats.Dib) is not MemoryStream ms || ms.Length < 12) return false;
+            var header = new byte[12];
+            ms.Position = 0;
+            if (ms.Read(header, 0, 12) < 12) return false;
+            long width = Math.Abs((long)BitConverter.ToInt32(header, 4)), height = Math.Abs((long)BitConverter.ToInt32(header, 8));
+            return width * height * 4 > MaxImageBytes;
+        }
+        catch (Exception ex) when (ex is COMException or ExternalException) { return false; }
     }
 
     static bool IsZeroDword(object? value) => value switch
@@ -229,7 +255,7 @@ public sealed class ClipboardHistory : IDisposable
 
     static string TextHash(string text) => "t" + HashOf(Encoding.UTF8.GetBytes(text));
 
-    void AddText(string text, string? html, string? rtf)
+    void AddText(string text, string? html, string? rtf, string? copied)
     {
         var hash = TextHash(text);
         var existing = Entries.FirstOrDefault(e => e.Hash == hash);
@@ -239,29 +265,55 @@ public sealed class ClipboardHistory : IDisposable
             if (html != null) existing.Html = html;
             if (rtf != null) existing.Rtf = rtf;
         }
-        if (MoveToTop(hash)) return;
+        if (MoveToTop(hash, copied)) return;
         Insert(new ClipboardEntry { Text = text, Hash = hash, Html = html, Rtf = rtf });
     }
 
-    void AddFiles(string[] files)
+    void AddFiles(string[] files, string? copied)
     {
         var text = string.Join("\r\n", files);
         var hash = "f" + HashOf(Encoding.UTF8.GetBytes(text));
-        if (MoveToTop(hash)) return;
+        if (MoveToTop(hash, copied)) return;
         Insert(new ClipboardEntry { Text = text, Files = files.ToList(), Hash = hash });
     }
 
-    void AddImage(BitmapSource image)
+    void AddImage(BitmapSource image, string? copied)
     {
         if ((long)image.PixelWidth * image.PixelHeight * 4 > MaxImageBytes) return;
+        if (!image.CanFreeze)
+        {
+            var (b, h) = EncodePng(image);
+            AddImage(image, b, h, copied);
+            return;
+        }
+        // Encoding and hashing a large picture takes a while; do it off the UI thread
+        image.Freeze();
+        var dispatcher = Dispatcher.CurrentDispatcher;
+        Task.Run(() =>
+        {
+            try
+            {
+                var (bytes, hash) = EncodePng(image);
+                dispatcher.BeginInvoke(new Action(() => AddImage(image, bytes, hash, copied)));
+            }
+            catch (Exception ex) { Log.Error("Failed to encode clipboard image", ex); }
+        });
+    }
+
+    static (byte[] Bytes, string Hash) EncodePng(BitmapSource image)
+    {
         var png = new PngBitmapEncoder();
         // Clipboard DIBs often carry garbage in the alpha channel; drop it
         png.Frames.Add(BitmapFrame.Create(new FormatConvertedBitmap(image, System.Windows.Media.PixelFormats.Bgr32, null, 0)));
         using var ms = new MemoryStream();
         png.Save(ms);
         var bytes = ms.ToArray();
-        var hash = "i" + HashOf(bytes);
-        if (MoveToTop(hash)) return;
+        return (bytes, "i" + HashOf(bytes));
+    }
+
+    void AddImage(BitmapSource image, byte[] bytes, string hash, string? copied)
+    {
+        if (MoveToTop(hash, copied)) return;
 
         var entry = new ClipboardEntry { Hash = hash, ImageWidth = image.PixelWidth, ImageHeight = image.PixelHeight };
         entry.Image = entry.Id + ".png";
@@ -281,11 +333,10 @@ public sealed class ClipboardHistory : IDisposable
     /// <summary>Entry just put back on the clipboard by <see cref="Copy"/>; it keeps its place when the change comes back.</summary>
     string? _copiedHash;
 
-    bool MoveToTop(string hash)
+    bool MoveToTop(string hash, string? copied)
     {
-        if (hash == _copiedHash)
+        if (hash == copied)
         {
-            _copiedHash = null;
             if (Entries.Any(e => e.Hash == hash)) return true;
         }
         var existing = Entries.FirstOrDefault(e => e.Hash == hash);
@@ -323,10 +374,11 @@ public sealed class ClipboardHistory : IDisposable
     public void Remove(ClipboardEntry entry, bool save = true)
     {
         Entries.Remove(entry);
+        _thumbs.Remove(entry.Id);
         if (entry.Image != null)
         {
             try { File.Delete(Path.Combine(Folder, entry.Image)); }
-            catch (IOException) { }
+            catch (Exception ex) when (ex is IOException or UnauthorizedAccessException) { }
         }
         if (save) RequestSave();
     }
@@ -406,9 +458,19 @@ public sealed class ClipboardHistory : IDisposable
         return entries.Count;
     }
 
+    /// <summary>Loads the entry's picture; thumbnails (decodeWidth set) are cached until the entry is removed.</summary>
     public BitmapSource? LoadImage(ClipboardEntry entry, int decodeWidth = 0)
     {
         if (entry.Image == null) return null;
+        if (decodeWidth <= 0) return LoadImageFile(entry, 0);
+        if (_thumbs.TryGetValue(entry.Id, out var cached)) return cached;
+        var thumb = LoadImageFile(entry, decodeWidth);
+        if (thumb != null) _thumbs[entry.Id] = thumb;
+        return thumb;
+    }
+
+    static BitmapSource? LoadImageFile(ClipboardEntry entry, int decodeWidth)
+    {
         try
         {
             var image = new BitmapImage();
@@ -432,6 +494,7 @@ public sealed class ClipboardHistory : IDisposable
     /// </summary>
     public bool Copy(ClipboardEntry entry, bool plainText = false)
     {
+        // The hash of what actually ends up on the clipboard, so its change coming back is recognised
         _copiedHash = entry.Hash;
         if (entry.IsFiles && !plainText)
         {
@@ -444,6 +507,7 @@ public sealed class ClipboardHistory : IDisposable
         }
         if (entry.Text != null)
         {
+            _copiedHash = TextHash(entry.Text);
             if (entry.IsRich && !plainText)
             {
                 var data = new DataObject();
@@ -500,7 +564,12 @@ public sealed class ClipboardHistory : IDisposable
         if (!File.Exists(HistoryPath)) return;
         try
         {
-            var entries = JsonConvert.DeserializeObject<List<ClipboardEntry>>(File.ReadAllText(HistoryPath)) ?? new();
+            var bytes = File.ReadAllBytes(HistoryPath);
+            // Older versions wrote plain JSON; it is encrypted with DPAPI from the next save on
+            var json = bytes.Length > 0 && (bytes[0] == (byte)'[' || bytes[0] == 0xEF)
+                ? Encoding.UTF8.GetString(bytes)
+                : Encoding.UTF8.GetString(ProtectedData.Unprotect(bytes, null, DataProtectionScope.CurrentUser));
+            var entries = JsonConvert.DeserializeObject<List<ClipboardEntry>>(json) ?? new();
             foreach (var entry in entries)
             {
                 if (entry.Image != null && !File.Exists(Path.Combine(Folder, entry.Image))) continue;
@@ -511,22 +580,67 @@ public sealed class ClipboardHistory : IDisposable
         catch (Exception ex)
         {
             Log.Error("Failed to read clipboard history", ex);
+            // Keep the unreadable file (and its pictures) instead of overwriting it with an empty list on the next save
+            try { File.Move(HistoryPath, HistoryPath + ".bad-" + DateTime.Now.ToString("yyyyMMdd-HHmmss")); }
+            catch (Exception moveEx) when (moveEx is IOException or UnauthorizedAccessException) { Log.Error("Failed to back up clipboard history", moveEx); }
+            return;
         }
+        DeleteOrphanImages();
     }
 
-    void Save()
+    /// <summary>Deletes pictures no entry refers to, left behind by a failed save or a crash.</summary>
+    void DeleteOrphanImages()
     {
         try
         {
-            Directory.CreateDirectory(Folder);
-            var tmp = HistoryPath + ".tmp";
-            File.WriteAllText(tmp, JsonConvert.SerializeObject(Entries.ToList()), new UTF8Encoding(false));
-            if (File.Exists(HistoryPath)) File.Replace(tmp, HistoryPath, null);
-            else File.Move(tmp, HistoryPath);
+            var used = new HashSet<string>(Entries.Where(e => e.Image != null).Select(e => e.Image!), StringComparer.OrdinalIgnoreCase);
+            foreach (var file in Directory.GetFiles(Folder, "*.png"))
+            {
+                if (used.Contains(Path.GetFileName(file))) continue;
+                try { File.Delete(file); }
+                catch (Exception ex) when (ex is IOException or UnauthorizedAccessException) { }
+            }
         }
-        catch (Exception ex)
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
         {
-            Log.Error("Failed to save clipboard history", ex);
+            Log.Error("Failed to clean up clipboard images", ex);
+        }
+    }
+
+    void Save(bool wait = false)
+    {
+        // Copy the entries here; serializing, encrypting and writing happen off the UI thread
+        var snapshot = Entries.Select(e => new ClipboardEntry
+        {
+            Id = e.Id, Text = e.Text, Image = e.Image, ImageWidth = e.ImageWidth, ImageHeight = e.ImageHeight,
+            Files = e.Files?.ToList(), Html = e.Html, Rtf = e.Rtf, Tags = e.Tags.ToList(), Hash = e.Hash, Time = e.Time, Pinned = e.Pinned,
+        }).ToList();
+        int version = ++_saveVersion;
+        var task = Task.Run(() => Write(snapshot, version));
+        if (wait) task.Wait();
+    }
+
+    void Write(List<ClipboardEntry> snapshot, int version)
+    {
+        lock (_writeLock)
+        {
+            // A newer snapshot has already been written
+            if (version <= _writtenVersion) return;
+            try
+            {
+                Directory.CreateDirectory(Folder);
+                var tmp = HistoryPath + ".tmp";
+                // History may hold passwords and tokens; only this Windows user can read it back
+                var json = Encoding.UTF8.GetBytes(JsonConvert.SerializeObject(snapshot));
+                File.WriteAllBytes(tmp, ProtectedData.Protect(json, null, DataProtectionScope.CurrentUser));
+                if (File.Exists(HistoryPath)) File.Replace(tmp, HistoryPath, null);
+                else File.Move(tmp, HistoryPath);
+                _writtenVersion = version;
+            }
+            catch (Exception ex)
+            {
+                Log.Error("Failed to save clipboard history", ex);
+            }
         }
     }
 
@@ -542,7 +656,7 @@ public sealed class ClipboardHistory : IDisposable
         if (_saveTimer.IsEnabled)
         {
             _saveTimer.Stop();
-            Save();
+            Save(wait: true);
         }
         RemoveClipboardFormatListener(_source.Handle);
         _source.RemoveHook(WndProc);

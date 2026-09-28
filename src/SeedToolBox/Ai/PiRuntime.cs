@@ -141,10 +141,16 @@ static class PiRuntime
     public static void OpenTerminal(Install install, AiSettings s)
     {
         var info = StartInfo(install, s, Array.Empty<string>(), console: true);
-        // cmd keeps the window open if pi exits with an error
-        var inner = Quote(install.Node) + " " + Quote(install.Cli);
-        info.FileName = "cmd.exe";
-        info.Arguments = "/k \"" + inner + "\"";
+        // A script rather than cmd /k "...": on a command line cmd would expand % and treat & ^ in the paths as its own.
+        // In the script only % is special (doubled); the pause keeps the window open if pi exits with an error
+        var dir = Path.Combine(Path.GetTempPath(), "SeedToolBox");
+        Directory.CreateDirectory(dir);
+        var script = Path.Combine(dir, "pi-terminal.cmd");
+        // Always quoted (paths can't contain quotes), so & and ^ stay inside them
+        var run = ("\"" + install.Node + "\" \"" + install.Cli + "\"").Replace("%", "%%");
+        File.WriteAllText(script, "@echo off\r\nchcp 65001 >nul\r\n" + run + "\r\nif errorlevel 1 pause\r\n", new System.Text.UTF8Encoding(false));
+        info.FileName = script;
+        info.Arguments = "";
         info.UseShellExecute = false;
         Process.Start(info);
     }

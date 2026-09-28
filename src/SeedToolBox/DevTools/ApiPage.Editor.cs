@@ -354,6 +354,7 @@ sealed partial class ApiPage
         ExecResult result;
         try { result = await ApiEngine.ExecuteAsync(tab.Draft, ctx, cts.Token); }
         catch (OperationCanceledException) { result = new ExecResult { Error = "已取消" }; }
+        catch (Exception ex) { result = new ExecResult { Error = ex.Message }; }
         finally { tab.Cancel = null; cts.Dispose(); }
         tab.Result = result;
 

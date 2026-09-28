@@ -166,7 +166,7 @@ sealed partial class TerminalPage
         _monitor.Bind(_side == SideMonitor ? connection : null);
         _docker.Bind(_side == SideDocker ? connection : null);
         _sftp.Favorites = pane?.Host?.Favorites;
-        if (_side == SideSftp) { _sftp.ServerName = pane?.Host.Title ?? ""; _sftp.Bind(connection, pane?.View.Directory); }
+        if (_side == SideSftp) { _sftp.ServerName = pane?.Host?.Title ?? ""; _sftp.Bind(connection, pane?.View.Directory); }
     }
 
     void OnDirectoryChanged(Pane pane, string dir)

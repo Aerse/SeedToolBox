@@ -1,4 +1,5 @@
 using System;
+using System.Collections.Concurrent;
 using System.Collections.Generic;
 using System.ComponentModel;
 using System.IO;
@@ -26,6 +27,26 @@ interface ISession : IDisposable
     bool IsOpen { get; }
 }
 
+/// <summary>Writes on a background thread, in order, so a full pipe or SSH window never stalls the UI thread.</summary>
+sealed class WriteQueue
+{
+    readonly BlockingCollection<byte[]> _queue = new();
+
+    public WriteQueue(Action<byte[]> write, string name) => new Thread(() =>
+    {
+        foreach (var data in _queue.GetConsumingEnumerable()) write(data);
+    }) { IsBackground = true, Name = name }.Start();
+
+    public void Add(byte[] data)
+    {
+        try { _queue.Add(data); }
+        catch (InvalidOperationException) { } // completed: the session is closing
+    }
+
+    /// <summary>Lets the writer finish what is queued and exit.</summary>
+    public void Complete() => _queue.CompleteAdding();
+}
+
 sealed record ShellProfile(string Id, string Name, string Command, string? Arguments = null, string Glyph = "\uE756");
 
 /// <summary>A local shell running in a Windows pseudo console (ConPTY, Windows 10 1809+).</summary>
@@ -38,6 +59,7 @@ sealed class LocalSession : ISession
     readonly SafeFileHandle _input, _output;
     readonly FileStream _writer;
     readonly Process _process;
+    readonly WriteQueue _writes;
     int _closed;
 
     public bool IsOpen => _closed == 0;
@@ -52,6 +74,7 @@ sealed class LocalSession : ISession
         outWrite.Dispose();
         if (hr != 0) throw new Win32Exception(hr, "无法创建伪终端（需要 Windows 10 1809 或更高版本）");
         _writer = new FileStream(_input, FileAccess.Write);
+        _writes = new WriteQueue(Send, "ConPTY writer");
         _process = Process.Start(_console, profile.Command + (profile.Arguments != null ? " " + profile.Arguments : ""),
             directory ?? Environment.GetFolderPath(Environment.SpecialFolder.UserProfile));
         // The waiter owns the process handles; closing the pseudo console ends the shell, so it always returns.
@@ -84,6 +107,11 @@ sealed class LocalSession : ISession
 
     public void WriteBytes(byte[] bytes)
     {
+        if (IsOpen) _writes.Add(bytes);
+    }
+
+    void Send(byte[] bytes)
+    {
         if (!IsOpen) return;
         try { _writer.Write(bytes, 0, bytes.Length); _writer.Flush(); }
         catch (IOException) { }
@@ -105,6 +133,7 @@ sealed class LocalSession : ISession
     {
         var wasOpen = IsOpen;
         _closed = 1;
+        _writes.Complete();
         // Closing the pseudo console ends the shell and makes the reader see end of file.
         if (_console != IntPtr.Zero) ClosePseudoConsole(_console);
         try { _writer.Dispose(); } catch (IOException) { }

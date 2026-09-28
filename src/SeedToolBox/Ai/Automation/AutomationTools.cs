@@ -60,6 +60,7 @@ static class AutomationTools
                 Name = "list_folder", Label = "列出文件夹",
                 Description = "列出文件夹里的文件和子文件夹（名称、大小、修改时间）。可以用 pattern 过滤，例如 *.pdf。",
                 Parameters = Params(("path", "string", "文件夹完整路径，支持 %USERPROFILE% 这类环境变量", true), ("pattern", "string", "通配符过滤，默认 *", false), ("recursive", "boolean", "是否包含子文件夹，默认否", false)),
+                Confirm = (a, s) => FileActions.ReadConfirm(s.Settings, Str(a, "path"), "列出文件夹"),
                 Run = (a, _) => Task.Run(() => ListFolder(Str(a, "path"), Str(a, "pattern", "*"), Bool(a, "recursive"))),
             },
             new()
@@ -67,10 +68,11 @@ static class AutomationTools
                 Name = "search_files", Label = "搜索文件",
                 Description = "按文件名搜索文件，最多返回 30 个。传 path 时只在这个文件夹（含子文件夹）里找；不传时在整台电脑上找（装了 Everything 就用 Everything，否则用 Windows 搜索）。",
                 Parameters = Params(("query", "string", "文件名关键词，可以用空格分隔多个词", true), ("path", "string", "只在这个文件夹里找", false)),
+                Confirm = (a, s) => Str(a, "path", "").Length > 0 ? FileActions.ReadConfirm(s.Settings, Str(a, "path"), "在这个文件夹里搜索") : null,
                 Run = (a, _) => Task.Run(() =>
                 {
                     var folder = Str(a, "path", "");
-                    if (folder.Length > 0) return SearchIn(FileActions.Readable(folder), Str(a, "query"));
+                    if (folder.Length > 0) return SearchIn(FileActions.ReadableChecked(folder), Str(a, "query"));
                     var found = FileSearch.Find(Str(a, "query"));
                     return Reply(found.Count == 0 ? "没有找到" : $"（{FileSearch.Engine}）\n" + string.Join("\n", found));
                 }),
@@ -80,6 +82,7 @@ static class AutomationTools
                 Name = "read_text_file", Label = "读取文本文件",
                 Description = "读取文本文件的内容（自动识别 UTF-8 / GBK），默认最多 20000 个字符。",
                 Parameters = Params(("path", "string", "文件完整路径", true), ("max_chars", "integer", "最多读取的字符数", false)),
+                Confirm = (a, s) => FileActions.ReadConfirm(s.Settings, Str(a, "path"), "读取文件"),
                 Run = (a, _) => Task.Run(() => ReadText(Str(a, "path"), Int(a, "max_chars", 20000))),
             },
             new()
@@ -130,7 +133,7 @@ static class AutomationTools
                 Name = "recognize_text", Label = "识别文字",
                 Description = "识别图片文件里的文字（OCR）。不传 path 时识别当前整个屏幕（需要用户同意截屏）。",
                 Parameters = Params(("path", "string", "图片文件路径；留空表示当前屏幕", false), ("table", "boolean", "按表格识别，返回制表符分隔的行", false)),
-                Confirm = (a, _) => Str(a, "path", "").Length == 0 ? "截取当前整个屏幕并识别上面的文字" : null,
+                Confirm = (a, s) => Str(a, "path", "").Length == 0 ? "截取当前整个屏幕并识别上面的文字" : FileActions.ReadConfirm(s.Settings, Str(a, "path"), "识别图片里的文字"),
                 Run = (a, _) => Recognize(Str(a, "path", ""), Bool(a, "table")),
             },
             new()
@@ -256,10 +259,16 @@ static class AutomationTools
             new()
             {
                 Name = "open", Label = "打开",
-                Description = "用默认程序打开文件、文件夹或网址，或者启动程序。",
+                Description = "用默认程序打开网址、文件夹，或允许的文件夹里的文档。启动程序、带参数或打开别处的文件需要用户在 AI 设置里允许运行命令。",
                 Parameters = Params(("target", "string", "文件路径、文件夹、网址或程序路径", true), ("arguments", "string", "启动程序时的参数", false)),
-                Confirm = (a, _) => "打开：" + Str(a, "target") + (Str(a, "arguments", "").Length > 0 ? " " + Str(a, "arguments", "") : ""),
-                Run = (a, _) => Task.FromResult(Open(Str(a, "target"), Str(a, "arguments", ""))),
+                Confirm = (a, s) =>
+                {
+                    var target = OpenTarget(Str(a, "target"), Str(a, "arguments", ""), s.Settings, out var program);
+                    return (program ? "启动程序：" : "打开：") + target + (Str(a, "arguments", "").Length > 0 ? " " + Str(a, "arguments", "") : "");
+                },
+                // Starting a program is as strong as run_command, so it is asked about every time
+                SessionAllow = false,
+                Run = (a, s) => Task.FromResult(Open(Str(a, "target"), Str(a, "arguments", ""), s.Settings)),
             },
         };
         if (settings.AllowCommands)
@@ -371,7 +380,7 @@ static class AutomationTools
 
     static ToolReply ListFolder(string path, string pattern, bool recursive)
     {
-        var dir = FileActions.Readable(path);
+        var dir = FileActions.ReadableChecked(path);
         if (!Directory.Exists(dir)) throw new ToolException("文件夹不存在：" + dir);
         var sb = new StringBuilder();
         int count = 0, max = 500;
@@ -397,7 +406,7 @@ static class AutomationTools
 
     static ToolReply ReadText(string path, int max)
     {
-        var file = FileActions.Readable(path);
+        var file = FileActions.ReadableChecked(path);
         if (!File.Exists(file)) throw new ToolException("文件不存在：" + file);
         if (new FileInfo(file).Length > 20 << 20) throw new ToolException("文件超过 20 MB，太大了");
         var bytes = File.ReadAllBytes(file);
@@ -427,7 +436,14 @@ static class AutomationTools
                 if (!FileActions.Exists(from)) { problems.Add("不存在：" + from); continue; }
                 if (FileActions.Exists(to) && !from.Equals(to, StringComparison.OrdinalIgnoreCase)) { problems.Add("目标已存在，跳过：" + to); continue; }
                 Directory.CreateDirectory(Path.GetDirectoryName(to)!);
-                if (Directory.Exists(from)) Directory.Move(from, to);
+                if (Directory.Exists(from) && from.Equals(to, StringComparison.OrdinalIgnoreCase))
+                {
+                    // Directory.Move refuses a change of case only, so go through a temporary name
+                    var temp = from + "." + Guid.NewGuid().ToString("N").Substring(0, 8);
+                    Directory.Move(from, temp);
+                    Directory.Move(temp, to);
+                }
+                else if (Directory.Exists(from)) Directory.Move(from, to);
                 else File.Move(from, to);
                 done.Add(new[] { from, to });
             }
@@ -449,9 +465,16 @@ static class AutomationTools
                 if (Directory.Exists(from)) Microsoft.VisualBasic.FileIO.FileSystem.CopyDirectory(from, to);
                 else if (File.Exists(from)) { Directory.CreateDirectory(Path.GetDirectoryName(to)!); File.Copy(from, to); }
                 else { problems.Add("不存在：" + from); continue; }
-                done.Add(new[] { to, from });
+                done.Add(new[] { to, from, FileActions.Stamp(to) });
             }
-            catch (Exception ex) when (ex is IOException or UnauthorizedAccessException) { problems.Add($"{from}：{ex.Message}"); }
+            catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
+            {
+                // The target didn't exist before, so whatever got copied is a half copy: to the recycle bin with it
+                var cleaned = false;
+                try { if (FileActions.Exists(to)) { FileActions.Recycle(to); cleaned = true; } }
+                catch (Exception cleanup) when (cleanup is IOException or UnauthorizedAccessException or OperationCanceledException) { }
+                problems.Add($"{from}：{ex.Message}" + (cleaned ? "（复制了一半的内容已移到回收站）" : FileActions.Exists(to) ? "（复制了一半的内容留在 " + to + "）" : ""));
+            }
         }
         if (done.Count > 0) s.Operations.Add(new Operation { Kind = OperationKind.Copy, Items = done, Summary = $"复制 {done.Count} 项" + Example(done.Select(d => new[] { d[1], d[0] }).ToList()) });
         return Result(done.Count, "复制", problems);
@@ -496,7 +519,7 @@ static class AutomationTools
         }
         Directory.CreateDirectory(Path.GetDirectoryName(path)!);
         File.WriteAllText(path, Str(a, "content", ""), new UTF8Encoding(false));
-        s.Operations.Add(new Operation { Kind = OperationKind.WriteFile, Items = new() { new[] { path } }, Backup = backup, Summary = (exists ? "覆盖 " : "新建 ") + path });
+        s.Operations.Add(new Operation { Kind = OperationKind.WriteFile, Items = new() { new[] { path, FileActions.Stamp(path) } }, Backup = backup, Summary = (exists ? "覆盖 " : "新建 ") + path });
         return Reply((exists ? "已覆盖 " : "已写入 ") + path);
     }
 
@@ -685,7 +708,7 @@ static class AutomationTools
         if (path.Length == 0) image = ScreenShot.Capture().Image;
         else
         {
-            var file = FileActions.Readable(path);
+            var file = FileActions.ReadableChecked(path);
             if (!File.Exists(file)) throw new ToolException("文件不存在：" + file);
             var bitmap = new BitmapImage();
             bitmap.BeginInit();
@@ -760,17 +783,39 @@ static class AutomationTools
         return Reply("已新建笔记「" + note.Title + "」");
     }
 
-    static ToolReply Open(string target, string arguments)
+    static readonly HashSet<string> Runnable = new(StringComparer.OrdinalIgnoreCase)
+    {
+        ".exe", ".com", ".bat", ".cmd", ".ps1", ".psm1", ".vbs", ".vbe", ".js", ".jse", ".wsf", ".wsh", ".hta", ".msi", ".msp",
+        ".msc", ".scr", ".cpl", ".pif", ".lnk", ".url", ".reg", ".jar", ".appref-ms", ".application", ".settingcontent-ms",
+    };
+
+    /// <summary>
+    /// The resolved target. Web pages, folders and documents in the allowed folders just open; programs, arguments and
+    /// files elsewhere count as running a command and need AllowCommands.
+    /// </summary>
+    static string OpenTarget(string target, string arguments, AiSettings settings, out bool program)
     {
         target = target.Trim().Trim('"');
-        bool url = Uri.TryCreate(target, UriKind.Absolute, out var uri) && uri.Scheme is "http" or "https";
-        if (!url)
+        program = false;
+        if (Uri.TryCreate(target, UriKind.Absolute, out var uri) && uri.Scheme is "http" or "https") program = arguments.Trim().Length > 0;
+        else
         {
             var path = FileActions.Readable(target);
-            if (!FileActions.Exists(path) && !target.Contains(":") && !target.Contains("\\")) path = target; // a program on PATH, like notepad
+            if (!FileActions.Exists(path) && !target.Contains(":") && !target.Contains("\\")) { path = target; program = true; } // a program on PATH, like notepad
             else if (!FileActions.Exists(path)) throw new ToolException("找不到：" + path);
+            else if (!Directory.Exists(path))
+                program = Runnable.Contains(Path.GetExtension(path)) || !FileActions.InAllowed(settings, path);
+            program |= arguments.Trim().Length > 0;
             target = path;
         }
+        if (program && !settings.AllowCommands)
+            throw new ToolException("启动程序、带参数打开，或打开允许的文件夹以外的文件，需要用户在 AI 设置里打开“允许运行命令”。网页、文件夹和允许的文件夹里的文档可以直接打开。");
+        return target;
+    }
+
+    static ToolReply Open(string target, string arguments, AiSettings settings)
+    {
+        target = OpenTarget(target, arguments, settings, out _);
         try
         {
             Process.Start(new ProcessStartInfo(target, arguments) { UseShellExecute = true })?.Dispose();
@@ -804,7 +849,8 @@ static class AutomationTools
         p.BeginOutputReadLine();
         p.BeginErrorReadLine();
         bool exited = p.WaitForExit(120000);
-        if (!exited) { try { p.Kill(); } catch (InvalidOperationException) { } }
+        // Kill the whole tree: whatever the command started would otherwise keep running
+        if (!exited) ProcessTree.Kill(p);
         else p.WaitForExit();
         string text;
         lock (output) text = output.ToString();

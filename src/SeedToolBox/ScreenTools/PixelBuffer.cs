@@ -9,6 +9,7 @@ interface IAnnotationSource
 {
     int Width { get; }
     int Height { get; }
+    /// <summary>One pixel per <paramref name="cell"/>×<paramref name="cell"/> block; stretch it over PixelWidth×PixelHeight cells.</summary>
     BitmapSource Mosaic(int cell);
     /// <summary>A heavily blurred copy, possibly smaller than the image; stretch it over the full size.</summary>
     BitmapSource Blurred();
@@ -17,10 +18,13 @@ interface IAnnotationSource
 /// <summary>32-bit pixels (Bgr32 or Bgra32) with lazily made mosaic and blur copies.</summary>
 sealed class PixelBuffer : IAnnotationSource
 {
-    readonly byte[] _pixels;
-    readonly int _stride;
-    readonly PixelFormat _format;
+    // Either given up front or copied out of _image the first time an effect needs them
+    byte[]? _pixels;
+    readonly BitmapSource? _image;
+    int _stride;
+    PixelFormat _format;
     BitmapSource? _mosaic, _blur;
+    int _mosaicCell;
 
     public PixelBuffer(byte[] pixels, int width, int height, int stride, PixelFormat format)
     {
@@ -31,13 +35,30 @@ sealed class PixelBuffer : IAnnotationSource
         _format = format;
     }
 
-    public static PixelBuffer From(BitmapSource image)
+    PixelBuffer(BitmapSource image)
     {
-        var source = image.Format == PixelFormats.Bgra32 ? image : new FormatConvertedBitmap(image, PixelFormats.Bgra32, null, 0);
-        int width = source.PixelWidth, height = source.PixelHeight, stride = width * 4;
-        var pixels = new byte[stride * height];
-        source.CopyPixels(pixels, stride, 0);
-        return new PixelBuffer(pixels, width, height, stride, PixelFormats.Bgra32);
+        _image = image;
+        Width = image.PixelWidth;
+        Height = image.PixelHeight;
+    }
+
+    /// <summary>Doesn't copy the pixels until mosaic or blur is first used: a long screenshot can be hundreds of MB.</summary>
+    public static PixelBuffer From(BitmapSource image) => new(image);
+
+    byte[] Pixels
+    {
+        get
+        {
+            if (_pixels == null)
+            {
+                var source = _image!.Format == PixelFormats.Bgra32 || _image.Format == PixelFormats.Bgr32 ? _image : new FormatConvertedBitmap(_image, PixelFormats.Bgra32, null, 0);
+                _format = source.Format;
+                _stride = Width * 4;
+                _pixels = new byte[_stride * Height];
+                source.CopyPixels(_pixels, _stride, 0);
+            }
+            return _pixels;
+        }
     }
 
     public int Width { get; }
@@ -45,34 +66,30 @@ sealed class PixelBuffer : IAnnotationSource
 
     public BitmapSource Mosaic(int cell)
     {
-        if (_mosaic != null) return _mosaic;
-        int channels = _format == PixelFormats.Bgra32 ? 4 : 3;
-        var result = new byte[_pixels.Length];
-        for (int by = 0; by < Height; by += cell)
+        if (_mosaic != null && _mosaicCell == cell) return _mosaic;
+        var pixels = Pixels;
+        // One pixel per cell, taken from its centre; the brush stretches it back up with nearest-neighbour scaling
+        int w = (Width + cell - 1) / cell, h = (Height + cell - 1) / cell;
+        var result = new byte[w * h * 4];
+        for (int by = 0; by < h; by++)
         {
-            int cy = Math.Min(by + cell / 2, Height - 1);
-            for (int bx = 0; bx < Width; bx += cell)
+            int cy = Math.Min(by * cell + cell / 2, Height - 1);
+            for (int bx = 0; bx < w; bx++)
             {
-                int cx = Math.Min(bx + cell / 2, Width - 1);
-                int src = cy * _stride + cx * 4;
-                for (int y = by; y < Math.Min(by + cell, Height); y++)
-                {
-                    for (int x = bx; x < Math.Min(bx + cell, Width); x++)
-                    {
-                        int dst = y * _stride + x * 4;
-                        for (int c = 0; c < channels; c++) result[dst + c] = _pixels[src + c];
-                    }
-                }
+                int cx = Math.Min(bx * cell + cell / 2, Width - 1);
+                Buffer.BlockCopy(pixels, cy * _stride + cx * 4, result, (by * w + bx) * 4, 4);
             }
         }
-        _mosaic = BitmapSource.Create(Width, Height, 96, 96, _format, null, result, _stride);
+        _mosaic = BitmapSource.Create(w, h, 96, 96, _format, null, result, w * 4);
         _mosaic.Freeze();
+        _mosaicCell = cell;
         return _mosaic;
     }
 
     public BitmapSource Blurred()
     {
         if (_blur != null) return _blur;
+        var pixels = Pixels;
         // Shrink by averaging, then three box blurs: close to a gaussian, and cheap even for a whole desktop
         const int factor = 4, radius = 3;
         int w = Math.Max(1, (Width + factor - 1) / factor), h = Math.Max(1, (Height + factor - 1) / factor);
@@ -85,10 +102,10 @@ sealed class PixelBuffer : IAnnotationSource
             {
                 int s = (sy + x / factor);
                 int i = row + x * 4;
-                small[s * 4] += _pixels[i];
-                small[s * 4 + 1] += _pixels[i + 1];
-                small[s * 4 + 2] += _pixels[i + 2];
-                small[s * 4 + 3] += _pixels[i + 3];
+                small[s * 4] += pixels[i];
+                small[s * 4 + 1] += pixels[i + 1];
+                small[s * 4 + 2] += pixels[i + 2];
+                small[s * 4 + 3] += pixels[i + 3];
                 counts[s]++;
             }
         }

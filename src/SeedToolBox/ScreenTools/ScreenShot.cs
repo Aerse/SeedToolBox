@@ -18,6 +18,7 @@ public sealed class ScreenShot : IAnnotationSource
     public int Height { get; }
     public BitmapSource Image { get; }
 
+    // Kept alongside Image for fast colour reads (the ruler walks along rows); the effects share it
     readonly byte[] _pixels;
     readonly int _stride;
     readonly PixelBuffer _effects;
@@ -39,9 +40,14 @@ public sealed class ScreenShot : IAnnotationSource
     {
         // Physical pixels, since the app is per-monitor DPI aware
         var bounds = WinForms.SystemInformation.VirtualScreen;
-        using var bitmap = new Bitmap(bounds.Width, bounds.Height, System.Drawing.Imaging.PixelFormat.Format32bppRgb);
-        using (var g = Graphics.FromImage(bitmap))
+        // GDI draws straight into the array the screenshot keeps, rather than into a bitmap copied out afterwards
+        int stride = bounds.Width * 4;
+        var pixels = new byte[stride * bounds.Height];
+        var handle = GCHandle.Alloc(pixels, GCHandleType.Pinned);
+        try
         {
+            using var bitmap = new Bitmap(bounds.Width, bounds.Height, stride, System.Drawing.Imaging.PixelFormat.Format32bppRgb, handle.AddrOfPinnedObject());
+            using var g = Graphics.FromImage(bitmap);
             var target = g.GetHdc();
             var screen = GetDC(IntPtr.Zero);
             try
@@ -56,18 +62,11 @@ public sealed class ScreenShot : IAnnotationSource
                 g.ReleaseHdc(target);
             }
         }
-
-        var data = bitmap.LockBits(new Rectangle(0, 0, bounds.Width, bounds.Height), ImageLockMode.ReadOnly, bitmap.PixelFormat);
-        try
-        {
-            var pixels = new byte[data.Stride * bounds.Height];
-            Marshal.Copy(data.Scan0, pixels, 0, pixels.Length);
-            return new ScreenShot(bounds.X, bounds.Y, bounds.Width, bounds.Height, pixels, data.Stride);
-        }
         finally
         {
-            bitmap.UnlockBits(data);
+            handle.Free();
         }
+        return new ScreenShot(bounds.X, bounds.Y, bounds.Width, bounds.Height, pixels, stride);
     }
 
     public bool Contains(int x, int y) => x >= 0 && y >= 0 && x < Width && y < Height;

@@ -1,6 +1,7 @@
 using System.Collections.Generic;
 using System.Linq;
 using System.Text;
+using System.Text.RegularExpressions;
 using Newtonsoft.Json;
 
 namespace SeedToolBox.DevTools.Api;
@@ -30,7 +31,7 @@ static class ApiCodeGen
 
     public static string Curl(PreparedRequest p, bool windows = false)
     {
-        string Q(string s) => windows ? "\"" + s.Replace("\"", "\\\"").Replace("%", "%%") + "\"" : "'" + s.Replace("'", "'\\''") + "'";
+        string Q(string s) => windows ? CmdQuote(s) : "'" + s.Replace("'", "'\\''") + "'";
         var nl = windows ? " ^\r\n  " : " \\\r\n  ";
         var sb = new StringBuilder("curl");
         if (p.Method != "GET" && !(p.Method == "POST" && p.Body.Mode != BodyModes.None)) sb.Append(" -X ").Append(p.Method);
@@ -50,6 +51,20 @@ static class ApiCodeGen
             case BodyModes.Binary when p.Body.File.Length > 0: sb.Append(nl).Append("--data-binary ").Append(Q("@" + p.Body.File)); break;
         }
         return sb.ToString();
+    }
+
+    /// <summary>
+    /// An argument for cmd.exe the way Chrome's "Copy as cURL (cmd)" writes it: quotes are ^" so cmd never sees a quoted
+    /// part, every special character is ^-escaped, and newlines become ^ plus an empty line.
+    /// </summary>
+    static string CmdQuote(string s)
+    {
+        s = Regex.Replace(s, @"(\\*)""", m => m.Groups[1].Value + m.Groups[1].Value + "\\\"");
+        s = Regex.Replace(s, @"(\\+)$", m => m.Groups[1].Value + m.Groups[1].Value);
+        s = Regex.Replace(s, @"[^a-zA-Z0-9\s_\-:=+~'/.,?;()*`\\]", "^$0");
+        s = Regex.Replace(s, "%(?=[a-zA-Z0-9_])", "%^");
+        s = Regex.Replace(s, @"\r?\n", "^\r\n\r\n");
+        return "^\"" + s + "^\"";
     }
 
     static string Fetch(PreparedRequest p)

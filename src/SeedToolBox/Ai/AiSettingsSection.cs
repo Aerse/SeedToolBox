@@ -149,6 +149,8 @@ static class AiSettingsSection
         provider.SelectedIndex = builtinIndex >= 0 ? builtinIndex
             : saved == null ? 0
             : builtins.Length + (templateIndex >= 0 ? templateIndex : templates.Length);
+        // "其他" stands for this provider when it is one the user set up themselves, so saving updates it instead of adding "custom"
+        var otherId = saved != null && templateIndex < 0 ? currentProvider : "custom";
         if (saved is { } c)
         {
             baseUrl.Text = c.BaseUrl;
@@ -156,7 +158,7 @@ static class AiSettingsSection
         }
         void UpdateKeyHint()
         {
-            string id = IsBuiltin() ? builtins[provider.SelectedIndex].Key : TemplateIndex() < templates.Length ? templates[TemplateIndex()].Id : "custom";
+            string id = IsBuiltin() ? builtins[provider.SelectedIndex].Key : TemplateIndex() < templates.Length ? templates[TemplateIndex()].Id : otherId;
             key.Password = IsBuiltin() ? PiConfig.ApiKey(s, id) : PiConfig.CustomProvider(s, id)?.Key ?? "";
             keyHint.Text = !IsBuiltin() || key.Password.Length > 0 || !PiConfig.Authorized(s).Contains(id) ? "" : "  已通过 /login 登录";
         }
@@ -185,13 +187,21 @@ static class AiSettingsSection
                 if (IsBuiltin())
                 {
                     providerId = builtins[provider.SelectedIndex].Key;
+                    // An emptied box removes the saved key; a /login stays
+                    if (key.Password.Trim().Length == 0 && PiConfig.ApiKey(s, providerId).Length > 0)
+                    {
+                        PiConfig.SetApiKey(s, providerId, "");
+                        UpdateKeyHint();
+                        Ui.SetStatus(saveStatus, "已删除 " + builtins[provider.SelectedIndex].Name + " 的 API Key");
+                        return;
+                    }
                     if (key.Password.Trim().Length == 0 && !PiConfig.Authorized(s).Contains(providerId)) { Ui.SetStatus(saveStatus, "请填写 API Key", true); return; }
                     if (key.Password.Trim().Length > 0) PiConfig.SetApiKey(s, providerId, key.Password.Trim());
                 }
                 else
                 {
                     int t = TemplateIndex();
-                    providerId = t < templates.Length ? templates[t].Id : "custom";
+                    providerId = t < templates.Length ? templates[t].Id : otherId;
                     var names = modelName.Text.Split(new[] { ',', '，' }, StringSplitOptions.RemoveEmptyEntries).Select(m => m.Trim()).Where(m => m.Length > 0).ToList();
                     if (baseUrl.Text.Trim().Length == 0 || names.Count == 0) { Ui.SetStatus(saveStatus, "请填写接口地址和模型名", true); return; }
                     var newKey = key.Password.Trim();

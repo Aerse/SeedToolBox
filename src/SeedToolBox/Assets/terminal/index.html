@@ -222,6 +222,7 @@
       case 'zfiles': zpicked(m.files || []); break;
       case 'zchunk': { const r = zreads.get(m.id); if (r) { zreads.delete(m.id); r(b64(m.d || '')); } break; }
       case 'zsaved': { const r = zsaves.get(m.id); if (r) { zsaves.delete(m.id); r(!!m.ok); } break; }
+      case 'zabort': zabort(); break;
       case 'text': term.write(m.s); break;
       case 'opts':
         if (m.theme) term.options.theme = m.theme;

@@ -9,11 +9,14 @@ namespace SeedToolBox.Sync;
 
 /// <summary>
 /// Encrypts what goes to the WebDAV server with the sync password: PBKDF2-SHA256 key, AES-256-CBC, HMAC-SHA256.
-/// Layout: "STB1" | salt(16) | iv(16) | ciphertext | hmac(32) over everything before it.
+/// Layout: "STB2" | salt(16) | iv(16) | revision(8) | ciphertext | hmac(32) over everything before it plus the file
+/// name, so a file can't be swapped for another one or, with the revision, for an older copy of itself.
+/// "STB1" files (no revision, not bound to a name) from older versions are still read.
 /// </summary>
 sealed class SyncCrypto
 {
-    static readonly byte[] Magic = Encoding.ASCII.GetBytes("STB1");
+    static readonly byte[] Magic = Encoding.ASCII.GetBytes("STB2");
+    static readonly byte[] LegacyMagic = Encoding.ASCII.GetBytes("STB1");
     const int Iterations = 120_000;
 
     readonly string _password;
@@ -34,7 +37,9 @@ sealed class SyncCrypto
         return keys;
     }
 
-    public byte[] Encrypt(byte[] plain)
+    /// <param name="name">The file's path on the server, bound into the MAC.</param>
+    /// <param name="revision">Grows with every upload of the file, so a rolled-back copy can be told apart.</param>
+    public byte[] Encrypt(byte[] plain, string name, long revision = 0)
     {
         // One salt per session keeps it to a single key derivation
         _salt ??= Random(16);
@@ -46,33 +51,45 @@ sealed class SyncCrypto
         output.Write(Magic, 0, Magic.Length);
         output.Write(_salt, 0, _salt.Length);
         output.Write(aes.IV, 0, aes.IV.Length);
+        output.Write(BitConverter.GetBytes(revision), 0, 8);
         using (var encryptor = aes.CreateEncryptor())
         {
             var cipher = encryptor.TransformFinalBlock(plain, 0, plain.Length);
             output.Write(cipher, 0, cipher.Length);
         }
-        using var hmac = new HMACSHA256(macKey);
-        var mac = hmac.ComputeHash(output.ToArray());
+        var mac = Mac(macKey, output.ToArray(), name);
         output.Write(mac, 0, mac.Length);
         return output.ToArray();
     }
 
-    public byte[] Decrypt(byte[] data)
+    public byte[] Decrypt(byte[] data, string name) => Decrypt(data, name, out _, out _);
+
+    /// <param name="legacy">An STB1 file, which should be rewritten in the current format.</param>
+    public byte[] Decrypt(byte[] data, string name, out long revision, out bool legacy)
     {
-        if (data.Length < 4 + 16 + 16 + 16 + 32 || !data.Take(4).SequenceEqual(Magic))
-            throw new SyncException("云端文件不是本程序加密的，或已损坏");
+        legacy = data.Length >= 4 && data.Take(4).SequenceEqual(LegacyMagic);
+        int header = legacy ? 4 + 16 + 16 : 4 + 16 + 16 + 8;
+        if (data.Length < header + 16 + 32 || !legacy && !data.Take(4).SequenceEqual(Magic))
+            throw new SyncException("云端文件不是本程序加密的，或已损坏（其他电脑的程序版本太旧也会这样，请都更新到最新版）");
         var salt = data.Skip(4).Take(16).ToArray();
         var (aesKey, macKey) = Keys(salt);
-        using (var hmac = new HMACSHA256(macKey))
-        {
-            var mac = hmac.ComputeHash(data, 0, data.Length - 32);
-            if (!FixedEquals(mac, data.Skip(data.Length - 32).ToArray())) throw new SyncException("同步密码不对，和其他电脑上设置的不一样");
-        }
+        var body = data.Take(data.Length - 32).ToArray();
+        var mac = legacy ? Mac(macKey, body, null) : Mac(macKey, body, name);
+        if (!FixedEquals(mac, data.Skip(data.Length - 32).ToArray())) throw new SyncException("同步密码不对，和其他电脑上设置的不一样，或者云端文件被替换过");
+        revision = legacy ? 0 : BitConverter.ToInt64(data, 36);
         using var aes = Aes.Create();
         aes.Key = aesKey;
         aes.IV = data.Skip(20).Take(16).ToArray();
         using var decryptor = aes.CreateDecryptor();
-        return decryptor.TransformFinalBlock(data, 36, data.Length - 36 - 32);
+        return decryptor.TransformFinalBlock(data, header, data.Length - header - 32);
+    }
+
+    static byte[] Mac(byte[] key, byte[] body, string? name)
+    {
+        using var hmac = new HMACSHA256(key);
+        if (name == null) return hmac.ComputeHash(body);
+        var bound = body.Concat(Encoding.UTF8.GetBytes("|" + name)).ToArray();
+        return hmac.ComputeHash(bound);
     }
 
     static bool FixedEquals(byte[] a, byte[] b)

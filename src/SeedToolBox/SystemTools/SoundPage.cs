@@ -131,7 +131,7 @@ sealed class SoundPage : DockPanel
                 {
                     int level = pending;
                     pending = -1;
-                    try { await Task.Run(() => Brightness.Set(display, level)); }
+                    try { if (!await Task.Run(() => Brightness.Set(display, level))) Ui.SetStatus(_status, "调亮度失败：显示器没有响应，点刷新重新读取", true); }
                     catch (Exception ex) { Log.Error("Failed to set the brightness", ex); Ui.SetStatus(_status, "调亮度失败：" + ex.Message, true); }
                 }
                 busy = false;

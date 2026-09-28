@@ -244,7 +244,7 @@ sealed class TimePage : DockPanel
     {
         var utc = time.ToUniversalTime();
         var zh = CultureInfo.GetCultureInfo("zh-CN");
-        var week = CultureInfo.InvariantCulture.Calendar.GetWeekOfYear(time.DateTime, CalendarWeekRule.FirstFourDayWeek, DayOfWeek.Monday);
+        var (weekYear, week) = IsoWeek(time.DateTime);
         var days = (time - DateTimeOffset.Now).TotalDays;
         var relative = Math.Abs(days) < 1 ? $"{Math.Abs((time - DateTimeOffset.Now).TotalHours):0.#} 小时{(days < 0 ? "前" : "后")}" : $"{Math.Abs(days):0.#} 天{(days < 0 ? "前" : "后")}";
         var lines = new (string, string)[]
@@ -262,11 +262,19 @@ sealed class TimePage : DockPanel
             ("Unix 毫秒", time.ToUnixTimeMilliseconds().ToString()),
             (".NET Ticks", utc.Ticks.ToString()),
             ("Windows FILETIME", SafeFileTime(time)),
-            ("星期 / 周数", $"{time.ToString("dddd", zh)}，ISO 第 {week} 周，一年中第 {time.DayOfYear} 天"),
+            ("星期 / 周数", $"{time.ToString("dddd", zh)}，ISO {(weekYear != time.Year ? weekYear + " 年" : "")}第 {week} 周，一年中第 {time.DayOfYear} 天"),
             ("时区", $"{Zone.DisplayName}，UTC{Offset(time.Offset)}{(Zone.IsDaylightSavingTime(time) ? "（夏令时）" : "")}"),
             ("距离现在", relative),
         };
         _formats.Text = string.Join("\n", lines.Select(l => $"{l.Item1.PadRight(16 - l.Item1.Count(c => c > 127))}{l.Item2}"));
+    }
+
+    /// <summary>ISO 8601 week: the week belongs to the year its Thursday falls in.</summary>
+    static (int Year, int Week) IsoWeek(DateTime date)
+    {
+        int dow = ((int)date.DayOfWeek + 6) % 7; // Monday = 0
+        var thursday = date.Date.AddDays(3 - dow);
+        return (thursday.Year, (thursday.DayOfYear - 1) / 7 + 1);
     }
 
     static string SafeFileTime(DateTimeOffset time)
@@ -297,6 +305,8 @@ sealed class TimePage : DockPanel
         var span = b - a;
         var sign = span < TimeSpan.Zero ? "-" : "";
         var abs = span.Duration();
+        // Split in one offset so the calendar breakdown agrees with the absolute difference
+        b = b.ToOffset(a.Offset);
         var (from, to) = a <= b ? (a.DateTime, b.DateTime) : (b.DateTime, a.DateTime);
         int months = (to.Year - from.Year) * 12 + to.Month - from.Month;
         if (from.AddMonths(months) > to) months--;

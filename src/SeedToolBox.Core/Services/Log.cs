@@ -14,11 +14,19 @@ public static class Log
     {
         Directory.CreateDirectory(dir);
         _file = Path.Combine(dir, "app.log");
-        if (File.Exists(_file) && new FileInfo(_file).Length > MaxSize)
+        lock (Gate)
         {
-            File.Copy(_file, _file + ".old", true);
-            File.Delete(_file);
+            try { RotateIfFull(_file); }
+            catch (Exception) { }
         }
+    }
+
+    static void RotateIfFull(string file)
+    {
+        var info = new FileInfo(file);
+        if (!info.Exists || info.Length <= MaxSize) return;
+        File.Copy(file, file + ".old", true);
+        File.Delete(file);
     }
 
     public static void Info(string message) => Write("INFO", message, null);
@@ -32,8 +40,14 @@ public static class Log
         if (ex != null) line += Environment.NewLine + ex;
         lock (Gate)
         {
-            try { File.AppendAllText(_file, line + Environment.NewLine); }
-            catch (IOException) { }
+            // Checked on every write: the app can stay in the tray for weeks
+            try
+            {
+                RotateIfFull(_file);
+                File.AppendAllText(_file, line + Environment.NewLine);
+            }
+            // Logging must never throw: it is often called from catch blocks
+            catch (Exception) { }
         }
     }
 }

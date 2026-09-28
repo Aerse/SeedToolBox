@@ -112,11 +112,24 @@ public partial class MainWindow : Window
         ResizeMode = w.SizeLocked ? ResizeMode.NoResize : ResizeMode.CanResize;
     }
 
-    static bool IsOnScreen(double left, double top) =>
-        left >= SystemParameters.VirtualScreenLeft - 50 &&
-        top >= SystemParameters.VirtualScreenTop - 10 &&
-        left < SystemParameters.VirtualScreenLeft + SystemParameters.VirtualScreenWidth - 50 &&
-        top < SystemParameters.VirtualScreenTop + SystemParameters.VirtualScreenHeight - 50;
+    /// <summary>
+    /// Whether the title bar strip at a saved position overlaps some monitor's work area, so the window can be dragged back.
+    /// Checking the bounding box of all monitors isn't enough: with monitors of different sizes it has gaps.
+    /// </summary>
+    bool IsOnScreen(double left, double top)
+    {
+        // Screen works in pixels, the saved position in DIPs; the primary monitor's scale is close enough here
+        var primary = System.Windows.Forms.Screen.PrimaryScreen.Bounds;
+        double scale = primary.Width / SystemParameters.PrimaryScreenWidth;
+        var title = new Rect(left * scale, top * scale, Math.Max(Width, 100) * scale, 30 * scale);
+        return System.Windows.Forms.Screen.AllScreens.Any(s =>
+        {
+            var area = s.WorkingArea;
+            var overlap = Rect.Intersect(title, new Rect(area.X, area.Y, area.Width, area.Height));
+            // Enough of it to grab with the mouse
+            return !overlap.IsEmpty && overlap.Width >= 50 * scale && overlap.Height >= 10 * scale;
+        });
+    }
 
     public void SetSizeLocked(bool locked)
     {

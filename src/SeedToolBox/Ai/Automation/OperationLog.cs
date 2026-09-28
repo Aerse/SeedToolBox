@@ -16,7 +16,7 @@ public sealed class Operation
     public DateTime Time { get; set; } = DateTime.Now;
     public string Summary { get; set; } = "";
     public OperationKind Kind { get; set; }
-    /// <summary>Move: (from, to) of each file. Copy / CreateFolder / WriteFile: the created path first.</summary>
+    /// <summary>Move: (from, to) of each file. Copy / CreateFolder / WriteFile: the created path first; Copy / WriteFile end with its <see cref="FileActions.Stamp"/> when written.</summary>
     public List<string[]> Items { get; set; } = new();
     /// <summary>WriteFile: the copy of the file as it was before, or null when it was new.</summary>
     public string? Backup { get; set; }
@@ -57,8 +57,15 @@ sealed class OperationLog
 
     public IReadOnlyList<Operation> Items => _data.Items;
 
+    /// <summary>Tools run on worker threads; the list and <see cref="Changed"/> belong to the UI thread.</summary>
     public void Add(Operation operation)
     {
+        var dispatcher = System.Windows.Application.Current?.Dispatcher;
+        if (dispatcher != null && !dispatcher.CheckAccess())
+        {
+            dispatcher.Invoke(() => Add(operation));
+            return;
+        }
         _data.Items.Insert(0, operation);
         foreach (var old in _data.Items.Skip(Limit).ToList())
         {
@@ -87,14 +94,30 @@ sealed class OperationLog
         catch (Exception ex) when (ex is IOException or UnauthorizedAccessException) { }
     }
 
-    /// <summary>Puts things back; returns what could not be undone, or an empty string.</summary>
+    /// <summary>What was changed by someone else since the operation, so undoing it would lose that; empty when nothing was.</summary>
+    public static List<string> ChangedSince(Operation o)
+    {
+        var changed = new List<string>();
+        if (o.Undone || o.Kind is not (OperationKind.Copy or OperationKind.WriteFile)) return changed;
+        foreach (var item in o.Items)
+            if (item.Length > 0 && FileActions.Exists(item[0]) && item[item.Length - 1] is { } stamp && stamp.StartsWith("stamp:") && FileActions.Stamp(item[0]) != stamp)
+                changed.Add(item[0]);
+        return changed;
+    }
+
+    /// <summary>Puts things back; returns what could not be undone, or an empty string. Items that come back are dropped, so a retry only does the rest.</summary>
     public string Undo(Operation o)
     {
         if (!o.CanUndo) return "这一步不能撤销";
         var problems = new List<string>();
-        void Try(string what, Action action)
+        var restored = new List<string[]>();
+        void Try(string what, Action action, string[]? item = null)
         {
-            try { action(); }
+            try
+            {
+                action();
+                if (item != null) restored.Add(item);
+            }
             catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or ArgumentException or NotSupportedException or OperationCanceledException)
             {
                 problems.Add(what + "：" + ex.Message);
@@ -111,11 +134,12 @@ sealed class OperationLog
                         Directory.CreateDirectory(Path.GetDirectoryName(pair[0])!);
                         if (Directory.Exists(pair[1])) Directory.Move(pair[1], pair[0]);
                         else File.Move(pair[1], pair[0]);
-                    });
+                    }, pair);
                 break;
             case OperationKind.Copy:
                 foreach (var pair in o.Items)
-                    Try(Path.GetFileName(pair[0]), () => FileActions.Recycle(pair[0]));
+                    // To the recycle bin, so changes made to the copy since can still be got back
+                    Try(Path.GetFileName(pair[0]), () => { if (FileActions.Exists(pair[0])) FileActions.Recycle(pair[0]); }, pair);
                 break;
             case OperationKind.CreateFolder:
                 foreach (var pair in o.Items)
@@ -123,14 +147,15 @@ sealed class OperationLog
                     {
                         if (Directory.Exists(pair[0]) && Directory.EnumerateFileSystemEntries(pair[0]).Any()) throw new IOException("文件夹里已经有东西，没有删除");
                         if (Directory.Exists(pair[0])) Directory.Delete(pair[0]);
-                    });
+                    }, pair);
                 break;
             case OperationKind.WriteFile:
                 var path = o.Items[0][0];
                 Try(Path.GetFileName(path), () =>
                 {
-                    if (o.Backup != null) File.Copy(o.Backup, path, true);
-                    else if (File.Exists(path)) FileActions.Recycle(path);
+                    // The current content goes to the recycle bin first, in case it was edited since
+                    if (File.Exists(path)) FileActions.Recycle(path);
+                    if (o.Backup != null) File.Copy(o.Backup, path);
                 });
                 break;
             case OperationKind.Reminder:
@@ -140,6 +165,7 @@ sealed class OperationLog
                 if (RemoveNote?.Invoke(o.Target ?? "") != true) problems.Add("笔记已经不在了");
                 break;
         }
+        o.Items.RemoveAll(restored.Contains);
         if (problems.Count == 0)
         {
             o.Undone = true;
@@ -163,6 +189,18 @@ static class FileActions
     }
 
     public static bool Exists(string path) => File.Exists(path) || Directory.Exists(path);
+
+    /// <summary>Size and write time of a file (write time only for a folder), to notice later changes.</summary>
+    public static string Stamp(string path)
+    {
+        try
+        {
+            if (File.Exists(path)) { var f = new FileInfo(path); return $"stamp:{f.Length}:{f.LastWriteTimeUtc.Ticks}"; }
+            if (Directory.Exists(path)) return $"stamp:dir:{Directory.GetLastWriteTimeUtc(path).Ticks}";
+        }
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException) { }
+        return "stamp:";
+    }
 
     /// <summary>The folders the automation mode may change: the user's choice, or Desktop, Documents and Downloads.</summary>
     public static List<string> Folders(AiSettings s)
@@ -209,11 +247,77 @@ static class FileActions
     public static string Writable(AiSettings s, string path)
     {
         var full = Readable(path);
-        var folders = Folders(s).Where(f => Forbidden(f) == null).Select(Normalize).ToList();
-        if (!folders.Any(f => IsUnder(full, f) && !full.Equals(f, StringComparison.OrdinalIgnoreCase)))
-            throw new ToolException($"不允许改动 {full}。只能改动这些文件夹里面的内容：{string.Join("；", folders)}（用户可以在 AI 设置里添加）");
+        var folders = AllowedFolders(s);
+        var folder = folders.FirstOrDefault(f => IsUnder(full, f) && !full.Equals(f, StringComparison.OrdinalIgnoreCase))
+            ?? throw new ToolException($"不允许改动 {full}。只能改动这些文件夹里面的内容：{string.Join("；", folders)}（用户可以在 AI 设置里添加）");
+        // A junction or symbolic link inside an allowed folder could lead anywhere, so the path mustn't go through one
+        for (var p = full; p.Length > folder.Length; p = Path.GetDirectoryName(p) ?? folder)
+        {
+            try
+            {
+                if (Exists(p) && (File.GetAttributes(p) & FileAttributes.ReparsePoint) != 0)
+                    throw new ToolException($"不允许改动 {full}：{p} 是联接或符号链接，指向允许的文件夹以外");
+            }
+            catch (Exception ex) when (ex is IOException or UnauthorizedAccessException) { throw new ToolException($"读不了 {p} 的属性：{ex.Message}"); }
+        }
         return full;
     }
+
+    static List<string> AllowedFolders(AiSettings s) => Folders(s).Where(f => Forbidden(f) == null).Select(Normalize).ToList();
+
+    /// <summary>Keys, passwords and browser logins: never handed to the model, whatever the user allows.</summary>
+    static IEnumerable<string> Sensitive()
+    {
+        var profile = Environment.GetFolderPath(Environment.SpecialFolder.UserProfile);
+        var local = Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData);
+        var roaming = Environment.GetFolderPath(Environment.SpecialFolder.ApplicationData);
+        yield return AppPaths.Data;
+        if (profile.Length > 0)
+        {
+            yield return Path.Combine(profile, ".ssh");
+            yield return Path.Combine(profile, ".gnupg");
+            yield return Path.Combine(profile, ".aws");
+            yield return Path.Combine(profile, ".azure");
+            yield return Path.Combine(profile, ".kube");
+            yield return Path.Combine(profile, ".docker");
+            yield return Path.Combine(profile, ".pi");
+        }
+        if (local.Length > 0)
+        {
+            yield return Path.Combine(local, "Google", "Chrome", "User Data");
+            yield return Path.Combine(local, "Microsoft", "Edge", "User Data");
+            yield return Path.Combine(local, "BraveSoftware");
+            yield return Path.Combine(local, "Microsoft", "Credentials");
+            yield return Path.Combine(local, "Microsoft", "Vault");
+        }
+        if (roaming.Length > 0)
+        {
+            yield return Path.Combine(roaming, "Mozilla");
+            yield return Path.Combine(roaming, "Opera Software");
+            yield return Path.Combine(roaming, "Microsoft", "Credentials");
+            yield return Path.Combine(roaming, "Microsoft", "Protect");
+        }
+    }
+
+    /// <summary>The full path for a read tool; throws for the sensitive places listed in <see cref="Sensitive"/>.</summary>
+    public static string ReadableChecked(string path)
+    {
+        var full = Readable(path);
+        if (Sensitive().Select(Normalize).Any(f => IsUnder(full, f)))
+            throw new ToolException($"不允许读取 {full}：这里放的是密钥、密码或登录信息");
+        return full;
+    }
+
+    /// <summary>What to ask the user before reading outside the allowed folders, or null when the path is inside one.</summary>
+    public static string? ReadConfirm(AiSettings s, string path, string what)
+    {
+        var full = ReadableChecked(path);
+        return AllowedFolders(s).Any(f => IsUnder(full, f)) ? null : $"{what}（在允许的文件夹以外，内容会发给模型）：\n{full}";
+    }
+
+    /// <summary>Whether a path is inside the allowed folders, and not somewhere sensitive.</summary>
+    public static bool InAllowed(AiSettings s, string full) =>
+        AllowedFolders(s).Any(f => IsUnder(full, f)) && !Sensitive().Select(Normalize).Any(f => IsUnder(full, f));
 
     public static string Readable(string path)
     {

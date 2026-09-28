@@ -2,6 +2,7 @@ using System;
 using System.Collections.Generic;
 using System.IO;
 using System.Runtime.InteropServices;
+using System.Threading.Tasks;
 using System.Windows;
 using System.Windows.Controls;
 using System.Windows.Input;
@@ -27,7 +28,7 @@ sealed class RecordingSession
     readonly ControlBar _bar;
     readonly DispatcherTimer _timer = new() { Interval = TimeSpan.FromMilliseconds(200) };
     CountdownWindow? _countdown;
-    bool _started, _stopping;
+    bool _started, _stopping, _failed;
 
     /// <summary>The clip (null if cancelled or failed), the error if it failed, and audio sources that could not be recorded.</summary>
     public event Action<RecordedClip?, Exception?, IReadOnlyList<string>>? Finished;
@@ -69,6 +70,13 @@ sealed class RecordingSession
     public void Start(bool countdown)
     {
         _recorder.Prepare();
+        // The recorder can fail on its own (no encoder, disk full): stop instead of pretending to record
+        _recorder.Completion.ContinueWith(t =>
+        {
+            if (_stopping || t.Result == null) return;
+            _failed = true;
+            Stop();
+        }, TaskScheduler.FromCurrentSynchronizationContext());
         _frame.Show();
         if (!countdown)
         {
@@ -114,13 +122,20 @@ sealed class RecordingSession
         var error = await _recorder.Completion;
         _options.Keys?.Dispose();
         // Cancelled in the countdown: finalizing an empty file may fail, which doesn't matter
-        if (!_started) error = null;
+        if (!_started && !_failed) error = null;
         _frame.Close();
         _bar.Close();
 
         RecordedClip? clip = null;
         if (error == null && _started && duration > 0)
             clip = new RecordedClip(_recorder.Path, _region.Width, _region.Height, _options.Fps, duration);
+        else if (error != null && _started && _recorder.Finalized && _recorder.Recorded > 0)
+        {
+            // Failed mid-recording but the file was still finalized: keep what made it in
+            clip = new RecordedClip(_recorder.Path, _region.Width, _region.Height, _options.Fps, Math.Min(duration, _recorder.Recorded));
+            MessageBox.Show($"录屏中途出错，已保留出错前录下的内容：{error.Message}", "SeedToolBox", MessageBoxButton.OK, MessageBoxImage.Warning);
+            error = null;
+        }
         else
             TryDelete(_recorder.Path);
         Finished?.Invoke(clip, error, _recorder.AudioErrors);
@@ -164,6 +179,24 @@ static class OverlayTools
         return window;
     }
 
+    /// <summary>
+    /// Turns capture exclusion on or off. Over the recorded region an excluded window would be a
+    /// black block in the video, so it is better left visible there.
+    /// </summary>
+    public static void SetExcluded(Window window, bool exclude)
+    {
+        var hwnd = new WindowInteropHelper(window).Handle;
+        if (hwnd != IntPtr.Zero) SetWindowDisplayAffinity(hwnd, exclude ? WDA_EXCLUDEFROMCAPTURE : WDA_NONE);
+    }
+
+    /// <summary>The window's bounds in physical pixels.</summary>
+    public static Rectangle Bounds(Window window)
+    {
+        var hwnd = new WindowInteropHelper(window).Handle;
+        if (hwnd == IntPtr.Zero || !GetWindowRect(hwnd, out var r)) return Rectangle.Empty;
+        return Rectangle.FromLTRB(r.Left, r.Top, r.Right, r.Bottom);
+    }
+
     public static void Place(Window window, int x, int y, int width, int height)
     {
         var hwnd = new WindowInteropHelper(window).Handle;
@@ -176,7 +209,15 @@ static class OverlayTools
 
     static readonly IntPtr HWND_TOPMOST = new(-1);
     const int GWL_EXSTYLE = -20, WS_EX_TRANSPARENT = 0x20, WS_EX_TOOLWINDOW = 0x80, WS_EX_NOACTIVATE = 0x08000000;
-    const uint SWP_NOSIZE = 0x0001, SWP_NOACTIVATE = 0x0010, WDA_EXCLUDEFROMCAPTURE = 0x11;
+    const uint SWP_NOSIZE = 0x0001, SWP_NOACTIVATE = 0x0010, WDA_NONE = 0, WDA_EXCLUDEFROMCAPTURE = 0x11;
+
+    [StructLayout(LayoutKind.Sequential)]
+    struct RECT
+    {
+        public int Left, Top, Right, Bottom;
+    }
+
+    [DllImport("user32.dll")] static extern bool GetWindowRect(IntPtr hwnd, out RECT rect);
 
     [DllImport("user32.dll")] static extern int GetWindowLong(IntPtr hwnd, int index);
     [DllImport("user32.dll")] static extern int SetWindowLong(IntPtr hwnd, int index, int value);
@@ -320,6 +361,15 @@ sealed class ControlBar
         _window.Content = card;
         _window.SizeToContent = SizeToContent.WidthAndHeight;
         _window.Loaded += (_, _) => Place();
+        _window.LocationChanged += (_, _) => UpdateExclusion();
+    }
+
+    // Hidden from the video when outside the region; inside it (full screen, or dragged there)
+    // hiding would leave a black block, so it is recorded as is
+    void UpdateExclusion()
+    {
+        var bounds = OverlayTools.Bounds(_window);
+        if (!bounds.IsEmpty) OverlayTools.SetExcluded(_window, !bounds.IntersectsWith(_region));
     }
 
     static Border Button(string glyph, string tip, Action onClick, Brush foreground)
@@ -362,6 +412,7 @@ sealed class ControlBar
         // No room outside (e.g. full screen): sit inside the bottom edge
         if (y < screen.Top) y = _region.Bottom - gap - height;
         OverlayTools.Place(_window, x, y, 0, 0);
+        UpdateExclusion();
     }
 
     public void Update(long elapsed, bool paused)

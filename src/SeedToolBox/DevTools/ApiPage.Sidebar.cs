@@ -175,7 +175,7 @@ sealed partial class ApiPage
         }));
         menu.Items.Add(new Separator());
         menu.Items.Add(MenuItem("运行…", () => new RunnerWindow(Owner, _data, folder, Persist).Show()));
-        menu.Items.Add(MenuItem(folder is ApiCollection ? "集合设置（认证、脚本、变量）…" : "文件夹设置（认证、脚本）…", () => { FolderWindow.Show(Owner, folder, Persist); RefreshTree(); }));
+        menu.Items.Add(MenuItem(folder is ApiCollection ? "集合设置（认证、脚本、变量）…" : "文件夹设置（认证、脚本）…", () => { FolderWindow.Show(Owner, folder, ScheduleSave); Persist(); RefreshTree(); }));
         menu.Items.Add(MenuItem("重命名…", () => Rename(folder.Name, n => folder.Name = n)));
         if (folder is ApiCollection c)
         {
@@ -335,10 +335,11 @@ sealed partial class ApiPage
                 var o = JObject.Parse(File.ReadAllText(path));
                 if (ApiImport.IsPostmanCollection(o))
                 {
-                    var c = ApiImport.ReadCollection(o);
+                    var unsupported = new List<string>();
+                    var c = ApiImport.ReadCollection(o, unsupported);
                     _data.Collections.Add(c);
                     _expanded.Add(c);
-                    done.Add("集合「" + c.Name + "」");
+                    done.Add("集合「" + c.Name + "」" + (unsupported.Count > 0 ? "（不支持的认证 " + string.Join("、", unsupported) + " 已改为不认证）" : ""));
                 }
                 else if (ApiImport.IsPostmanEnvironment(o))
                 {

@@ -138,8 +138,36 @@ sealed class PiInstaller
             ZipFile.ExtractToDirectory(zip, temp);
             // The archive holds a single node-vX-win-x64 folder
             var inner = Directory.GetDirectories(temp).Single();
-            if (Directory.Exists(PiRuntime.NodeDir)) Directory.Delete(PiRuntime.NodeDir, true);
-            Directory.Move(inner, PiRuntime.NodeDir);
+            // Swap by renaming, so a node.exe that is in use (an open AI window) leaves the old install whole
+            var old = PiRuntime.NodeDir + ".old";
+            if (Directory.Exists(old))
+            {
+                try { Directory.Delete(old, true); }
+                catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
+                {
+                    throw new InvalidOperationException("上次更新留下的旧 Node 还在使用，先关掉所有 AI 窗口再更新", ex);
+                }
+            }
+            bool hadOld = Directory.Exists(PiRuntime.NodeDir);
+            if (hadOld)
+            {
+                try { Directory.Move(PiRuntime.NodeDir, old); }
+                catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
+                {
+                    throw new InvalidOperationException("Node 正在使用，先关掉所有 AI 窗口再更新", ex);
+                }
+            }
+            try { Directory.Move(inner, PiRuntime.NodeDir); }
+            catch (Exception) when (hadOld)
+            {
+                Directory.Move(old, PiRuntime.NodeDir);
+                throw;
+            }
+            if (hadOld)
+            {
+                try { Directory.Delete(old, true); }
+                catch (Exception ex) when (ex is IOException or UnauthorizedAccessException) { } // cleared on the next update
+            }
             Directory.Delete(temp, true);
             File.Delete(zip);
         }, cancel);
@@ -193,7 +221,8 @@ sealed class PiInstaller
         process.Start();
         process.BeginOutputReadLine();
         process.BeginErrorReadLine();
-        using (cancel.Register(() => { try { process.Kill(); } catch (InvalidOperationException) { } }))
+        // The whole tree: npm's postinstall scripts would otherwise keep files in the app folder busy
+        using (cancel.Register(() => ProcessTree.Kill(process)))
         {
             var code = await exited.Task;
             cancel.ThrowIfCancellationRequested();
@@ -253,9 +282,14 @@ sealed class PiInstaller
                 CreateNoWindow = true,
                 RedirectStandardOutput = true,
             })!;
-            var text = process.StandardOutput.ReadToEnd().Trim();
-            process.WaitForExit(5000);
-            return ParseVersion(text);
+            // Read asynchronously, so a node.exe that hangs (held by antivirus, or broken) can't block past the timeout
+            var output = process.StandardOutput.ReadToEndAsync();
+            if (!process.WaitForExit(5000))
+            {
+                try { process.Kill(); } catch (InvalidOperationException) { }
+                return null;
+            }
+            return output.Wait(1000) ? ParseVersion(output.Result.Trim()) : null;
         }
         catch (Exception)
         {

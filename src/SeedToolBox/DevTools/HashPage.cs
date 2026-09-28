@@ -290,20 +290,42 @@ sealed class HashPage : DockPanel
         if (dialog.ShowDialog() == System.Windows.Forms.DialogResult.OK) _folder.Text = dialog.SelectedPath;
     }
 
-    void HashFolder()
+    async void HashFolder()
     {
         var folder = _folder.Text.Trim();
         if (!Directory.Exists(folder)) { Ui.SetStatus(_batchStatus, "请选择存在的文件夹", true); return; }
         var algorithm = (string)_algorithm.SelectedItem;
+        var recursive = _recursive.IsChecked == true;
+        Ui.SetStatus(_batchStatus, "正在列出文件…");
+        foreach (var b in _batchButtons) b.IsEnabled = false;
         List<HashItem> files;
+        int skipped = 0;
         try
         {
-            files = Directory.EnumerateFiles(folder, "*", _recursive.IsChecked == true ? SearchOption.AllDirectories : SearchOption.TopDirectoryOnly)
-                .Select(f => new HashItem { FullPath = f, Path = Relative(folder, f), Size = new FileInfo(f).Length })
-                .OrderBy(i => i.Path, StringComparer.OrdinalIgnoreCase)
-                .ToList();
+            files = await Task.Run(() =>
+            {
+                var list = new List<HashItem>();
+                var pending = new Stack<string>();
+                pending.Push(folder);
+                while (pending.Count > 0)
+                {
+                    var dir = pending.Pop();
+                    // Walk by hand so an unreadable sub-folder only skips itself instead of aborting the whole batch.
+                    try
+                    {
+                        foreach (var f in new DirectoryInfo(dir).EnumerateFiles())
+                            list.Add(new HashItem { FullPath = f.FullName, Path = Relative(folder, f.FullName), Size = f.Length });
+                        if (recursive)
+                            foreach (var d in Directory.EnumerateDirectories(dir)) pending.Push(d);
+                    }
+                    catch (Exception ex) when (ex is UnauthorizedAccessException or IOException or System.Security.SecurityException) { skipped++; }
+                }
+                return list.OrderBy(i => i.Path, StringComparer.OrdinalIgnoreCase).ToList();
+            });
         }
         catch (Exception ex) { Ui.SetStatus(_batchStatus, "读取文件夹失败：" + ex.Message, true); return; }
+        finally { foreach (var b in _batchButtons) b.IsEnabled = true; }
+        if (skipped > 0 && files.Count == 0) { Ui.SetStatus(_batchStatus, $"没有可读取的文件（跳过 {skipped} 个无权限的文件夹）", true); return; }
         _batchAlgorithm = algorithm;
         RunBatch(files, algorithm, null);
     }
@@ -359,7 +381,7 @@ sealed class HashPage : DockPanel
 
     void VerifyChecksumFile()
     {
-        var dialog = new Microsoft.Win32.OpenFileDialog { Filter = "校验文件|*.sha256;*.sha1;*.sha384;*.sha512;*.md5;*.txt;*.sum|所有文件|*.*" };
+        var dialog = new Microsoft.Win32.OpenFileDialog { Filter = "校验文件|*.sha256;*.sha1;*.sha384;*.sha512;*.md5;*.sha3256;*.crc32;*.crc64;*.xxhash64;*.txt;*.sum|所有文件|*.*" };
         if (dialog.ShowDialog(Window.GetWindow(this)) != true) return;
         string[] lines;
         try { lines = File.ReadAllLines(dialog.FileName); }
@@ -384,15 +406,23 @@ sealed class HashPage : DockPanel
         var expected = new Dictionary<HashItem, string>();
         var items = entries.Select(e =>
         {
-            var full = Path.GetFullPath(Path.Combine(baseDir, e.File.Replace('/', '\\')));
-            var item = new HashItem { Path = e.File, FullPath = full, Size = File.Exists(full) ? new FileInfo(full).Length : -1 };
+            string full;
+            try { full = Path.GetFullPath(Path.Combine(baseDir, e.File.Replace('/', '\\'))); }
+            catch (Exception) { full = ""; }
+            // Only files under the checksum file's folder are read, so a foreign list can't probe arbitrary paths;
+            // anything else gets an empty path and shows up as missing.
+            if (!full.StartsWith(baseDir.TrimEnd('\\') + "\\", StringComparison.OrdinalIgnoreCase)) full = "";
+            var item = new HashItem { Path = e.File, FullPath = full, Size = full.Length > 0 && File.Exists(full) ? new FileInfo(full).Length : -1 };
             expected[item] = e.Hash;
             return item;
         }).ToList();
         RunBatch(items, algorithm, expected);
     }
 
-    static string? AlgorithmFor(string extension, int hexLength) => extension.ToLowerInvariant() switch
+    static string? AlgorithmFor(string extension, int hexLength) =>
+        // WriteChecksumFile names files after the algorithm (".sha3256", ".crc64", ".xxhash64"…), so those come first.
+        BatchNames.FirstOrDefault(n => "." + n.ToLowerInvariant().Replace("-", "") == extension.ToLowerInvariant())
+        ?? extension.ToLowerInvariant() switch
     {
         ".md5" => "MD5",
         ".sha1" => "SHA1",

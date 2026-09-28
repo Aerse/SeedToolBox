@@ -17,38 +17,40 @@ static class ApiImport
     public static bool IsPostmanCollection(JObject o) => o["info"] is JObject && o["item"] is JArray;
     public static bool IsPostmanEnvironment(JObject o) => o["values"] is JArray && o["info"] == null;
 
-    public static ApiCollection ReadCollection(JObject o)
+    /// <param name="unsupported">Gets the Postman auth types that can't be used here; those items are imported without auth.</param>
+    public static ApiCollection ReadCollection(JObject o, ICollection<string>? unsupported = null)
     {
+        unsupported ??= new List<string>();
         var c = new ApiCollection
         {
             Name = (string?)o["info"]?["name"] ?? "导入的集合",
             Description = Text(o["info"]?["description"]),
-            Auth = ReadAuth(o["auth"]) ?? new ApiAuth { Type = AuthTypes.None },
+            Auth = ReadAuth(o["auth"], unsupported) ?? new ApiAuth { Type = AuthTypes.None },
         };
         ReadEvents(o["event"], c);
         foreach (var v in o["variable"] as JArray ?? new JArray())
             c.Variables.Add(new KeyValue { Key = (string?)v["key"] ?? "", Value = Text(v["value"]), Enabled = v["disabled"]?.Value<bool>() != true });
-        ReadItems(o["item"] as JArray, c);
+        ReadItems(o["item"] as JArray, c, unsupported);
         return c;
     }
 
-    static void ReadItems(JArray? items, ApiFolder into)
+    static void ReadItems(JArray? items, ApiFolder into, ICollection<string> unsupported)
     {
         foreach (var item in items?.OfType<JObject>() ?? Enumerable.Empty<JObject>())
         {
             if (item["item"] is JArray children)
             {
                 var f = new ApiFolder { Name = (string?)item["name"] ?? "文件夹", Description = Text(item["description"]) };
-                f.Auth = ReadAuth(item["auth"]) ?? new ApiAuth();
+                f.Auth = ReadAuth(item["auth"], unsupported) ?? new ApiAuth();
                 ReadEvents(item["event"], f);
-                ReadItems(children, f);
+                ReadItems(children, f, unsupported);
                 into.Folders.Add(f);
             }
-            else into.Requests.Add(ReadRequest(item));
+            else into.Requests.Add(ReadRequest(item, unsupported));
         }
     }
 
-    static ApiRequest ReadRequest(JObject item)
+    static ApiRequest ReadRequest(JObject item, ICollection<string> unsupported)
     {
         var r = new ApiRequest { Name = (string?)item["name"] ?? "请求" };
         var q = item["request"];
@@ -66,7 +68,7 @@ static class ApiImport
             r.Params.InsertRange(0, UrlParams.Parse(r.Url));
             r.Headers = Rows(req["header"]);
             r.Description = Text(req["description"]);
-            r.Auth = ReadAuth(req["auth"]) ?? new ApiAuth();
+            r.Auth = ReadAuth(req["auth"], unsupported) ?? new ApiAuth();
             if (req["body"] is JObject body) r.Body = ReadBody(body);
         }
         ReadEvents(item["event"], r);
@@ -123,7 +125,7 @@ static class ApiImport
         catch (JsonReaderException) { return s; }
     }
 
-    static ApiAuth? ReadAuth(JToken? token)
+    static ApiAuth? ReadAuth(JToken? token, ICollection<string> unsupported)
     {
         if (token is not JObject a) return null;
         var type = (string?)a["type"] ?? "";
@@ -132,6 +134,15 @@ static class ApiImport
             var t = a[type];
             if (t is JArray list) return Text(list.FirstOrDefault(p => (string?)p["key"] == name)?["value"]);
             return t is JObject o ? Text(o[name]) : "";
+        }
+        switch (type)
+        {
+            case "" or "inherit": return null;
+            case "noauth" or "bearer" or "basic" or "apikey": break;
+            default:
+                // oauth2, digest, awsv4, hawk...: sending without auth is closer than falling back to the parent's.
+                if (!unsupported.Contains(type)) unsupported.Add(type);
+                return new ApiAuth { Type = AuthTypes.None };
         }
         return type switch
         {
@@ -361,7 +372,13 @@ static class ApiImport
                     int colon = h.IndexOf(':');
                     if (colon > 0) r.Headers.Add(new KeyValue { Key = h.Substring(0, colon).Trim(), Value = h.Substring(colon + 1).Trim() });
                     break;
-                case "-d": case "--data": case "--data-raw": case "--data-binary": case "--data-ascii": case "--data-urlencode": body.Add(Next()); break;
+                case "-d": case "--data": case "--data-raw": case "--data-binary": case "--data-ascii": body.Add(Next()); break;
+                case "--data-urlencode":
+                    // The value is plain text that curl encodes; encode it here so the shared parsing below decodes it back unchanged.
+                    var d = Next();
+                    int de = d.IndexOf('=');
+                    body.Add(de < 0 ? Uri.EscapeDataString(d) : (de > 0 ? d.Substring(0, de) + "=" : "") + Uri.EscapeDataString(d.Substring(de + 1)));
+                    break;
                 case "--json":
                     body.Add(Next());
                     r.Headers.Add(new KeyValue { Key = "Content-Type", Value = "application/json" });
@@ -453,7 +470,7 @@ static class ApiImport
             char c = s[i];
             if (char.IsWhiteSpace(c)) { if (any) { list.Add(sb.ToString()); sb.Clear(); any = false; } continue; }
             any = true;
-            if (c == '$' && i + 1 < s.Length && s[i + 1] == '\'') continue;
+            if (c == '$' && i + 1 < s.Length && s[i + 1] == '\'') { i = AnsiC(s, i + 2, sb); continue; }
             if (c == '\'')
             {
                 int end = s.IndexOf('\'', i + 1);
@@ -474,6 +491,44 @@ static class ApiImport
         }
         if (any) list.Add(sb.ToString());
         return list;
+    }
+
+    /// <summary>Reads a bash $'...' string starting at <paramref name="i"/> into <paramref name="sb"/>; returns the index of the closing quote.</summary>
+    static int AnsiC(string s, int i, StringBuilder sb)
+    {
+        for (; i < s.Length && s[i] != '\''; i++)
+        {
+            if (s[i] != '\\' || i + 1 >= s.Length) { sb.Append(s[i]); continue; }
+            char e = s[++i];
+            int Hex(int max)
+            {
+                int n = 0;
+                while (n < max && i + 1 + n < s.Length && Uri.IsHexDigit(s[i + 1 + n])) n++;
+                return n;
+            }
+            switch (e)
+            {
+                case 'n': sb.Append('\n'); break;
+                case 'r': sb.Append('\r'); break;
+                case 't': sb.Append('\t'); break;
+                case 'a': sb.Append('\a'); break;
+                case 'b': sb.Append('\b'); break;
+                case 'f': sb.Append('\f'); break;
+                case 'v': sb.Append('\v'); break;
+                case 'e': case 'E': sb.Append('\u001b'); break;
+                case 'x': case 'u': case 'U':
+                    int len = Hex(e == 'x' ? 2 : e == 'u' ? 4 : 8);
+                    if (len == 0) { sb.Append('\\').Append(e); break; }
+                    var code = Convert.ToInt32(s.Substring(i + 1, len), 16);
+                    if (e == 'x') sb.Append((char)code);
+                    else if (code <= 0x10FFFF && (code < 0xD800 || code > 0xDFFF)) sb.Append(char.ConvertFromUtf32(code));
+                    else if (code <= 0xFFFF) sb.Append((char)code); // a lone surrogate half, as Chrome writes non-BMP text
+                    i += len;
+                    break;
+                default: sb.Append(e); break; // \\ \' \" and anything else stand for the character itself
+            }
+        }
+        return i;
     }
 
     // AI

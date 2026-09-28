@@ -60,6 +60,14 @@ static class Topmost
         var names = new Dictionary<int, string>();
         EnumWindows((hwnd, _) =>
         {
+            // An exception can't cross back through the native callback, so none may leave it
+            try { return Add(hwnd); }
+            catch (Exception ex) when (ex is ArgumentException or InvalidOperationException or System.ComponentModel.Win32Exception) { return true; }
+        }, IntPtr.Zero);
+        return result;
+
+        bool Add(IntPtr hwnd)
+        {
             if (!IsWindowVisible(hwnd) || IsCloaked(hwnd)) return true;
             long ex = GetWindowLongPtr(hwnd, GWL_EXSTYLE).ToInt64();
             if ((ex & WS_EX_TOOLWINDOW) != 0 && (ex & WS_EX_TOPMOST) == 0) return true;
@@ -71,13 +79,12 @@ static class Topmost
             if (!names.TryGetValue((int)pid, out var name))
             {
                 try { using var p = System.Diagnostics.Process.GetProcessById((int)pid); name = p.ProcessName; }
-                catch (ArgumentException) { name = "?"; }
+                catch (Exception e) when (e is ArgumentException or InvalidOperationException) { name = "?"; }
                 names[(int)pid] = name;
             }
             result.Add(new WindowEntry { Handle = hwnd, Title = title, Pid = (int)pid, Process = pid == self ? name + "（本程序）" : name, Topmost = (ex & WS_EX_TOPMOST) != 0 });
             return true;
-        }, IntPtr.Zero);
-        return result;
+        }
     }
 
     static string Title(IntPtr hwnd)

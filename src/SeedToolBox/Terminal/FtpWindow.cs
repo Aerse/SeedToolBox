@@ -18,11 +18,12 @@ static class FtpWindow
             password = asked;
         }
         var cancel = new CancellationTokenSource();
-        var panel = new SftpPanel(() => null, _ => { }) { Margin = new Thickness(10, 8, 10, 6), ServerName = host.Title };
+        Window window = null!;
+        var panel = new SftpPanel(() => window, _ => { }) { Margin = new Thickness(10, 8, 10, 6), ServerName = host.Title };
         var tabs = new System.Windows.Controls.TabControl { Margin = new Thickness(6) };
         tabs.Items.Add(new System.Windows.Controls.TabItem { Header = "文件", Content = panel });
         tabs.Items.Add(new System.Windows.Controls.TabItem { Header = "传输", Content = new TransfersPanel { Margin = new Thickness(10, 8, 10, 6) } });
-        var window = new Window
+        window = new Window
         {
             Title = host.Title + " — " + host.Address,
             Width = 560,

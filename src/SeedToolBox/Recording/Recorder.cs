@@ -35,6 +35,8 @@ sealed class Recorder
     const long Second = 10_000_000;
     // Audio is written this far behind the clock so late packets still make it in
     const long AudioLag = Second / 10;
+    // Queued audio this far off its timestamp is moved back into place
+    const int AudioSlack = Mp4Writer.AudioRate / 50;
 
     readonly Rectangle _region;
     readonly RecordOptions _options;
@@ -49,6 +51,8 @@ sealed class Recorder
     volatile bool _stop;
     bool _paused;
     bool _leftDown, _rightDown;
+    long _recorded;
+    volatile bool _finalized;
 
     public Recorder(Rectangle region, RecordOptions options, string path)
     {
@@ -61,6 +65,12 @@ sealed class Recorder
     public Task<Exception?> Completion => _done.Task;
 
     public string Path => _path;
+
+    /// <summary>Length of video actually written, 100 ns units.</summary>
+    public long Recorded => Interlocked.Read(ref _recorded);
+
+    /// <summary>Whether the file was finalized and is playable, even if recording stopped on an error.</summary>
+    public bool Finalized => _finalized;
 
     /// <summary>Names of audio sources that could not be opened.</summary>
     public List<string> AudioErrors { get; } = new();
@@ -147,6 +157,7 @@ sealed class Recorder
                 PollButtons(now);
                 frame.Grab(Clicks(now), now);
                 writer.WriteFrame(frame.Bits, frame.Stride, target, period);
+                Interlocked.Exchange(ref _recorded, target + period);
                 // Skip frames the capture couldn't keep up with instead of falling behind
                 index = Math.Max(index + 1, Elapsed * fps / Second);
 
@@ -162,7 +173,14 @@ sealed class Recorder
         finally
         {
             foreach (var source in _sources) source.Capture.Dispose();
-            try { writer?.Finish(); }
+            try
+            {
+                if (writer != null)
+                {
+                    writer.Finish();
+                    _finalized = true;
+                }
+            }
             catch (Exception ex) { error ??= ex; Log.Error("Failed to finalize recording", ex); }
             writer?.Dispose();
             timeEndPeriod(1);
@@ -178,6 +196,8 @@ sealed class Recorder
         public AudioCapture Capture { get; }
         // Interleaved stereo floats waiting to be mixed
         public readonly List<float> Queue = new();
+        // Timeline position of the first queued frame, in audio frames
+        public long QueueStart;
     }
 
     void OpenAudio(bool loopback, string name)
@@ -185,15 +205,29 @@ sealed class Recorder
         try
         {
             var source = new AudioSource(new AudioCapture(loopback));
-            source.Capture.Data += (data, frames) =>
+            source.Capture.Data += (data, frames, captured) =>
             {
                 if (Paused) return;
+                // Place data by when it was captured, not when it arrived: late packets and gaps
+                // (loopback sends nothing during silence) would otherwise shift the sound for good
+                long age = Math.Max(0, Math.Min(Second, AudioCapture.Now() - captured));
+                long position = (Elapsed - age) * Mp4Writer.AudioRate / Second;
                 lock (source.Queue)
                 {
+                    long expected = source.QueueStart + source.Queue.Count / 2;
+                    if (source.Queue.Count == 0) source.QueueStart = position;
+                    else if (position > expected + AudioSlack)
+                        source.Queue.AddRange(new float[(int)Math.Min(position - expected, Mp4Writer.AudioRate) * 2]);
+                    else if (position < expected - AudioSlack)
+                        source.QueueStart -= expected - position;
                     source.Queue.AddRange(data);
                     // Never hold more than two seconds, whatever happens to the writer
                     int excess = source.Queue.Count - 2 * Mp4Writer.AudioRate * 2;
-                    if (excess > 0) source.Queue.RemoveRange(0, excess);
+                    if (excess > 0)
+                    {
+                        source.Queue.RemoveRange(0, excess);
+                        source.QueueStart += excess / 2;
+                    }
                 }
             };
             _sources.Add(source);
@@ -219,12 +253,22 @@ sealed class Recorder
         {
             lock (source.Queue)
             {
-                // A device clock running fast piles up data; drop the oldest to stay in sync
-                int excess = source.Queue.Count - count - Mp4Writer.AudioRate * 2 * 3 / 10;
-                if (excess > 0) source.Queue.RemoveRange(0, excess);
-                int take = Math.Min(count, source.Queue.Count);
-                for (int i = 0; i < take; i++) sum[i] += source.Queue[i];
+                // Data for time already written arrived too late to use
+                long late = Math.Min(written - source.QueueStart, source.Queue.Count / 2);
+                if (late > 0)
+                {
+                    source.Queue.RemoveRange(0, (int)late * 2);
+                    source.QueueStart += late;
+                }
+                if (source.Queue.Count == 0) continue;
+                // Each source sits at its own timeline position; the gap before it stays silent
+                long offset = source.QueueStart - written;
+                if (offset >= frames) continue;
+                int take = (int)Math.Min(frames - offset, source.Queue.Count / 2) * 2;
+                int at = (int)offset * 2;
+                for (int i = 0; i < take; i++) sum[at + i] += source.Queue[i];
                 source.Queue.RemoveRange(0, take);
+                source.QueueStart += take / 2;
             }
         }
         for (int i = 0; i < count; i++)
@@ -296,15 +340,26 @@ sealed class Recorder
             _dc = CreateCompatibleDC(screen);
             ReleaseDC(IntPtr.Zero, screen);
 
-            // Negative height: top-down rows, matching what the encoder expects
-            var info = new BITMAPINFOHEADER { Size = 40, Width = region.Width, Height = -region.Height, Planes = 1, BitCount = 32 };
-            _bitmap = CreateDIBSection(_dc, ref info, 0, out var bits, IntPtr.Zero, 0);
-            if (_bitmap == IntPtr.Zero) throw new System.ComponentModel.Win32Exception();
-            Bits = bits;
-            Stride = region.Width * 4;
-            _old = SelectObject(_dc, _bitmap);
-            _graphics = Graphics.FromHdc(_dc);
-            _graphics.SmoothingMode = SmoothingMode.AntiAlias;
+            // A grabber that fails here is never disposed, so free the handles now
+            try
+            {
+                // Negative height: top-down rows, matching what the encoder expects
+                var info = new BITMAPINFOHEADER { Size = 40, Width = region.Width, Height = -region.Height, Planes = 1, BitCount = 32 };
+                _bitmap = CreateDIBSection(_dc, ref info, 0, out var bits, IntPtr.Zero, 0);
+                if (_bitmap == IntPtr.Zero) throw new System.ComponentModel.Win32Exception();
+                Bits = bits;
+                Stride = region.Width * 4;
+                _old = SelectObject(_dc, _bitmap);
+                _graphics = Graphics.FromHdc(_dc);
+                _graphics.SmoothingMode = SmoothingMode.AntiAlias;
+            }
+            catch
+            {
+                if (_old != IntPtr.Zero) SelectObject(_dc, _old);
+                if (_bitmap != IntPtr.Zero) DeleteObject(_bitmap);
+                DeleteDC(_dc);
+                throw;
+            }
         }
 
         public void Grab(IEnumerable<Click> clicks, long now)

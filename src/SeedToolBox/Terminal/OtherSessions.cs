@@ -1,4 +1,5 @@
 using System;
+using System.Collections.Generic;
 using System.IO;
 using System.IO.Ports;
 using System.Net.Sockets;
@@ -75,6 +76,7 @@ sealed class TelnetSession : ByteSession
     readonly string _user, _password;
     int _cols, _rows;
     bool _naws;
+    readonly HashSet<byte> _local = new(), _remote = new(); // options enabled on our side and on theirs
     bool _sentUser, _sentPassword;
     readonly StringBuilder _recent = new();
 
@@ -161,24 +163,30 @@ sealed class TelnetSession : ByteSession
 
     void Negotiate(byte verb, byte option)
     {
+        // Only answer requests that change an option's state (RFC 854), so hosts that repeat themselves don't loop.
         switch (verb)
         {
-            case DO when option is TTYPE or SGA:
+            case DO when option is TTYPE or SGA or NAWS:
+                if (!_local.Add(option)) break;
                 Send(IAC, WILL, option);
-                break;
-            case DO when option == NAWS:
-                Send(IAC, WILL, NAWS);
-                _naws = true;
-                SendSize();
+                if (option == NAWS) { _naws = true; SendSize(); }
                 break;
             case DO:
                 Send(IAC, WONT, option);
                 break;
+            case DONT:
+                if (!_local.Remove(option)) break;
+                Send(IAC, WONT, option);
+                if (option == NAWS) _naws = false;
+                break;
             case WILL when option is ECHO or SGA:
-                Send(IAC, DO, option);
+                if (_remote.Add(option)) Send(IAC, DO, option);
                 break;
             case WILL:
                 Send(IAC, DONT, option);
+                break;
+            case WONT:
+                if (_remote.Remove(option)) Send(IAC, DONT, option);
                 break;
         }
     }

@@ -146,6 +146,9 @@ sealed class DiffPage : DockPanel
         _onlyChanges.IsChecked == true && diff[i].Kind == ' '
         && !((i > 0 && diff[i - 1].Kind != ' ') || (i + 1 < diff.Count && diff[i + 1].Kind != ' '));
 
+    /// <summary>Above this many diff lines, unchanged lines are batched and word-level highlights skipped.</summary>
+    const int LargeDiff = 5000;
+
     static void AddGap(Paragraph paragraph)
     {
         if (paragraph.Inlines.LastInline is Run { Text: "  ⋯\n" }) return;
@@ -170,17 +173,27 @@ sealed class DiffPage : DockPanel
         var paragraph = new Paragraph { LineHeight = 18 };
         var hint = Views.DialogWindow.HintBrush;
         int width = Math.Max(r.A.Count, r.B.Count).ToString().Length;
+        // Large results: consecutive unchanged lines share one Run so the document stays small
+        bool large = r.Diff.Count > LargeDiff;
+        var plain = new StringBuilder();
         for (int i = 0; i < r.Diff.Count; i++)
         {
             var d = r.Diff[i];
+            if (large && d.Kind == ' ' && !Hidden(r.Diff, i))
+            {
+                plain.Append($"{d.Left.ToString().PadLeft(width)} {d.Right.ToString().PadLeft(width)}   {d.Text}\n");
+                continue;
+            }
+            if (plain.Length > 0) { paragraph.Inlines.Add(new Run(plain.ToString())); plain.Clear(); }
             if (Hidden(r.Diff, i)) { AddGap(paragraph); continue; }
             var numbers = new Run($"{(d.Left > 0 ? d.Left.ToString() : "").PadLeft(width)} {(d.Right > 0 ? d.Right.ToString() : "").PadLeft(width)} ") { Foreground = hint };
             paragraph.Inlines.Add(numbers);
             if (d.Kind != ' ' && (i == 0 || r.Diff[i - 1].Kind == ' ')) _changes.Add(numbers);
             paragraph.Inlines.Add(new Run(d.Kind + " ") { Background = d.Kind == '+' ? Added : d.Kind == '-' ? Removed : null });
             r.Segments.TryGetValue(i, out var segments);
-            AddText(paragraph, d.Kind, d.Text, segments);
+            AddText(paragraph, d.Kind, d.Text, large ? null : segments);
         }
+        if (plain.Length > 0) paragraph.Inlines.Add(new Run(plain.ToString()));
         _result.Document.Blocks.Clear();
         _result.Document.Blocks.Add(paragraph);
     }
@@ -192,9 +205,28 @@ sealed class DiffPage : DockPanel
         var hint = Views.DialogWindow.HintBrush;
         int width = Math.Max(r.A.Count, r.B.Count).ToString().Length;
         var diff = r.Diff;
+        bool large = diff.Count > LargeDiff;
+        var plainLeft = new StringBuilder();
+        var plainRight = new StringBuilder();
+        void Flush()
+        {
+            if (plainLeft.Length == 0) return;
+            left.Inlines.Add(new Run(plainLeft.ToString()));
+            right.Inlines.Add(new Run(plainRight.ToString()));
+            plainLeft.Clear();
+            plainRight.Clear();
+        }
         int i = 0;
         while (i < diff.Count)
         {
+            if (large && diff[i].Kind == ' ' && !Hidden(diff, i))
+            {
+                plainLeft.Append(diff[i].Left.ToString().PadLeft(width)).Append(' ').Append(r.A[diff[i].Left - 1]).Append('\n');
+                plainRight.Append(diff[i].Right.ToString().PadLeft(width)).Append(' ').Append(diff[i].Text).Append('\n');
+                i++;
+                continue;
+            }
+            Flush();
             if (diff[i].Kind == ' ')
             {
                 if (Hidden(diff, i)) { AddGap(left); AddGap(right); }
@@ -220,6 +252,7 @@ sealed class DiffPage : DockPanel
                 Side(right, diff, r, added, k, width);
             }
         }
+        Flush();
         _sideLeft.Document.Blocks.Clear();
         _sideLeft.Document.Blocks.Add(left);
         _sideRight.Document.Blocks.Clear();
@@ -291,7 +324,7 @@ sealed class DiffPage : DockPanel
             if (rightCount == 0) rightStart = diff.Take(start).Select(d => d.Right).DefaultIfEmpty(0).Max();
             sb.Append($"@@ -{Range(leftStart, leftCount)} +{Range(rightStart, rightCount)} @@\n");
             for (int k = start; k < end; k++)
-                sb.Append(diff[k].Kind).Append(diff[k].Kind == '-' ? _last.A[diff[k].Left - 1] : diff[k].Text).Append('\n');
+                sb.Append(diff[k].Kind).Append(diff[k].Kind != '+' ? _last.A[diff[k].Left - 1] : diff[k].Text).Append('\n');
             i = end;
         }
         return sb.ToString();

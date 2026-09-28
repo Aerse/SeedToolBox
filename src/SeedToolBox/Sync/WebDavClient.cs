@@ -1,4 +1,5 @@
 using System;
+using System.Linq;
 using System.Net;
 using System.Net.Http;
 using System.Net.Http.Headers;
@@ -33,6 +34,40 @@ sealed class WebDavClient : IDisposable
         if (response.StatusCode == HttpStatusCode.NotFound) return null;
         Check(response);
         return await response.Content.ReadAsByteArrayAsync();
+    }
+
+    /// <summary>The file with the version it was read at, for <see cref="PutIfUnchangedAsync"/>.</summary>
+    public async Task<DavFile> GetFileAsync(string path)
+    {
+        using var response = await _http.GetAsync(Url(path));
+        if (response.StatusCode == HttpStatusCode.NotFound) return new DavFile(null, null);
+        Check(response);
+        var tag = response.Headers.ETag;
+        // A weak tag can't be used with If-Match; compare the content instead
+        return new DavFile(await response.Content.ReadAsByteArrayAsync(), tag is { IsWeak: false } ? tag : null);
+    }
+
+    /// <summary>
+    /// Writes the file only if nobody changed it since <paramref name="read"/>; false means another computer got there
+    /// first and the caller should download, merge and try again. Uses If-Match when the server gives an ETag, otherwise
+    /// checks the content right before writing.
+    /// </summary>
+    public async Task<bool> PutIfUnchangedAsync(string path, byte[] data, DavFile read)
+    {
+        if (read.ETag == null && read.Data != null)
+        {
+            var current = await GetFileAsync(path);
+            if (current.Data == null || !current.Data.SequenceEqual(read.Data)) return false;
+        }
+        using var content = new ByteArrayContent(data);
+        content.Headers.ContentType = new MediaTypeHeaderValue("application/octet-stream");
+        using var request = new HttpRequestMessage(HttpMethod.Put, Url(path)) { Content = content };
+        if (read.ETag != null) request.Headers.IfMatch.Add(read.ETag);
+        else if (read.Data == null) request.Headers.IfNoneMatch.Add(EntityTagHeaderValue.Any);
+        using var response = await _http.SendAsync(request);
+        if (response.StatusCode == HttpStatusCode.PreconditionFailed) return false;
+        Check(response);
+        return true;
     }
 
     public async Task PutAsync(string path, byte[] data)
@@ -80,4 +115,12 @@ sealed class WebDavClient : IDisposable
     }
 
     public void Dispose() => _http.Dispose();
+}
+
+/// <summary>A file as downloaded: its content (null if missing) and its strong ETag if the server gave one.</summary>
+sealed class DavFile
+{
+    public DavFile(byte[]? data, EntityTagHeaderValue? etag) { Data = data; ETag = etag; }
+    public byte[]? Data { get; }
+    public EntityTagHeaderValue? ETag { get; }
 }

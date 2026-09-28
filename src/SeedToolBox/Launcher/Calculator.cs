@@ -8,7 +8,9 @@ namespace SeedToolBox.Launcher;
 public sealed class Calculator
 {
     readonly string _s;
-    int _pos;
+    int _pos, _depth;
+    /// <summary>Deep enough for any real expression; "-----…" or "((((…" would otherwise overflow the stack and end the process.</summary>
+    const int MaxDepth = 200;
 
     Calculator(string s) => _s = s;
 
@@ -79,9 +81,15 @@ public sealed class Calculator
     // unary := ('-' | '+') unary | power
     double Unary()
     {
-        if (Eat('-')) return -Unary();
-        if (Eat('+')) return Unary();
-        return Power();
+        // Every nesting (unary signs, brackets, powers, function arguments) passes through here
+        if (++_depth > MaxDepth) throw new FormatException("表达式嵌套过深");
+        try
+        {
+            if (Eat('-')) return -Unary();
+            if (Eat('+')) return Unary();
+            return Power();
+        }
+        finally { _depth--; }
     }
 
     // power := primary ('^' unary)?, right-associative so 2^3^2 = 2^9

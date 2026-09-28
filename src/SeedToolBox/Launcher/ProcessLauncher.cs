@@ -13,8 +13,9 @@ public static class ProcessLauncher
 
     public static string ExePath { get; } = Process.GetCurrentProcess().MainModule!.FileName;
 
+    /// <summary>Path, arguments and working directory may all use %VARIABLE%.</summary>
     public static bool Launch(LaunchItem item, bool asAdmin = false) =>
-        Start(item.Path, item.Arguments, item.Name, asAdmin || item.RunAsAdmin, item.WorkingDirectory);
+        Start(item.Path, Environment.ExpandEnvironmentVariables(item.Arguments ?? ""), item.Name, asAdmin || item.RunAsAdmin, item.WorkingDirectory);
 
     /// <summary>Starts a program/file/URL through the shell, reporting failures to the user. Returns true if started.</summary>
     public static bool Start(string path, string arguments = "", string? displayName = null, bool asAdmin = false, string? workingDirectory = null)
@@ -34,7 +35,7 @@ public static class ProcessLauncher
 
         try
         {
-            Process.Start(psi);
+            Process.Start(psi)?.Dispose();
             return true;
         }
         catch (Win32Exception ex) when (ex.NativeErrorCode == ERROR_CANCELLED)
@@ -58,7 +59,7 @@ public static class ProcessLauncher
     {
         path = Environment.ExpandEnvironmentVariables(path);
         if (File.Exists(path) || Directory.Exists(path))
-            Process.Start("explorer.exe", $"/select,\"{Path.GetFullPath(path)}\"");
+            Process.Start("explorer.exe", $"/select,\"{Path.GetFullPath(path)}\"")?.Dispose();
         else
             MessageBox.Show($"找不到路径：\n{path}", "SeedToolBox", MessageBoxButton.OK, MessageBoxImage.Warning);
     }

@@ -64,7 +64,7 @@ sealed class CaptureWindow : OverlayWindow
         _finder = finder;
         _mode = mode;
 
-        _layer = new AnnotationLayer(shot, service, () => Scale);
+        _layer = new AnnotationLayer(shot, service, () => SelectionScale);
         _layer.Content.Clip = _clipGeometry;
         _layer.ToolChanged += OnToolChanged;
         var mask = new Path
@@ -176,7 +176,7 @@ sealed class CaptureWindow : OverlayWindow
         void Update()
         {
             ToolbarUi.SetSelected(button!, get());
-            button.ToolTip = $"{tip}：{(get() ? "开" : "关")}";
+            button!.ToolTip = $"{tip}：{(get() ? "开" : "关")}";
             button.Child.Opacity = get() ? 1 : 0.4;
         }
         button = Button(glyph, tip, () =>
@@ -196,7 +196,7 @@ sealed class CaptureWindow : OverlayWindow
         // The encoder needs even dimensions
         int width = Math.Max(2, (int)_selection.Width & ~1), height = Math.Max(2, (int)_selection.Height & ~1);
         var region = new System.Drawing.Rectangle((int)_selection.X + Shot.X, (int)_selection.Y + Shot.Y, width, height);
-        double scale = Scale;
+        double scale = SelectionScale;
         _service.RememberRegion(region);
         Close();
         _service.StartRecording(region, scale);
@@ -250,12 +250,10 @@ sealed class CaptureWindow : OverlayWindow
     }
 
     /// <summary>Bounds of the monitor containing the selection, in Ui coordinates.</summary>
-    Rect MonitorOf(Rect pixelRect)
-    {
-        var center = new System.Drawing.Point((int)(pixelRect.X + pixelRect.Width / 2) + Shot.X, (int)(pixelRect.Y + pixelRect.Height / 2) + Shot.Y);
-        var b = WinForms.Screen.FromPoint(center).Bounds;
-        return UiRect(new Rect(b.X - Shot.X, b.Y - Shot.Y, b.Width, b.Height));
-    }
+    Rect MonitorOf(Rect pixelRect) => MonitorUi(new Point(pixelRect.X + pixelRect.Width / 2, pixelRect.Y + pixelRect.Height / 2));
+
+    /// <summary>DPI scale of the monitor the selection is on (the overlay's own may be another monitor's).</summary>
+    double SelectionScale => ScaleAt(new Point(_selection.X + _selection.Width / 2, _selection.Y + _selection.Height / 2));
 
     Rect UiRect(Rect pixel) => new(pixel.X / Scale, pixel.Y / Scale, pixel.Width / Scale, pixel.Height / Scale);
 
@@ -737,7 +735,13 @@ sealed class CaptureWindow : OverlayWindow
     {
         if (!_editing) return;
         var region = ScreenRegion;
-        double scale = Scale;
+        if (region.Width < 16 || region.Height < 16)
+        {
+            // Keep the overlay open so the selection can be enlarged
+            Toast.Show("选区太小，长截图需要至少 16×16 像素");
+            return;
+        }
+        double scale = SelectionScale;
         _service.RememberRegion(region);
         Close();
         _service.StartScrollCapture(region, scale);

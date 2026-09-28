@@ -305,6 +305,8 @@ sealed class AnnotationLayer
     {
         var modifiers = Keyboard.Modifiers;
         bool ctrl = modifiers.HasFlag(ModifierKeys.Control);
+        // Mid-drag the history would lose the move or shape in progress; swallow the keys until the mouse is up
+        if ((_moving || _drawing != null) && (ctrl && e.Key is Key.Z or Key.Y || e.Key is Key.Delete or Key.Back)) return true;
         if (ctrl && e.Key == Key.Z && modifiers.HasFlag(ModifierKeys.Shift)) Redo();
         else if (ctrl && e.Key == Key.Z) Undo();
         else if (ctrl && e.Key == Key.Y) Redo();
@@ -403,7 +405,7 @@ sealed class AnnotationLayer
         if (element is Shape { Tag: EffectTag, Stroke: ImageBrush brush } shape)
         {
             var moved = brush.Clone();
-            moved.Viewport = new Rect(-offset.X, -offset.Y, _source.Width, _source.Height);
+            moved.Viewport = new Rect(-offset.X, -offset.Y, brush.Viewport.Width, brush.Viewport.Height);
             moved.Freeze();
             shape.Stroke = moved;
         }
@@ -464,11 +466,14 @@ sealed class AnnotationLayer
             case AnnotationTool.Blur:
             {
                 // Painting with a pixelated or blurred copy of the image reveals it wherever the brush goes
-                var image = Tool == AnnotationTool.Mosaic ? _source.Mosaic(Math.Max(6, (int)(10 * Scale))) : _source.Blurred();
+                int cell = Math.Max(6, (int)(10 * Scale));
+                var image = Tool == AnnotationTool.Mosaic ? _source.Mosaic(cell) : _source.Blurred();
+                // The mosaic has one pixel per cell and may overhang the image by part of a cell
+                var extent = Tool == AnnotationTool.Mosaic ? new Size(image.PixelWidth * cell, image.PixelHeight * cell) : new Size(_source.Width, _source.Height);
                 var brush = new ImageBrush(image)
                 {
                     ViewportUnits = BrushMappingMode.Absolute,
-                    Viewport = new Rect(0, 0, _source.Width, _source.Height),
+                    Viewport = new Rect(extent),
                     Stretch = Stretch.Fill,
                 };
                 RenderOptions.SetBitmapScalingMode(brush, Tool == AnnotationTool.Mosaic ? BitmapScalingMode.NearestNeighbor : BitmapScalingMode.HighQuality);
@@ -570,12 +575,14 @@ sealed class AnnotationLayer
         return g;
     }
 
-    /// <summary>A numbered circle; numbers continue from the markers already placed.</summary>
+    /// <summary>A numbered circle; numbers continue from the highest marker already placed.</summary>
     void AddStep(Point p)
     {
         int number = 1;
         foreach (UIElement child in Content.Children)
-            if (child is FrameworkElement { Tag: StepTag }) number++;
+            if (child is Grid { Tag: StepTag } step)
+                foreach (UIElement part in step.Children)
+                    if (part is TextBlock label && int.TryParse(label.Text, out int n)) number = Math.Max(number, n + 1);
         double size = StepSizes[SizeIndex] * Scale;
         var color = PenColor;
         // Dark digits on light colours

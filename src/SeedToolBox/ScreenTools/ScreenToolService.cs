@@ -70,6 +70,12 @@ public sealed partial class ScreenToolService
 
     static bool CheckOcr()
     {
+        // Loading the models takes a moment: do it in the background and let recognition (off the UI thread) find out
+        if (!PaddleOcr.IsLoaded)
+        {
+            PaddleOcr.Preload();
+            return true;
+        }
         if (TextRecognizer.IsAvailable) return true;
         MessageBox.Show("文字识别组件加载失败（详见日志）；在 Windows 10 及以上版本可改用系统自带识别，需安装至少一种支持 OCR 的语言（设置 → 时间和语言 → 语言）", "SeedToolBox", MessageBoxButton.OK, MessageBoxImage.Warning);
         return false;

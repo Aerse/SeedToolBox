@@ -8,11 +8,12 @@ public sealed partial class ScreenToolService
     ScrollCaptureSession? _scroll;
 
     /// <summary>Opens the image in an editor window; with <paramref name="done"/> the result is handed back.</summary>
-    public void Edit(BitmapSource image, Action<BitmapSource>? done = null)
+    public System.Windows.Window Edit(BitmapSource image, Action<BitmapSource>? done = null)
     {
         var window = new ImageEditorWindow(image, this, done);
         window.Show();
         window.Activate();
+        return window;
     }
 
     internal void StartScrollCapture(System.Drawing.Rectangle region, double scale)

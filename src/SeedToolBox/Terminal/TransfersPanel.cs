@@ -94,9 +94,12 @@ static class Packer
     public static string Error(string output) =>
         string.Join(" ", output.Replace("\r", "").Split('\n').Where(l => l.Trim().Length > 0 && !l.StartsWith("__rc=")).Take(3)) is { Length: > 0 } e ? e : "tar 出错";
 
+    /// <summary>Quoted for the Windows command line; trailing backslashes are doubled so they don't escape the closing quote, and C:\ stays the root.</summary>
+    static string Arg(string a) => "\"" + a + new string('\\', a.Length - a.TrimEnd('\\').Length) + "\"";
+
     public static System.Threading.Tasks.Task RunTar(CancellationToken cancel, params string[] args) => System.Threading.Tasks.Task.Run(() =>
     {
-        var psi = new ProcessStartInfo(LocalTar!, string.Join(" ", args.Select(a => "\"" + a.TrimEnd('\\') + "\"")))
+        var psi = new ProcessStartInfo(LocalTar!, string.Join(" ", args.Select(Arg)))
         {
             UseShellExecute = false, CreateNoWindow = true, RedirectStandardError = true,
         };
@@ -169,7 +172,10 @@ sealed class TransfersPanel : DockPanel
         _list.ContextMenu = new ContextMenu();
         Children.Add(_list);
 
-        Transfers.Changed += () => Dispatcher.BeginInvoke(Update);
+        // Subscribed only while shown, so the static event doesn't keep a closed page alive.
+        Action changed = () => Dispatcher.BeginInvoke(Update);
+        Loaded += (_, _) => { Transfers.Changed -= changed; Transfers.Changed += changed; Update(); };
+        Unloaded += (_, _) => Transfers.Changed -= changed;
         Update();
     }
 

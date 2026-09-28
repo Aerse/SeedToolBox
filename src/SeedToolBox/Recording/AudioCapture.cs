@@ -16,6 +16,8 @@ sealed class AudioCapture : IDisposable
     readonly IAudioCaptureClient _capture;
     readonly int _rate, _channels, _bits, _blockAlign;
     readonly bool _float;
+    // How much each device channel contributes to the left and right output
+    readonly float[] _gainL, _gainR;
     readonly Thread _thread;
     volatile bool _stop;
 
@@ -24,8 +26,11 @@ sealed class AudioCapture : IDisposable
     float _lastL, _lastR;
     byte[] _bytes = new byte[0];
 
-    /// <summary>Raised on the capture thread with interleaved stereo floats (length = frames × 2).</summary>
-    public event Action<float[], int>? Data;
+    /// <summary>
+    /// Raised on the capture thread with interleaved stereo floats (length = frames × 2) and the
+    /// performance-counter time of the first frame, in 100 ns units.
+    /// </summary>
+    public event Action<float[], int, long>? Data;
 
     public AudioCapture(bool loopback)
     {
@@ -41,35 +46,48 @@ sealed class AudioCapture : IDisposable
         }
 
         var iid = typeof(IAudioClient).GUID;
-        device.Activate(ref iid, 0x17 /* CLSCTX_ALL */, IntPtr.Zero, out var client);
-        Marshal.ReleaseComObject(device);
+        object client;
+        try { device.Activate(ref iid, 0x17 /* CLSCTX_ALL */, IntPtr.Zero, out client); }
+        finally { Marshal.ReleaseComObject(device); }
         _client = (IAudioClient)client;
 
-        _client.GetMixFormat(out var format);
+        // A half-built capture is never disposed, so let go of the client here if the device refuses
         try
         {
-            int tag = Marshal.ReadInt16(format);
-            _channels = Marshal.ReadInt16(format, 2);
-            _rate = Marshal.ReadInt32(format, 4);
-            _blockAlign = Marshal.ReadInt16(format, 12);
-            _bits = Marshal.ReadInt16(format, 14);
-            _float = tag == 3;
-            if (tag == unchecked((short)0xFFFE))
+            _client.GetMixFormat(out var format);
+            try
             {
-                var sub = (Guid)Marshal.PtrToStructure(format + 24, typeof(Guid));
-                _float = sub == new Guid("00000003-0000-0010-8000-00aa00389b71");
+                int tag = Marshal.ReadInt16(format);
+                _channels = Marshal.ReadInt16(format, 2);
+                _rate = Marshal.ReadInt32(format, 4);
+                _blockAlign = Marshal.ReadInt16(format, 12);
+                _bits = Marshal.ReadInt16(format, 14);
+                _float = tag == 3;
+                int mask = 0;
+                if (tag == unchecked((short)0xFFFE))
+                {
+                    mask = Marshal.ReadInt32(format, 20);
+                    var sub = (Guid)Marshal.PtrToStructure(format + 24, typeof(Guid));
+                    _float = sub == new Guid("00000003-0000-0010-8000-00aa00389b71");
+                }
+                (_gainL, _gainR) = DownmixGains(_channels, mask);
+                // 200 ms buffer, polled every 10 ms
+                _client.Initialize(0, loopback ? 0x00020000 : 0, 2_000_000, 0, format, IntPtr.Zero);
             }
-            // 200 ms buffer, polled every 10 ms
-            _client.Initialize(0, loopback ? 0x00020000 : 0, 2_000_000, 0, format, IntPtr.Zero);
-        }
-        finally
-        {
-            Marshal.FreeCoTaskMem(format);
-        }
+            finally
+            {
+                Marshal.FreeCoTaskMem(format);
+            }
 
-        var captureIid = typeof(IAudioCaptureClient).GUID;
-        _client.GetService(ref captureIid, out var capture);
-        _capture = (IAudioCaptureClient)capture;
+            var captureIid = typeof(IAudioCaptureClient).GUID;
+            _client.GetService(ref captureIid, out var capture);
+            _capture = (IAudioCaptureClient)capture;
+        }
+        catch
+        {
+            Marshal.ReleaseComObject(_client);
+            throw;
+        }
         _thread = new Thread(Run) { IsBackground = true, Name = loopback ? "Loopback capture" : "Microphone capture" };
         _thread.SetApartmentState(ApartmentState.MTA);
     }
@@ -83,6 +101,7 @@ sealed class AudioCapture : IDisposable
     void Run()
     {
         var output = new List<float>(4096);
+        long firstTime = 0;
         try
         {
             while (!_stop)
@@ -92,14 +111,16 @@ sealed class AudioCapture : IDisposable
                 {
                     _capture.GetNextPacketSize(out int packet);
                     if (packet == 0) break;
-                    _capture.GetBuffer(out var data, out int frames, out int flags, out _, out _);
+                    _capture.GetBuffer(out var data, out int frames, out int flags, out _, out long qpc);
+                    // AUDCLNT_BUFFERFLAGS_TIMESTAMP_ERROR: no usable time, assume the packet is fresh
+                    if (output.Count == 0) firstTime = (flags & 0x4) != 0 || qpc <= 0 ? Now() : qpc;
                     // AUDCLNT_BUFFERFLAGS_SILENT: the data is to be treated as zeros
                     Convert(data, frames, (flags & 0x2) != 0, output);
                     _capture.ReleaseBuffer(frames);
                 }
                 if (output.Count > 0)
                 {
-                    Data?.Invoke(output.ToArray(), output.Count / 2);
+                    Data?.Invoke(output.ToArray(), output.Count / 2, firstTime);
                     output.Clear();
                 }
             }
@@ -125,8 +146,15 @@ sealed class AudioCapture : IDisposable
             float l = 0, r = 0;
             if (!silent)
             {
-                l = Read(i, 0);
-                r = _channels > 1 ? Read(i, 1) : l;
+                for (int c = 0; c < _channels; c++)
+                {
+                    if (_gainL[c] == 0 && _gainR[c] == 0) continue;
+                    float v = Read(i, c);
+                    l += v * _gainL[c];
+                    r += v * _gainR[c];
+                }
+                l = Math.Max(-1f, Math.Min(1f, l));
+                r = Math.Max(-1f, Math.Min(1f, r));
             }
             // Emit every output sample that falls between the previous input frame and this one
             while (_phase < 1)
@@ -139,6 +167,49 @@ sealed class AudioCapture : IDisposable
             _lastL = l;
             _lastR = r;
         }
+    }
+
+    /// <summary>Performance-counter time in 100 ns units, the clock WASAPI timestamps use.</summary>
+    public static long Now() => (long)(System.Diagnostics.Stopwatch.GetTimestamp() * 10_000_000.0 / System.Diagnostics.Stopwatch.Frequency);
+
+    /// <summary>Standard stereo downmix: centre and surrounds at -3 dB, LFE dropped.</summary>
+    static (float[] L, float[] R) DownmixGains(int channels, int mask)
+    {
+        var l = new float[channels];
+        var r = new float[channels];
+        if (channels == 1)
+        {
+            l[0] = r[0] = 1;
+            return (l, r);
+        }
+        // No mask: assume the usual layouts, anything else is just its first two channels
+        if (mask == 0) mask = channels switch { 2 => 0x3, 6 => 0x3F, 8 => 0x63F, _ => 0 };
+        if (mask == 0 || channels == 2)
+        {
+            l[0] = 1;
+            r[1] = 1;
+            return (l, r);
+        }
+
+        const float Half = 0.7071f;
+        int c = 0;
+        // Channels appear in the order of their mask bits
+        for (int bit = 0; bit < 32 && c < channels; bit++)
+        {
+            int speaker = 1 << bit;
+            if ((mask & speaker) == 0) continue;
+            switch (speaker)
+            {
+                case 0x1: case 0x40: l[c] = 1; break;                   // front left, front left of centre
+                case 0x2: case 0x80: r[c] = 1; break;                   // front right, front right of centre
+                case 0x4: l[c] = r[c] = Half; break;                    // front centre
+                case 0x10: case 0x200: l[c] = Half; break;              // back left, side left
+                case 0x20: case 0x400: r[c] = Half; break;              // back right, side right
+                case 0x100: l[c] = r[c] = 0.5f; break;                  // back centre
+            }
+            c++;
+        }
+        return (l, r);
     }
 
     float Read(int frame, int channel)

@@ -16,7 +16,16 @@ static class AudioDevices
     const int Render = 0, Capture = 1, Active = 1;
     static Guid _context = Guid.Empty;
 
-    static IMMDeviceEnumerator Enumerator() => (IMMDeviceEnumerator)new MMDeviceEnumeratorCom();
+    /// <summary>One per thread (the page and the AI tools call from the UI thread and the pool); kept, since every volume step needs one.</summary>
+    [ThreadStatic] static IMMDeviceEnumerator? _enumerator;
+
+    static IMMDeviceEnumerator Enumerator() => _enumerator ??= (IMMDeviceEnumerator)new MMDeviceEnumeratorCom();
+
+    /// <summary>Releases a COM object now instead of whenever the finalizer gets to it; slider drags create many.</summary>
+    static void Release(object? o)
+    {
+        if (o != null && Marshal.IsComObject(o)) Marshal.ReleaseComObject(o);
+    }
 
     public static List<AudioDevice> Outputs() => List(Render);
     public static List<AudioDevice> Inputs() => List(Capture);
@@ -25,82 +34,99 @@ static class AudioDevices
     {
         var enumerator = Enumerator();
         string? defaultId = null;
+        IMMDevice? current = null;
         try
         {
-            enumerator.GetDefaultAudioEndpoint(flow, 1, out var device);
-            device.GetId(out defaultId);
+            enumerator.GetDefaultAudioEndpoint(flow, 1, out current);
+            current.GetId(out defaultId);
         }
         catch (COMException) { } // no device of this kind
+        finally { Release(current); }
         enumerator.EnumAudioEndpoints(flow, Active, out var collection);
-        collection.GetCount(out var count);
         var list = new List<AudioDevice>();
-        for (uint i = 0; i < count; i++)
+        try
         {
-            collection.Item(i, out var device);
-            device.GetId(out var id);
-            list.Add(new AudioDevice(id, FriendlyName(device), id == defaultId));
+            collection.GetCount(out var count);
+            for (uint i = 0; i < count; i++)
+            {
+                IMMDevice? device = null;
+                try
+                {
+                    collection.Item(i, out device);
+                    device.GetId(out var id);
+                    list.Add(new AudioDevice(id, FriendlyName(device), id == defaultId));
+                }
+                finally { Release(device); }
+            }
         }
+        finally { Release(collection); }
         return list;
     }
 
     static string FriendlyName(IMMDevice device)
     {
         device.OpenPropertyStore(0, out var store);
-        var key = new PropertyKey { fmtid = new Guid("a45c254e-df1c-4efd-8020-67d146a850e0"), pid = 14 };
-        store.GetValue(ref key, out var value);
-        try { return value.vt == 31 ? Marshal.PtrToStringUni(value.p) ?? "" : "未知设备"; }
-        finally { PropVariantClear(ref value); }
+        try
+        {
+            var key = new PropertyKey { fmtid = new Guid("a45c254e-df1c-4efd-8020-67d146a850e0"), pid = 14 };
+            store.GetValue(ref key, out var value);
+            try { return value.vt == 31 ? Marshal.PtrToStringUni(value.p) ?? "" : "未知设备"; }
+            finally { PropVariantClear(ref value); }
+        }
+        finally { Release(store); }
     }
 
     /// <summary>Makes the device the default for every role, like the sound settings do.</summary>
     public static void SetDefault(string id)
     {
         var policy = (IPolicyConfig)new PolicyConfigCom();
-        for (int role = 0; role < 3; role++) policy.SetDefaultEndpoint(id, role);
+        try { for (int role = 0; role < 3; role++) policy.SetDefaultEndpoint(id, role); }
+        finally { Release(policy); }
     }
 
-    static IAudioEndpointVolume? Volume(string? id, int flow)
+    /// <summary>Runs <paramref name="use"/> on the device's volume control, released right after; the fallback if there is no such device.</summary>
+    static T WithVolume<T>(string? id, int flow, T fallback, Func<IAudioEndpointVolume, T> use)
     {
+        IMMDevice? device = null;
+        object? o = null;
         try
         {
             var enumerator = Enumerator();
-            IMMDevice device;
             if (id == null) enumerator.GetDefaultAudioEndpoint(flow, 1, out device);
             else enumerator.GetDevice(id, out device);
             var iid = typeof(IAudioEndpointVolume).GUID;
-            device.Activate(ref iid, 1, IntPtr.Zero, out var o);
-            return (IAudioEndpointVolume)o;
+            device.Activate(ref iid, 1, IntPtr.Zero, out o);
+            return use((IAudioEndpointVolume)o);
         }
-        catch (COMException) { return null; }
+        catch (COMException) { return fallback; }
+        finally
+        {
+            Release(o);
+            Release(device);
+        }
     }
 
-    public static float GetVolume(string? id, bool input = false)
-    {
-        if (Volume(id, input ? Capture : Render) is not { } v) return 0;
-        v.GetMasterVolumeLevelScalar(out var level);
-        return level;
-    }
+    public static float GetVolume(string? id, bool input = false) =>
+        WithVolume(id, input ? Capture : Render, 0f, v => { v.GetMasterVolumeLevelScalar(out var level); return level; });
 
     public static void SetVolume(string? id, float level, bool input = false) =>
-        Volume(id, input ? Capture : Render)?.SetMasterVolumeLevelScalar(Math.Max(0, Math.Min(1, level)), ref _context);
+        WithVolume(id, input ? Capture : Render, false, v => { v.SetMasterVolumeLevelScalar(Math.Max(0, Math.Min(1, level)), ref _context); return true; });
 
-    public static bool GetMute(string? id, bool input = false)
-    {
-        if (Volume(id, input ? Capture : Render) is not { } v) return false;
-        v.GetMute(out var muted);
-        return muted;
-    }
+    public static bool GetMute(string? id, bool input = false) =>
+        WithVolume(id, input ? Capture : Render, false, v => { v.GetMute(out var muted); return muted; });
 
     public static void SetMute(string? id, bool muted, bool input = false) =>
-        Volume(id, input ? Capture : Render)?.SetMute(muted, ref _context);
+        WithVolume(id, input ? Capture : Render, false, v => { v.SetMute(muted, ref _context); return true; });
 
     /// <summary>Apps playing on the default output device.</summary>
     public static List<AudioSession> Sessions()
     {
         var list = new List<AudioSession>();
         var enumerator = Enumerator();
-        try { enumerator.GetDefaultAudioEndpoint(Render, 1, out var device); Collect(device, list); }
+        IMMDevice? device = null;
+        try { enumerator.GetDefaultAudioEndpoint(Render, 1, out device); Collect(device, list); }
         catch (COMException) { }
+        finally { Release(device); }
         return list;
     }
 
@@ -108,22 +134,38 @@ static class AudioDevices
     {
         var iid = typeof(IAudioSessionManager2).GUID;
         device.Activate(ref iid, 1, IntPtr.Zero, out var o);
-        ((IAudioSessionManager2)o).GetSessionEnumerator(out var sessions);
-        sessions.GetCount(out var count);
-        for (int i = 0; i < count; i++)
+        IAudioSessionEnumerator? sessions = null;
+        try
         {
-            sessions.GetSession(i, out var session);
-            session.GetState(out var state);
-            if (state == 2) continue; // expired
-            session.GetProcessId(out var pid);
-            bool system = session.IsSystemSoundsSession() == 0;
-            session.GetDisplayName(out var display);
-            var control = (ISimpleAudioVolumeCom)session;
-            control.GetMasterVolume(out var volume);
-            control.GetMute(out var muted);
-            var name = system ? "系统声音" : ProcessName(pid, display);
-            if (name == null) continue;
-            list.Add(new AudioSession(pid, name, volume, muted, control));
+            ((IAudioSessionManager2)o).GetSessionEnumerator(out sessions);
+            sessions.GetCount(out var count);
+            for (int i = 0; i < count; i++)
+            {
+                sessions.GetSession(i, out var session);
+                bool kept = false;
+                try
+                {
+                    session.GetState(out var state);
+                    if (state == 2) continue; // expired
+                    session.GetProcessId(out var pid);
+                    bool system = session.IsSystemSoundsSession() == 0;
+                    session.GetDisplayName(out var display);
+                    var control = (ISimpleAudioVolumeCom)session;
+                    control.GetMasterVolume(out var volume);
+                    control.GetMute(out var muted);
+                    var name = system ? "系统声音" : ProcessName(pid, display);
+                    if (name == null) continue;
+                    // Kept alive by the entry, which uses it to change the app's volume
+                    list.Add(new AudioSession(pid, name, volume, muted, control));
+                    kept = true;
+                }
+                finally { if (!kept) Release(session); }
+            }
+        }
+        finally
+        {
+            Release(sessions);
+            Release(o);
         }
     }
 

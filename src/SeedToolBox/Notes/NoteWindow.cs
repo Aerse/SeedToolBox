@@ -226,7 +226,8 @@ sealed class NoteWindow : Window
         _note.Top = Top;
         _note.Width = ActualWidth;
         _note.Height = ActualHeight;
-        _store.RequestSave();
+        // Only the placement changed: nothing to refresh
+        _store.RequestSave(notify: false);
     }
 
     void KeepOnScreen()

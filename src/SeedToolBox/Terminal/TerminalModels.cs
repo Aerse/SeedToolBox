@@ -184,7 +184,12 @@ static class Secret
         foreach (var h in root["Hosts"] as JArray ?? new JArray())
             foreach (var f in Fields)
                 if (h[f] is JValue { Type: JTokenType.String } v && ((string)v!).Length > 0 && !((string)v!).StartsWith(PlainPrefix))
-                    h[f] = PlainPrefix + SyncCrypto.Unprotect((string)v!);
+                {
+                    // Protect("") is "", so an empty result means this Windows account cannot decrypt it (copied Data folder):
+                    // keep the original rather than syncing an empty password over the other computers.
+                    var plain = SyncCrypto.Unprotect((string)v!);
+                    if (plain.Length > 0) h[f] = PlainPrefix + plain;
+                }
     }
 }
 

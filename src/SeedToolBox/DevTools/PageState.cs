@@ -107,7 +107,11 @@ static class PageState
         try
         {
             Directory.CreateDirectory(AppPaths.Data);
-            File.WriteAllText(FilePath, JsonConvert.SerializeObject(All));
+            // Temp file + replace, so being killed mid-write can't leave a truncated file
+            var tmp = FilePath + ".tmp";
+            File.WriteAllText(tmp, JsonConvert.SerializeObject(All));
+            if (File.Exists(FilePath)) File.Replace(tmp, FilePath, null);
+            else File.Move(tmp, FilePath);
         }
         catch (Exception ex) { Log.Error("Saving page state failed", ex); }
     }

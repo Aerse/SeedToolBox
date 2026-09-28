@@ -33,6 +33,12 @@ public partial class App : Application
     const string ModuleHotkeysFile = "module-hotkeys";
     Action? _saveModuleHotkeys;
     readonly List<HotkeyBinding> _hotkeys = new();
+    EventWaitHandle? _showEvent;
+    /// <summary>Set by <see cref="Restart"/>: the windows were already prepared, and after a restore nothing may be written.</summary>
+    bool _restarting, _noSaveOnExit;
+    /// <summary>Warnings collected during startup and shown in one balloon, since each balloon replaces the last.</summary>
+    List<string>? _startupWarnings = new();
+    const string WaitForArg = "--wait-for";
 
     /// <summary>A configurable global hotkey and the tray command it mirrors.</summary>
     sealed class HotkeyBinding
@@ -57,15 +63,52 @@ public partial class App : Application
 
     protected override void OnStartup(StartupEventArgs e)
     {
+        WaitForPreviousInstance(e.Args);
         _mutex = new Mutex(true, MutexName, out bool isFirst);
         if (!isFirst)
         {
-            // Already running: ask the existing instance to show its window
-            if (EventWaitHandle.TryOpenExisting(ShowEventName, out var evt)) evt.Set();
+            // Already running: ask the existing instance to show its window. It creates the event right after
+            // taking the mutex, but may not have got that far yet
+            for (int i = 0; i < 20; i++)
+            {
+                if (EventWaitHandle.TryOpenExisting(ShowEventName, out var evt)) { evt.Set(); break; }
+                Thread.Sleep(100);
+            }
             Shutdown();
             return;
         }
+        // Created right away so a second instance started meanwhile can already signal it
+        _showEvent = new EventWaitHandle(false, EventResetMode.AutoReset, ShowEventName);
 
+        try
+        {
+            Start(e);
+        }
+        catch (Exception ex)
+        {
+            // Otherwise the process lives on without windows, holding the mutex so the app can't be started again
+            Log.Error("Startup failed", ex);
+            MessageBox.Show($"启动失败：{ex.Message}\n详情见 Data\\Logs\\app.log", "SeedToolBox", MessageBoxButton.OK, MessageBoxImage.Error);
+            _noSaveOnExit = true;
+            Shutdown();
+        }
+    }
+
+    /// <summary>After a restart, waits for the old process so it can't hold the hotkeys or write the data files meanwhile.</summary>
+    static void WaitForPreviousInstance(string[] args)
+    {
+        int index = Array.IndexOf(args, WaitForArg);
+        if (index < 0 || index + 1 >= args.Length || !int.TryParse(args[index + 1], out var pid)) return;
+        try
+        {
+            using var old = System.Diagnostics.Process.GetProcessById(pid);
+            old.WaitForExit(15000);
+        }
+        catch (Exception ex) when (ex is ArgumentException or InvalidOperationException) { } // Already gone
+    }
+
+    void Start(StartupEventArgs e)
+    {
         Log.Init(AppPaths.Logs);
         Log.Info("Starting");
         DispatcherUnhandledException += OnUnhandledException;
@@ -75,6 +118,9 @@ public partial class App : Application
         ListenForShowRequests();
         base.OnStartup(e);
 
+        // Before anything reads the data files
+        try { DataBackup.ApplyPending(); }
+        catch (Exception ex) { Log.Error("Failed to apply restored data", ex); Warn($"恢复数据未能完成：{ex.Message}"); }
         Sync.SyncService.ApplyPending();
         var settings = new JsonSettingsStore(AppPaths.Data);
         var data = settings.Load<LauncherData>(LauncherData.SettingsName);
@@ -241,9 +287,9 @@ public partial class App : Application
             toolbox.SetToolHotkey(binding.Command, binding.Get());
         }
         if (taken.Count > 0)
-            _tray.ShowMessage($"热键已被其他程序占用：{string.Join("、", taken)}。可在「设置」页中更换");
+            Warn($"热键已被其他程序占用：{string.Join("、", taken)}。可在「设置」页中更换");
         if (main.RegisterItemHotkeys() is { Count: > 0 } itemTaken)
-            _tray.ShowMessage($"启动项快捷键已被占用：{string.Join("、", itemTaken)}");
+            Warn($"启动项快捷键已被占用：{string.Join("、", itemTaken)}");
 
         var moduleHotkeys = settings.Load<Dictionary<string, string>>(ModuleHotkeysFile);
         _saveModuleHotkeys = () => settings.Save(ModuleHotkeysFile, moduleHotkeys);
@@ -266,20 +312,39 @@ public partial class App : Application
             {
                 var binding = new HotkeyBinding("module:" + id, label,
                     () => moduleHotkeys.TryGetValue(id, out var v) ? v : fallback, v => moduleHotkeys[id] = v, pressed);
+                var value = binding.Get();
+                // Checked here like in SetHotkey: registering would fail too, but the message would blame another program
+                var clash = value.Length > 0 ? _hotkeys.FirstOrDefault(h => h.Get() == value)?.Label ?? main.ItemHotkeyOwner(value) : null;
                 _hotkeys.Add(binding);
-                if (!binding.Register(binding.Get()) && binding.Get().Length > 0)
-                    _tray.ShowMessage($"热键已被其他程序占用：{label} {binding.Get()}。可在「设置」页中更换");
+                if (clash != null)
+                    Warn($"{label} 的热键 {value} 已用于「{clash}」，未启用。可在「设置」页中更换");
+                else if (!binding.Register(value) && value.Length > 0)
+                    Warn($"热键已被其他程序占用：{label} {value}。可在「设置」页中更换");
             },
         }));
         _modules.LoadAll();
 
-        try { DataBackup.AutoBackup(); }
-        catch (Exception ex) { Log.Error("Automatic backup failed", ex); }
+        // Can take a while with a lot of data, so it mustn't hold up the start
+        System.Threading.Tasks.Task.Run(() =>
+        {
+            try { DataBackup.AutoBackup(); }
+            catch (Exception ex) { Log.Error("Automatic backup failed", ex); }
+        });
 
         noteWindows.RestoreOpen();
 
         if (!e.Args.Contains(AutoStart.BackgroundArg))
             _main.Show();
+
+        if (_startupWarnings!.Count > 0) _tray.ShowMessage(string.Join("\n", _startupWarnings));
+        _startupWarnings = null;
+    }
+
+    /// <summary>Shows a warning in the tray; during startup they are collected and shown together.</summary>
+    void Warn(string message)
+    {
+        if (_startupWarnings != null) _startupWarnings.Add(message);
+        else _tray?.ShowMessage(message);
     }
 
     const int CurrentHotkeyDefaults = 1;
@@ -403,13 +468,17 @@ public partial class App : Application
     void Restart(string reason, bool save = true)
     {
         Log.Info(reason);
-        if (save) { _notes?.Flush(); _main?.PrepareSave(); }
+        _restarting = true;
+        _noSaveOnExit = !save;
+        if (save) { _notes?.Flush(); _main?.PrepareSave(); _toolbox?.PrepareExit(); }
         _main?.PrepareExit(false);
-        _toolbox?.PrepareExit();
+        // Released now rather than in OnExit, which runs only after the new instance has started
+        foreach (var binding in _hotkeys) binding.Hotkey.Dispose();
         _mutex?.ReleaseMutex();
         _mutex?.Dispose();
         _mutex = null;
-        System.Diagnostics.Process.Start(ProcessLauncher.ExePath);
+        // The new instance waits for this one to exit, so whatever is still written on the way out lands first
+        System.Diagnostics.Process.Start(ProcessLauncher.ExePath, $"{WaitForArg} {System.Diagnostics.Process.GetCurrentProcess().Id}");
         Shutdown();
     }
 
@@ -428,7 +497,7 @@ public partial class App : Application
 
     void ListenForShowRequests()
     {
-        var evt = new EventWaitHandle(false, EventResetMode.AutoReset, ShowEventName);
+        var evt = _showEvent!;
         new Thread(() =>
         {
             while (evt.WaitOne())
@@ -445,19 +514,41 @@ public partial class App : Application
 
     void ExitApp()
     {
+        // Also done in OnExit, but by then the windows may be closed already
         _main?.PrepareExit();
         _toolbox?.PrepareExit();
         Shutdown();
     }
 
+    /// <summary>Logging off or shutting down Windows: save now, the process may not get as far as OnExit.</summary>
+    protected override void OnSessionEnding(SessionEndingCancelEventArgs e)
+    {
+        base.OnSessionEnding(e);
+        if (e.Cancel || _noSaveOnExit) return;
+        _main?.PrepareSave();
+        _toolbox?.PrepareExit();
+        _notes?.Flush();
+    }
+
     protected override void OnExit(ExitEventArgs e)
     {
+        // Every way out (tray menu, Windows shutting down) saves the launcher and page inputs; Restart has done it already
+        if (!_restarting && !_noSaveOnExit)
+        {
+            _main?.PrepareExit();
+            _toolbox?.PrepareExit();
+        }
         _modules?.ShutdownAll();
         SystemTools.LocalServices.StopAll();
-        foreach (var binding in _hotkeys) binding.Hotkey.Dispose();
+        // Restart has released them already
+        if (!_restarting) foreach (var binding in _hotkeys) binding.Hotkey.Dispose();
         _clipboard?.Dispose();
-        _noteWindows?.CloseAllForExit();
-        _notes?.Flush();
+        // After a restore the old in-memory notes must not be written back
+        if (!_noSaveOnExit)
+        {
+            _noteWindows?.CloseAllForExit();
+            _notes?.Flush();
+        }
         _tray?.Dispose();
         _mutex?.Dispose();
         Log.Info("Exited");

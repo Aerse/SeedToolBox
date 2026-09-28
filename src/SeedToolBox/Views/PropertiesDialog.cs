@@ -37,7 +37,7 @@ public static class PropertiesDialog
         AddRow(grid, "目标", path, Browse("浏览...", () => PickFile(window!, path, "所有文件|*.*")));
         AddRow(grid, "参数", args);
         AddRow(grid, "起始位置", workDir, Browse("浏览...", () => PickFolder(workDir)));
-        AddRow(grid, "图标", icon, Browse("浏览...", () => PickFile(window!, icon, "图标|*.ico;*.png;*.exe;*.dll|所有文件|*.*")));
+        AddRow(grid, "图标", icon, Browse("浏览...", () => PickFile(window!, icon, "图标|*.ico;*.png;*.jpg;*.jpeg;*.bmp;*.gif;*.exe;*.dll|所有文件|*.*")));
         AddRow(grid, "备注", remarks);
         AddRow(grid, "", admin);
 

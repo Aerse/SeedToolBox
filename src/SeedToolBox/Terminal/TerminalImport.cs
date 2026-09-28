@@ -52,6 +52,9 @@ static class TerminalImport
         foreach (var pair in jumps)
         {
             var target = pair.Value.Contains('@') ? pair.Value.Substring(pair.Value.IndexOf('@') + 1) : pair.Value;
+            // Drop a port: host:2222 or [::1]:2222; a bare IPv6 address has several colons and is left alone.
+            if (target.StartsWith("[")) target = target.Substring(1, Math.Max(0, target.IndexOf(']') - 1));
+            else if (target.IndexOf(':') is var colon and > 0 && colon == target.LastIndexOf(':')) target = target.Substring(0, colon);
             if (hosts.FirstOrDefault(h => h.Name == target || h.Host == target) is { } jump && jump != pair.Key) pair.Key.JumpHostId = jump.Id;
         }
         return hosts;
@@ -65,18 +68,33 @@ static class TerminalImport
         {
             var ini = ReadIni(file);
             string V(string section, string key) => ini.TryGetValue(section + "/" + key, out var v) ? v : "";
+            var protocol = V("CONNECTION", "Protocol").ToUpperInvariant() switch
+            {
+                "" or "SSH" => Protocols.Ssh,
+                "TELNET" => Protocols.Telnet,
+                "SERIAL" => Protocols.Serial,
+                _ => null, // RLOGIN, SFTP, local shells: nothing to import them as
+            };
+            if (protocol == null) continue;
             var host = V("CONNECTION", "Host");
-            if (host.Length == 0) continue;
+            if (host.Length == 0 && protocol != Protocols.Serial) continue;
             var rel = Path.GetDirectoryName(file)!.Substring(folder.TrimEnd('\\').Length).Trim('\\').Replace('\\', '/');
             var h = new HostEntry
             {
                 Name = Path.GetFileNameWithoutExtension(file),
                 Host = host,
-                Port = int.TryParse(V("CONNECTION", "Port"), out var p) ? p : 22,
+                Protocol = protocol,
+                Port = int.TryParse(V("CONNECTION", "Port"), out var p) ? p : protocol == Protocols.Telnet ? 23 : 22,
                 User = V("CONNECTION:AUTHENTICATION", "UserName") is { Length: > 0 } u ? u : "root",
                 Group = string.Join("/", new[] { group, rel }.Where(s => s.Length > 0)),
             };
-            if (V("CONNECTION:AUTHENTICATION", "Method") == "1" || V("CONNECTION:AUTHENTICATION", "UserKey").Length > 0) h.Auth = AuthKinds.Key;
+            if (protocol == Protocols.Serial)
+            {
+                if (V("CONNECTION:SERIAL", "Port") is { } com && com.StartsWith("COM", StringComparison.OrdinalIgnoreCase)) h.SerialPort = com.ToUpperInvariant();
+                if (int.TryParse(V("CONNECTION:SERIAL", "BaudRate"), out var baud) && baud > 0) h.BaudRate = baud;
+                if (host.Length == 0) h.Host = h.SerialPort;
+            }
+            if (protocol == Protocols.Ssh && (V("CONNECTION:AUTHENTICATION", "Method") == "1" || V("CONNECTION:AUTHENTICATION", "UserKey").Length > 0)) h.Auth = AuthKinds.Key;
             hosts.Add(h);
         }
         return hosts;
@@ -127,6 +145,8 @@ static class TerminalImport
             catch (Exception ex) when (ex is JsonException or IOException) { continue; }
             var host = (string?)o["host"] ?? "";
             if (host.Length == 0) continue;
+            // FinalShell's own spelling; 100 is SSH, anything else (RDP and so on) can't be opened here.
+            if ((int?)o["conection_type"] is { } kind && kind != 100) continue;
             var sub = FolderPath((string?)o["parent_id"] ?? "");
             hosts.Add(new HostEntry
             {

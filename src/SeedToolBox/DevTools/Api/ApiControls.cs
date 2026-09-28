@@ -147,7 +147,10 @@ sealed class KeyValueEditor : DockPanel
         if (!on) Load(_list);
     }
 
-    string BulkText() => string.Join("\r\n", _list.Where(k => !k.IsEmpty).Select(k => (k.Enabled ? "" : "//") + k.Key + ": " + k.Value));
+    /// <summary>Stands for a secret value in bulk text; left as is, the value stays.</summary>
+    const string SecretMask = "******";
+
+    string BulkText() => string.Join("\r\n", _list.Where(k => !k.IsEmpty).Select(k => (k.Enabled ? "" : "//") + k.Key + ": " + (_secrets && k.Secret ? SecretMask : k.Value)));
 
     void ParseBulk()
     {
@@ -160,9 +163,11 @@ sealed class KeyValueEditor : DockPanel
             int colon = line.IndexOf(':');
             var key = colon < 0 ? line : line.Substring(0, colon).Trim();
             var old = _list.FirstOrDefault(k => k.Key == key);
+            var value = colon < 0 ? "" : line.Substring(colon + 1).Trim();
+            if (_secrets && old is { Secret: true } && value == SecretMask) value = old.Value;
             parsed.Add(new KeyValue
             {
-                Enabled = !off, Key = key, Value = colon < 0 ? "" : line.Substring(colon + 1).Trim(),
+                Enabled = !off, Key = key, Value = value,
                 Description = old?.Description ?? "", Type = old?.Type ?? "text", Secret = old?.Secret ?? false,
             });
         }
@@ -467,6 +472,8 @@ sealed class JsonTree : TreeView
     static readonly Brush NumberBrush = ApiUi.Frozen(0x1F, 0x5F, 0xC8);
     static readonly Brush LiteralBrush = ApiUi.Frozen(0x8E, 0x44, 0xAD);
     const int Page = 500;
+    /// <summary>At most this many nodes are opened by "expand all", so huge responses don't build a huge tree.</summary>
+    const int ExpandBudget = 5000;
 
     public JsonTree()
     {
@@ -491,11 +498,17 @@ sealed class JsonTree : TreeView
 
     public void ExpandAll(bool expand)
     {
+        int budget = ExpandBudget;
         void Walk(ItemsControl parent, int depth)
         {
-            foreach (var item in parent.Items.OfType<TreeViewItem>())
+            foreach (var item in parent.Items.OfType<TreeViewItem>().ToList())
             {
-                if (item.Tag is not JContainer) continue;
+                if (item.Tag is not JContainer c) continue;
+                if (expand && !item.IsExpanded)
+                {
+                    if (budget <= 0) return;
+                    budget -= Math.Min(c.Count, Page);
+                }
                 item.IsExpanded = expand || depth == 0;
                 if (expand && depth < 6) Walk(item, depth + 1);
             }
@@ -512,11 +525,11 @@ sealed class JsonTree : TreeView
         {
             case JObject o:
                 header.Inlines.Add(new Run(o.Count == 0 ? "{}" : "{ " + o.Count + " }") { Foreground = DialogWindow.HintBrush });
-                if (o.Count > 0) Lazy(item, () => o.Properties().Select(p => Node("\"" + p.Name + "\"", p.Value)));
+                if (o.Count > 0) Lazy(item, () => o.Properties().Select(p => ("\"" + p.Name + "\"", p.Value)).ToList());
                 break;
             case JArray a:
                 header.Inlines.Add(new Run(a.Count == 0 ? "[]" : "[ " + a.Count + " ]") { Foreground = DialogWindow.HintBrush });
-                if (a.Count > 0) Lazy(item, () => a.Select((v, i) => Node(i.ToString(), v)));
+                if (a.Count > 0) Lazy(item, () => a.Select((v, i) => (i.ToString(), v)).ToList());
                 break;
             case JValue v:
                 header.Inlines.Add(Value(v));
@@ -533,7 +546,7 @@ sealed class JsonTree : TreeView
         _ => new Run(v.ToString(Newtonsoft.Json.Formatting.None)) { Foreground = LiteralBrush },
     };
 
-    static void Lazy(TreeViewItem item, Func<IEnumerable<TreeViewItem>> children)
+    static void Lazy(TreeViewItem item, Func<List<(string Name, JToken Token)>> children)
     {
         item.Items.Add(new TreeViewItem { Header = "…" });
         bool built = false;
@@ -542,14 +555,14 @@ sealed class JsonTree : TreeView
             if (built || e.OriginalSource != item) return;
             built = true;
             item.Items.Clear();
-            var all = children().ToList();
-            AddPage(item, all, 0);
+            AddPage(item, children(), 0);
         };
     }
 
-    static void AddPage(TreeViewItem item, List<TreeViewItem> all, int from)
+    /// <summary>Builds nodes for one page only; the rest wait behind a "show more" row.</summary>
+    static void AddPage(TreeViewItem item, List<(string Name, JToken Token)> all, int from)
     {
-        foreach (var child in all.Skip(from).Take(Page)) item.Items.Add(child);
+        for (int i = from; i < all.Count && i < from + Page; i++) item.Items.Add(Node(all[i].Name, all[i].Token));
         int rest = all.Count - from - Page;
         if (rest <= 0) return;
         var more = new TreeViewItem { Header = new TextBlock { Text = $"… 还有 {rest} 项，点击显示", Foreground = ApiUi.Res("AccentBrush"), Cursor = Cursors.Hand } };

@@ -187,9 +187,17 @@ sealed class CompressPage : DockPanel
         Ui.SetStatus(_status, "解压中…");
         try
         {
-            var results = await Task.Run(() => zips.Select(z => ZipTools.Extract(z, folder)).ToList());
-            Ui.SetStatus(_status, $"已解压 {results.Sum(r => r.Count)} 个文件到 " + string.Join("；", results.Select(r => r.Folder)));
-            if (results.Count == 1) ProcessLauncher.OpenLocation(results[0].Folder);
+            var failed = new List<string>();
+            var results = await Task.Run(() => zips.Select(z =>
+            {
+                try { return ZipTools.Extract(z, folder); }
+                catch (Exception ex) { failed.Add(Path.GetFileName(z) + "：" + ex.Message); return (Count: 0, Skipped: 0, Folder: ""); }
+            }).ToList());
+            var ok = results.Where(r => r.Folder.Length > 0).ToList();
+            var skipped = results.Sum(r => r.Skipped);
+            Ui.SetStatus(_status, $"已解压 {results.Sum(r => r.Count)} 个文件" + (ok.Count > 0 ? "到 " + string.Join("；", ok.Select(r => r.Folder)) : "")
+                + (skipped > 0 ? $"，跳过 {skipped} 个无法解出的条目" : "") + (failed.Count > 0 ? "；失败：" + string.Join("；", failed) : ""), failed.Count > 0 || skipped > 0);
+            if (ok.Count == 1 && zips.Length == 1) ProcessLauncher.OpenLocation(ok[0].Folder);
         }
         catch (Exception ex) { Ui.SetStatus(_status, "解压失败：" + ex.Message, true); }
         finally { _zipping = false; }
@@ -257,7 +265,8 @@ sealed class CompressPage : DockPanel
                     item.Output = output;
                     item.After = Ui.FormatSize(a);
                     item.Ratio = b > 0 ? $"{(b - a) * 100.0 / b:0.#}%" : "";
-                    item.State = kept ? "完成" : "已是最优，未改动";
+                    item.State = (kept ? "完成" : "已是最优，未改动")
+                        + (!overwrite && Path.GetFileName(output) != Path.GetFileNameWithoutExtension(item.Path) + ".min" + Path.GetExtension(item.Path) ? "（已有同名文件，输出为 " + Path.GetFileName(output) + "）" : "");
                     done++;
                 }
                 catch (OperationCanceledException) { item.State = "等待"; }
@@ -273,8 +282,17 @@ sealed class CompressPage : DockPanel
             + (before > 0 ? $"，节省 {(before - after) * 100.0 / before:0.#}%" : "") + (token.IsCancellationRequested ? "（已停止）" : ""));
     }
 
-    static string OutputPath(string path, bool overwrite) =>
-        overwrite ? path : Path.Combine(Path.GetDirectoryName(path)!, Path.GetFileNameWithoutExtension(path) + ".min" + Path.GetExtension(path));
+    static string OutputPath(string path, bool overwrite)
+    {
+        if (overwrite) return path;
+        // Never clobber an existing .min file (it may be hand-maintained or third-party); number the new one instead
+        var dir = Path.GetDirectoryName(path)!;
+        var stem = Path.GetFileNameWithoutExtension(path) + ".min";
+        var ext = Path.GetExtension(path);
+        var output = Path.Combine(dir, stem + ext);
+        for (int i = 1; File.Exists(output); i++) output = Path.Combine(dir, $"{stem} ({i}){ext}");
+        return output;
+    }
 
     /// <returns>Sizes before and after, where the result went, and whether it was written.</returns>
     static (long Before, long After, string Output, bool Kept) Compress(string path, bool overwrite, bool keepComments, int quality)
@@ -412,29 +430,43 @@ static class ZipTools
         }
     }
 
-    /// <summary>Extracts into a new folder named after the zip, refusing entries that would escape it.</summary>
-    public static (int Count, string Folder) Extract(string zipPath, string parent)
+    /// <summary>Refuse archives that claim to expand past this; guards against zip bombs.</summary>
+    const long MaxExtractBytes = 16L * 1024 * 1024 * 1024;
+
+    /// <summary>Extracts into a new folder named after the zip. Entries that would escape it or fail are skipped and counted;
+    /// duplicate names get a numbered suffix.</summary>
+    public static (int Count, int Skipped, string Folder) Extract(string zipPath, string parent)
     {
+        using var zip = ZipFile.OpenRead(zipPath);
+        var total = zip.Entries.Sum(e => e.Length);
+        if (total > MaxExtractBytes) throw new InvalidDataException($"解压后共 {Ui.FormatSize(total)}，超过 {Ui.FormatSize(MaxExtractBytes)} 上限");
         var name = Path.GetFileNameWithoutExtension(zipPath);
         var folder = Path.Combine(parent, name);
         for (int i = 1; Directory.Exists(folder) || File.Exists(folder); i++) folder = Path.Combine(parent, $"{name} ({i})");
         Directory.CreateDirectory(folder);
         var root = Path.GetFullPath(folder).TrimEnd('\\') + "\\";
-        int count = 0;
-        using var zip = ZipFile.OpenRead(zipPath);
+        int count = 0, skipped = 0;
         foreach (var entry in zip.Entries)
         {
-            var dest = Path.GetFullPath(Path.Combine(folder, entry.FullName.Replace('/', '\\')));
-            if (!dest.StartsWith(root, StringComparison.OrdinalIgnoreCase)) throw new InvalidDataException("压缩包包含不安全的路径：" + entry.FullName);
-            if (entry.FullName.EndsWith("/") || entry.Name.Length == 0)
+            try
             {
-                Directory.CreateDirectory(dest);
-                continue;
+                var dest = Path.GetFullPath(Path.Combine(folder, entry.FullName.Replace('/', '\\')));
+                if (!dest.StartsWith(root, StringComparison.OrdinalIgnoreCase)) { skipped++; continue; }
+                if (entry.FullName.EndsWith("/") || entry.Name.Length == 0)
+                {
+                    Directory.CreateDirectory(dest);
+                    continue;
+                }
+                var dir = Path.GetDirectoryName(dest)!;
+                Directory.CreateDirectory(dir);
+                var unique = dest;
+                for (int i = 1; File.Exists(unique); i++)
+                    unique = Path.Combine(dir, $"{Path.GetFileNameWithoutExtension(dest)} ({i}){Path.GetExtension(dest)}");
+                entry.ExtractToFile(unique, overwrite: false);
+                count++;
             }
-            Directory.CreateDirectory(Path.GetDirectoryName(dest)!);
-            entry.ExtractToFile(dest, overwrite: false);
-            count++;
+            catch (Exception ex) when (ex is IOException or InvalidDataException or UnauthorizedAccessException or NotSupportedException or ArgumentException) { skipped++; }
         }
-        return (count, folder);
+        return (count, skipped, folder);
     }
 }

@@ -80,12 +80,12 @@ sealed class NoteStore
         RequestSave();
     }
 
-    /// <summary>Call after changing a note; saving is debounced.</summary>
-    public void RequestSave()
+    /// <summary>Call after changing a note; saving is debounced. Window moves pass notify: false so lists aren't rebuilt on every pixel.</summary>
+    public void RequestSave(bool notify = true)
     {
         _saveTimer.Stop();
         _saveTimer.Start();
-        Changed?.Invoke();
+        if (notify) Changed?.Invoke();
     }
 
     public void Flush()

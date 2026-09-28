@@ -19,6 +19,7 @@ sealed class PinWindow : Window
     static readonly Brush InactiveBorder = new SolidColorBrush(Color.FromRgb(144, 144, 144));
 
     BitmapSource _image;
+    Window? _editor;
     bool _clickThrough;
     readonly ScreenToolService _service;
     readonly Image _view;
@@ -146,14 +147,26 @@ sealed class PinWindow : Window
         else if (e.Key == Key.T) SetClickThrough(true);
     }
 
-    void Annotate() => _service.Edit(_image, image =>
+    void Annotate()
     {
-        if (!IsLoaded) return;
-        _image = image;
-        _view.Source = image;
-        _view.Width = image.PixelWidth;
-        _view.Height = image.PixelHeight;
-    });
+        // One editor per pin: a second would start from the same image and overwrite the first one's work
+        if (_editor != null)
+        {
+            if (_editor.WindowState == WindowState.Minimized) _editor.WindowState = WindowState.Normal;
+            _editor.Activate();
+            return;
+        }
+        var editor = _service.Edit(_image, image =>
+        {
+            if (!IsLoaded) return;
+            _image = image;
+            _view.Source = image;
+            _view.Width = image.PixelWidth;
+            _view.Height = image.PixelHeight;
+        });
+        _editor = editor;
+        editor.Closed += (_, _) => { if (_editor == editor) _editor = null; };
+    }
 
     public static bool AnyClickThrough => All.Any(p => p._clickThrough);
 

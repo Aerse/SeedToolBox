@@ -25,7 +25,26 @@ static class SyncSettingsSection
 
         var url = Ui.Field(360);
         url.Text = s.Url;
-        url.LostKeyboardFocus += (_, _) => { s.Url = url.Text.Trim(); service.Save(); };
+        // Plain http sends the account in the clear; outside the local network only after the user agrees
+        bool asking = false;
+        void SetUrl()
+        {
+            if (asking) return;
+            var text = url.Text.Trim();
+            bool changed = text != s.Url;
+            s.Url = text;
+            bool http = Uri.TryCreate(text, UriKind.Absolute, out var uri) && uri.Scheme == Uri.UriSchemeHttp && !SyncService.IsLocal(uri);
+            if (!http) { s.AllowHttp = false; return; }
+            if (!changed && s.AllowHttp) return;
+            asking = true;
+            try
+            {
+                s.AllowHttp = MessageBox.Show(Window.GetWindow(panel), "这个地址是 http://，账号密码会明文发送，同一网络里的人可能看到。\n建议改用 https://。仍然使用这个地址？",
+                    "同步", MessageBoxButton.YesNo, MessageBoxImage.Warning) == MessageBoxResult.Yes;
+            }
+            finally { asking = false; }
+        }
+        url.LostKeyboardFocus += (_, _) => { SetUrl(); service.Save(); };
         var user = Ui.Field(360);
         user.Text = s.User;
         user.LostKeyboardFocus += (_, _) => { s.User = user.Text.Trim(); service.Save(); };
@@ -78,7 +97,7 @@ static class SyncSettingsSection
         now = Ui.Button("立即同步", async () =>
         {
             // Take what is still in the boxes, in case one has focus
-            s.Url = url.Text.Trim();
+            SetUrl();
             s.User = user.Text.Trim();
             s.Password = SyncCrypto.Protect(password.Password);
             s.Passphrase = SyncCrypto.Protect(passphrase.Password);

@@ -1,6 +1,7 @@
 using System;
 using System.Collections.Generic;
 using System.Linq;
+using System.Threading;
 using Jint;
 using Jint.Runtime;
 using Newtonsoft.Json;
@@ -136,8 +137,8 @@ public sealed class ScriptHost
 /// <summary>Runs pre-request and test scripts with a Postman-like pm object.</summary>
 static class ApiScript
 {
-    /// <summary>False when the script failed; the error goes to the console and, in tests, a failed test.</summary>
-    public static bool Run(string script, ScriptHost host)
+    /// <summary>False when the script failed; the error goes to the console and, in tests, a failed test. Throws when <paramref name="cancel"/> stops it.</summary>
+    public static bool Run(string script, ScriptHost host, CancellationToken cancel = default)
     {
         try
         {
@@ -145,7 +146,8 @@ static class ApiScript
                 .TimeoutInterval(TimeSpan.FromSeconds(10))
                 .LimitMemory(128_000_000)
                 .LimitRecursion(512)
-                .Strict(false));
+                .Strict(false)
+                .CancellationToken(cancel));
             engine.SetValue("__host", host);
             engine.Execute(Prelude, "prelude.js");
             engine.Execute(script, host.Phase + ".js");
@@ -155,6 +157,10 @@ static class ApiScript
         catch (JavaScriptException ex)
         {
             Report(host, ex.Message + (ex.Location.Start.Line > 0 ? $"（第 {ex.Location.Start.Line} 行）" : ""));
+        }
+        catch (ExecutionCanceledException)
+        {
+            throw new OperationCanceledException(cancel);
         }
         catch (TimeoutException)
         {

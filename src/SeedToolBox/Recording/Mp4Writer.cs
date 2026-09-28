@@ -29,40 +29,46 @@ sealed class Mp4Writer : IDisposable
 
         var attributes = MF.CreateAttributes();
         if (hardware) attributes.SetUINT32(ref MF.READWRITE_ENABLE_HARDWARE_TRANSFORMS, 1);
-        MF.MFCreateSinkWriterFromURL(path, IntPtr.Zero, attributes, out _writer);
-        MF.Release(attributes);
+        try { MF.MFCreateSinkWriterFromURL(path, IntPtr.Zero, attributes, out _writer); }
+        finally { MF.Release(attributes); }
 
+        IMFMediaType? type = null;
         try
         {
-            var output = VideoType(MF.VideoFormatH264, width, height, fps);
+            var output = type = VideoType(MF.VideoFormatH264, width, height, fps);
             output.SetUINT32(ref MF.MT_AVG_BITRATE, bitrate);
             output.SetUINT32(ref MF.MT_MPEG2_PROFILE, 77); // eAVEncH264VProfile_Main
             _writer.AddStream(output, out _video);
             MF.Release(output);
+            type = null;
 
-            var input = VideoType(MF.VideoFormatRGB32, width, height, fps);
+            var input = type = VideoType(MF.VideoFormatRGB32, width, height, fps);
             input.SetUINT32(ref MF.MT_DEFAULT_STRIDE, width * 4);
             _writer.SetInputMediaType(_video, input, null);
             MF.Release(input);
+            type = null;
 
             if (audio)
             {
-                var aac = AudioType(MF.AudioFormatAAC);
+                var aac = type = AudioType(MF.AudioFormatAAC);
                 aac.SetUINT32(ref MF.MT_AUDIO_AVG_BYTES_PER_SECOND, 128000 / 8);
                 _writer.AddStream(aac, out _audio);
                 MF.Release(aac);
+                type = null;
 
-                var pcm = AudioType(MF.AudioFormatPCM);
+                var pcm = type = AudioType(MF.AudioFormatPCM);
                 pcm.SetUINT32(ref MF.MT_AUDIO_BLOCK_ALIGNMENT, AudioChannels * 2);
                 pcm.SetUINT32(ref MF.MT_AUDIO_AVG_BYTES_PER_SECOND, AudioRate * AudioChannels * 2);
                 _writer.SetInputMediaType(_audio, pcm, null);
                 MF.Release(pcm);
+                type = null;
             }
 
             _writer.BeginWriting();
         }
         catch
         {
+            MF.Release(type);
             MF.Release(_writer);
             throw;
         }

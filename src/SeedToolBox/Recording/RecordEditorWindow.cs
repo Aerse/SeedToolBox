@@ -430,13 +430,19 @@ sealed class RecordEditorWindow : Window
             Dispatcher.BeginInvoke(new Action(() => _progress.Value = value));
         }
 
+        // Export next to the target and swap it in at the end, so a failed or cancelled export never
+        // touches a file being overwritten. Keeps the extension: the MP4 writer picks the container by it
+        var temp = Path.Combine(Path.GetDirectoryName(path) ?? "", $"{Path.GetFileNameWithoutExtension(path)}.exporting{Path.GetExtension(path)}");
         try
         {
             // Thread-pool threads are MTA, which Media Foundation needs
             await Task.Run(() =>
             {
-                if (gif) Exporter.Gif(_clip, path, start, end, gifFps, gifScale / 100.0, edits, Report, cancel.Token);
-                else Exporter.Mp4(_clip, path, start, end, quality, Report, cancel.Token);
+                RecordingSession.TryDelete(temp);
+                if (gif) Exporter.Gif(_clip, temp, start, end, gifFps, gifScale / 100.0, edits, Report, cancel.Token);
+                else Exporter.Mp4(_clip, temp, start, end, quality, Report, cancel.Token);
+                if (File.Exists(path)) File.Replace(temp, path, null);
+                else File.Move(temp, path);
             });
             _saved = true;
             _lastSaved = path;
@@ -445,13 +451,13 @@ sealed class RecordEditorWindow : Window
         }
         catch (OperationCanceledException)
         {
-            RecordingSession.TryDelete(path);
+            RecordingSession.TryDelete(temp);
             _status.Text = "已取消导出";
         }
         catch (Exception ex)
         {
             Log.Error($"Export to {path} failed", ex);
-            RecordingSession.TryDelete(path);
+            RecordingSession.TryDelete(temp);
             _status.Text = "导出失败";
             MessageBox.Show(this, $"导出失败：{ex.Message}", "SeedToolBox", MessageBoxButton.OK, MessageBoxImage.Warning);
         }

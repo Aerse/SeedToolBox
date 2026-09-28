@@ -92,10 +92,18 @@ sealed partial class TerminalView
             }
             case "zwrite":
             {
-                if (_zwrites.TryGetValue((int?)m["id"] ?? 0, out var fs))
+                var id = (int?)m["id"] ?? 0;
+                if (_zwrites.TryGetValue(id, out var fs))
                 {
                     var data = Convert.FromBase64String((string?)m["d"] ?? "");
-                    fs.Write(data, 0, data.Length);
+                    try { fs.Write(data, 0, data.Length); }
+                    catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
+                    {
+                        // Disk full or the drive went away: drop the partial file and stop the transfer.
+                        WriteText("\r\n\x1b[31m写入 " + _zpaths[id] + " 失败：" + ex.Message + "\x1b[0m\r\n");
+                        CloseWrite(id, false);
+                        Post(new JObject { ["t"] = "zabort" });
+                    }
                 }
                 return true;
             }
@@ -120,7 +128,7 @@ sealed partial class TerminalView
     {
         if (!_zwrites.TryGetValue(id, out var fs)) return;
         _zwrites.Remove(id);
-        fs.Dispose();
+        try { fs.Dispose(); } catch (Exception ex) when (ex is IOException or UnauthorizedAccessException) { ok = false; }
         var path = _zpaths[id];
         _zpaths.Remove(id);
         if (!ok) try { File.Delete(path); } catch (Exception ex) when (ex is IOException or UnauthorizedAccessException) { }

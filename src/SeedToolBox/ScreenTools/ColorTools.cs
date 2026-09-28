@@ -8,7 +8,7 @@ namespace SeedToolBox.ScreenTools;
 /// <summary>Colour parsing, HSL conversion and WCAG contrast.</summary>
 static class ColorTools
 {
-    static readonly Regex Numbers = new(@"-?\d+(\.\d+)?", RegexOptions.Compiled);
+    static readonly Regex Numbers = new(@"-?\d+(\.\d+)?%?", RegexOptions.Compiled);
 
     /// <summary>Accepts #RGB, #RRGGBB, #AARRGGBB (with or without #), rgb(r,g,b), hsl(h,s%,l%) and "r,g,b".</summary>
     public static bool TryParse(string? text, out Color color)
@@ -20,8 +20,7 @@ static class ColorTools
         if (s.StartsWith("hsl"))
         {
             if (numbers.Count < 3) return false;
-            double h = Num(numbers[0].Value), sat = Num(numbers[1].Value), l = Num(numbers[2].Value);
-            if (sat > 1 || l > 1) { sat /= 100; l /= 100; }
+            double h = Num(numbers[0].Value), sat = Fraction(numbers[1].Value), l = Fraction(numbers[2].Value);
             color = FromHsl(h, Clamp01(sat), Clamp01(l));
             return true;
         }
@@ -42,7 +41,9 @@ static class ColorTools
         return true;
     }
 
-    static double Num(string s) => double.Parse(s, CultureInfo.InvariantCulture);
+    static double Num(string s) => double.Parse(s.TrimEnd('%'), CultureInfo.InvariantCulture);
+    // "50%" and "50" are percentages, "0.5" a fraction; only a missing % leaves it to the size
+    static double Fraction(string s) => s.EndsWith("%") || Num(s) > 1 ? Num(s) / 100 : Num(s);
     static byte Byte(string s) => (byte)Math.Max(0, Math.Min(255, Math.Round(Num(s))));
     static double Clamp01(double v) => Math.Max(0, Math.Min(1, v));
 

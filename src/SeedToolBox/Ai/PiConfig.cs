@@ -4,6 +4,7 @@ using System.IO;
 using System.Linq;
 using Newtonsoft.Json;
 using Newtonsoft.Json.Linq;
+using SeedToolBox.Core.Services;
 
 namespace SeedToolBox.Ai;
 
@@ -52,7 +53,7 @@ static class PiConfig
 
     public static void SetApiKey(AiSettings s, string provider, string key)
     {
-        var auth = Read(AuthPath(s));
+        var auth = ReadForWrite(AuthPath(s));
         if (key.Length == 0) auth.Remove(provider);
         else auth[provider] = new JObject { ["type"] = "api_key", ["key"] = key };
         Write(AuthPath(s), auth);
@@ -61,7 +62,7 @@ static class PiConfig
     /// <summary>Adds or replaces an OpenAI-compatible provider in models.json.</summary>
     public static void SetCustomProvider(AiSettings s, string id, string baseUrl, string key, IEnumerable<string> models)
     {
-        var root = Read(ModelsPath(s));
+        var root = ReadForWrite(ModelsPath(s));
         if (root["providers"] is not JObject providers) root["providers"] = providers = new JObject();
         providers[id] = new JObject
         {
@@ -90,7 +91,7 @@ static class PiConfig
 
     public static void RemoveCustomProvider(AiSettings s, string id)
     {
-        var root = Read(ModelsPath(s));
+        var root = ReadForWrite(ModelsPath(s));
         if (root["providers"] is JObject providers && providers.Remove(id)) Write(ModelsPath(s), root);
     }
 
@@ -110,6 +111,23 @@ static class PiConfig
     {
         try { return File.Exists(path) ? JObject.Parse(File.ReadAllText(path)) : new JObject(); }
         catch (JsonException) { return new JObject(); }
+    }
+
+    /// <summary>
+    /// Like <see cref="Read"/>, for a change that is written back: a file that doesn't parse is kept as a .bak first,
+    /// so the other keys and logins in it aren't simply overwritten.
+    /// </summary>
+    static JObject ReadForWrite(string path)
+    {
+        if (!File.Exists(path)) return new JObject();
+        try { return JObject.Parse(File.ReadAllText(path)); }
+        catch (JsonException ex)
+        {
+            var backup = path + "." + DateTime.Now.ToString("yyyyMMddHHmmss") + ".bak";
+            File.Copy(path, backup, true);
+            Log.Error($"{Path.GetFileName(path)} doesn't parse; kept as {backup}", ex);
+            return new JObject();
+        }
     }
 
     static void Write(string path, JObject value)

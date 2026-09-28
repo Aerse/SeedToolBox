@@ -70,6 +70,8 @@ sealed partial class TerminalPage : DockPanel, IConnectPrompts
         public string? CustomTitle;
         public SshConnection? Connection;
         public Task<SshConnection>? Pending;
+        /// <summary>Cancels <see cref="Pending"/>; owned by the session, not by whichever pane started it.</summary>
+        public CancellationTokenSource? PendingCancel;
         public int Counter;
         public string Title => CustomTitle ?? Host?.Title ?? Shell?.Name ?? "终端";
     }
@@ -468,6 +470,8 @@ sealed partial class TerminalPage : DockPanel, IConnectPrompts
         if (s.Connection != null) _systemInfo.Remove(s.Connection);
         s.Connection?.Dispose();
         s.Connection = null;
+        s.PendingCancel?.Cancel();
+        s.PendingCancel = null;
         s.Pending = null;
     }
 
@@ -662,7 +666,28 @@ sealed partial class TerminalPage : DockPanel, IConnectPrompts
         if (owner.Connection is { IsConnected: true } || owner.Pending != null) return;
         if (owner.Connection != null) DropConnection(owner);
         pane.Cancel = new CancellationTokenSource();
-        owner.Pending = SshConnection.OpenAsync(pane.Host!, _data, this, pane.Cancel.Token);
+        owner.PendingCancel = new CancellationTokenSource();
+        owner.Pending = SshConnection.OpenAsync(pane.Host!, _data, this, owner.PendingCancel.Token);
+    }
+
+    /// <summary>Waits for the session's shared connect; cancelling one pane only stops its own wait, unless no other pane is waiting.</summary>
+    async Task<SshConnection> AwaitPending(Session owner, Task<SshConnection> pending, Pane pane)
+    {
+        var token = pane.Cancel!.Token;
+        var cancelled = new TaskCompletionSource<bool>();
+        using (token.Register(() => cancelled.TrySetResult(true)))
+            if (await Task.WhenAny(pending, cancelled.Task) == pending) return await pending;
+        if (!owner.Tabs.SelectMany(t => t.Panes).Any(p => p != pane && p.Connecting))
+        {
+            owner.PendingCancel?.Cancel();
+            // Nobody will pick the result up; clear it and close the connection if it opened anyway.
+            _ = pending.ContinueWith(t => Dispatcher.BeginInvoke(new Action(() =>
+            {
+                if (owner.Pending == pending) owner.Pending = null;
+                if (t.Status == TaskStatus.RanToCompletion && owner.Connection != t.Result) t.Result.Dispose();
+            })), TaskScheduler.Default);
+        }
+        throw new OperationCanceledException(token);
     }
 
     async Task ConnectAsync(Pane pane)
@@ -694,11 +719,15 @@ sealed partial class TerminalPage : DockPanel, IConnectPrompts
             if (owner.Connection is not { IsConnected: true })
             {
                 if (owner.Connection != null) DropConnection(owner);
-                owner.Pending ??= SshConnection.OpenAsync(host, _data, this, pane.Cancel.Token);
+                if (owner.Pending == null)
+                {
+                    owner.PendingCancel = new CancellationTokenSource();
+                    owner.Pending = SshConnection.OpenAsync(host, _data, this, owner.PendingCancel.Token);
+                }
                 var pending = owner.Pending;
                 SshConnection opened;
-                try { opened = await pending; }
-                finally { if (owner.Pending == pending) owner.Pending = null; }
+                try { opened = await AwaitPending(owner, pending, pane); }
+                finally { if (owner.Pending == pending && pending.IsCompleted) owner.Pending = null; }
                 if (owner.Connection != opened)
                 {
                     fresh = true;
