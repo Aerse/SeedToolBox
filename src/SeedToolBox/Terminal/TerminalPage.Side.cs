@@ -181,7 +181,7 @@ sealed partial class TerminalPage
 
     void StartAutoTunnels(Session s, Pane pane)
     {
-        if (s.Host == null) return;
+        if (s.Host is not { IsSsh: true }) return;
         foreach (var spec in s.Host.Tunnels.Where(t => t.AutoStart))
         {
             var error = StartTunnel(s, spec);
@@ -243,7 +243,7 @@ sealed partial class TerminalPage
     void ShowTunnels()
     {
         var pane = ActivePane;
-        if (pane?.Host == null) { Ui.SetStatus(_status, "端口转发需要先选中一个 SSH 会话", true); return; }
+        if (pane?.Host is not { IsSsh: true }) { Ui.SetStatus(_status, "端口转发需要先选中一个 SSH 会话", true); return; }
         var host = pane.Host;
         var session = pane.Tab.Session;
         var list = new ListView { BorderThickness = new Thickness(0) };

@@ -256,7 +256,7 @@ sealed partial class TerminalPage : DockPanel, IConnectPrompts
         Item("清屏", () => pane?.View.Clear(), pane != null);
         Item(pane?.View.IsLogging == true ? "停止记录会话日志" : "开始记录会话日志", ToggleLog, pane != null);
         menu.Items.Add(new Separator());
-        Item("端口转发…", ShowTunnels, pane?.Host != null);
+        Item("端口转发…", ShowTunnels, pane?.Host is { IsSsh: true });
         Item("AI 生成命令…", () => AiGenerate());
         menu.Items.Add(new Separator());
         var import = new MenuItem { Header = "导入主机" };
@@ -619,7 +619,7 @@ sealed partial class TerminalPage : DockPanel, IConnectPrompts
     async Task StartAsync(Pane pane)
     {
         // Start the SSH handshake while the terminal view is still loading instead of after it.
-        if (pane.Host != null) BeginConnect(pane);
+        if (pane.Host is { IsSsh: true }) BeginConnect(pane);
         await WhenReady(pane.View);
         if (!pane.Tab.Panes.Contains(pane)) return;
         if (pane.Host != null) await ConnectAsync(pane);
@@ -661,6 +661,20 @@ sealed partial class TerminalPage : DockPanel, IConnectPrompts
         UpdateStatus();
         try
         {
+            if (!host.IsSsh)
+            {
+                ISession other = host.Protocol == Protocols.Serial
+                    ? await Task.Run(() => new SerialSession(host))
+                    : await TelnetSession.OpenAsync(host, host.Password.Length > 0 ? Secret.Reveal(host.Password) : "", pane.View.Cols, pane.View.Rows, pane.Cancel.Token);
+                if (!pane.Tab.Panes.Contains(pane)) { other.Dispose(); return; }
+                pane.Retries = 0;
+                pane.View.Attach(other);
+                other.Start();
+                host.LastConnected = DateTime.Now;
+                ScheduleSave();
+                if (pane == ActivePane) OnActivePaneChanged();
+                return;
+            }
             var owner = pane.Tab.Session;
             var fresh = false;
             if (owner.Connection is not { IsConnected: true })
@@ -696,7 +710,7 @@ sealed partial class TerminalPage : DockPanel, IConnectPrompts
         }
         catch (Exception ex) when (ex is InvalidOperationException or Renci.SshNet.Common.SshException or System.Net.Sockets.SocketException or IOException or ArgumentException or NotSupportedException)
         {
-            Log.Info("SSH connect to " + host.Address + " failed: " + ex.Message);
+            Log.Info(host.Protocol + " connect to " + host.Address + " failed: " + ex.Message);
             pane.View.WriteText("\x1b[31m连接失败：" + ex.Message.Replace("\n", "\r\n") + "\x1b[0m\r\n\x1b[90m按回车重新连接。\x1b[0m\r\n");
         }
         finally
@@ -816,7 +830,7 @@ sealed partial class TerminalPage : DockPanel, IConnectPrompts
         var s = NewSession(host, null);
         AddPane(NewTab(s), host, null);
         SelectSession(s);
-        if (_side == SideHosts || _side < 0) ShowSide(SideSftp);
+        if (host.IsSsh && (_side == SideHosts || _side < 0)) ShowSide(SideSftp);
     }
 
     void Duplicate(Pane source, Tab into)
@@ -899,7 +913,7 @@ sealed partial class TerminalPage : DockPanel, IConnectPrompts
         Item("关闭这个分屏", () => ClosePane(pane), pane.Tab.Panes.Count > 1);
         Item(pane.Host != null ? "重新连接" : "重新启动", () => Reconnect(pane));
         Item(pane.View.IsLogging ? "停止记录日志" : "开始记录日志", () => { if (pane.View.IsLogging) pane.View.StopLog(); else StartLog(pane); UpdateStatus(); });
-        if (pane.Host != null)
+        if (pane.Host is { IsSsh: true })
         {
             menu.Items.Add(new Separator());
             Item("在 SFTP 中打开当前目录", () => ShowSide(SideSftp));

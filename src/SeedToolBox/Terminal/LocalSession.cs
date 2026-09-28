@@ -18,6 +18,8 @@ interface ISession : IDisposable
     /// <summary>The shell or connection ended; the argument is a reason to show, or null.</summary>
     event Action<string?>? Closed;
     void Write(string text);
+    /// <summary>Raw bytes, sent as they are (file transfers).</summary>
+    void WriteBytes(byte[] data);
     void Resize(int cols, int rows);
     /// <summary>Begins reading output; call after subscribing so nothing is missed.</summary>
     void Start();
@@ -78,10 +80,11 @@ sealed class LocalSession : ISession
         Close(null);
     }
 
-    public void Write(string text)
+    public void Write(string text) => WriteBytes(Encoding.UTF8.GetBytes(text));
+
+    public void WriteBytes(byte[] bytes)
     {
         if (!IsOpen) return;
-        var bytes = Encoding.UTF8.GetBytes(text);
         try { _writer.Write(bytes, 0, bytes.Length); _writer.Flush(); }
         catch (IOException) { }
         catch (ObjectDisposedException) { }

@@ -212,8 +212,11 @@ sealed partial class TerminalPage
         {
             case HostEntry h:
                 Item("连接", () => OpenHost(h));
-                Item("连接并打开 SFTP", () => { OpenHost(h); ShowSide(SideSftp); });
-                Item("连接并打开监控", () => { OpenHost(h); ShowSide(SideMonitor); });
+                if (h.IsSsh)
+                {
+                    Item("连接并打开 SFTP", () => { OpenHost(h); ShowSide(SideSftp); });
+                    Item("连接并打开监控", () => { OpenHost(h); ShowSide(SideMonitor); });
+                }
                 menu.Items.Add(new Separator());
                 Item("编辑…", () => EditHost(h));
                 Item("复制一份", () =>

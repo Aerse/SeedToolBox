@@ -272,12 +272,13 @@ sealed class SshSession : ISession
         catch (ArgumentException) { return Encoding.UTF8; }
     }
 
-    public void Write(string text)
+    public void Write(string text) => WriteBytes(_encoding.GetBytes(text));
+
+    public void WriteBytes(byte[] bytes)
     {
         if (!IsOpen) return;
         try
         {
-            var bytes = _encoding.GetBytes(text);
             _stream.Write(bytes, 0, bytes.Length);
             _stream.Flush();
         }

@@ -44,8 +44,19 @@ sealed class HostEntry
     public string Name { get; set; } = "";
     /// <summary>Folder path, "a/b"; empty for the top level.</summary>
     public string Group { get; set; } = "";
+    /// <summary>ssh, telnet, serial, ftp or ftps (see <see cref="Protocols"/>).</summary>
+    public string Protocol { get; set; } = Protocols.Ssh;
     public string Host { get; set; } = "";
     public int Port { get; set; } = 22;
+    public string SerialPort { get; set; } = "COM1";
+    public int BaudRate { get; set; } = 115200;
+    public int DataBits { get; set; } = 8;
+    /// <summary>none, odd, even, mark or space.</summary>
+    public string Parity { get; set; } = "none";
+    /// <summary>1, 1.5 or 2.</summary>
+    public string StopBits { get; set; } = "1";
+    /// <summary>none, rtscts or xonxoff.</summary>
+    public string FlowControl { get; set; } = "none";
     public string User { get; set; } = "root";
     public string Auth { get; set; } = AuthKinds.Password;
     public string Password { get; set; } = "";
@@ -69,7 +80,14 @@ sealed class HostEntry
     public DateTime? LastConnected { get; set; }
 
     [JsonIgnore] public string Title => Name.Length > 0 ? Name : $"{User}@{Host}";
-    [JsonIgnore] public string Address => Port == 22 ? $"{User}@{Host}" : $"{User}@{Host}:{Port}";
+    [JsonIgnore] public bool IsSsh => Protocol is Protocols.Ssh or "" or null;
+    [JsonIgnore] public string Address => Protocol switch
+    {
+        Protocols.Serial => $"{SerialPort} {BaudRate}",
+        Protocols.Telnet => $"telnet://{Host}" + (Port == 23 ? "" : ":" + Port),
+        Protocols.Ftp or Protocols.Ftps => $"{Protocol}://{(User.Length > 0 ? User + "@" : "")}{Host}" + (Port == 21 ? "" : ":" + Port),
+        _ => Port == 22 ? $"{User}@{Host}" : $"{User}@{Host}:{Port}",
+    };
 
     public HostEntry Clone(bool newId = false)
     {

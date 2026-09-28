@@ -75,13 +75,38 @@ static class TerminalDialogs
         var reconnect = new CheckBox { Content = "断线后自动重连", IsChecked = h.AutoReconnect, VerticalAlignment = VerticalAlignment.Center };
         var notes = Ui.Area(wrap: true); notes.Text = h.Notes; notes.Height = 54;
 
+        string protocol = h.IsSsh ? Protocols.Ssh : h.Protocol;
+        var serialPort = new ComboBox { IsEditable = true, Text = h.SerialPort, Width = 140, HorizontalAlignment = HorizontalAlignment.Left };
+        foreach (var name0 in SerialSession.PortNames()) serialPort.Items.Add(name0);
+        var baud = new ComboBox { IsEditable = true, Text = h.BaudRate.ToString(), Width = 140, HorizontalAlignment = HorizontalAlignment.Left };
+        foreach (var b in new[] { 1200, 2400, 4800, 9600, 19200, 38400, 57600, 115200, 230400, 460800, 921600 }) baud.Items.Add(b.ToString());
+        int dataBits = h.DataBits;
+        string parity = h.Parity, stopBits = h.StopBits, flow = h.FlowControl;
+        var serialBox = new StackPanel();
+        serialBox.Children.Add(Line("串口", serialPort, SerialSession.PortNames().Length == 0 ? "没有检测到串口，可以直接输入名称，例如 COM3" : null));
+        serialBox.Children.Add(Line("波特率", baud));
+        serialBox.Children.Add(Line("数据位", ApiUi.Combo(140, new[] { ("8", "8"), ("7", "7"), ("6", "6"), ("5", "5") }, dataBits.ToString(), v => dataBits = int.Parse(v))));
+        serialBox.Children.Add(Line("校验", ApiUi.Combo(140, new[] { ("none", "无"), ("odd", "奇校验"), ("even", "偶校验"), ("mark", "Mark"), ("space", "Space") }, parity, v => parity = v)));
+        serialBox.Children.Add(Line("停止位", ApiUi.Combo(140, new[] { ("1", "1"), ("1.5", "1.5"), ("2", "2") }, stopBits, v => stopBits = v)));
+        serialBox.Children.Add(Line("流控", ApiUi.Combo(140, new[] { ("none", "无"), ("rtscts", "RTS/CTS"), ("xonxoff", "XON/XOFF") }, flow, v => flow = v)));
+
         var passwordRow = Line("密码", password, "留空则每次连接时询问");
         var keyRow = Line("私钥文件", Browse(keyPath, owner));
         var passphraseRow = Line("私钥口令", passphrase, "没有口令就留空");
+        DockPanel addressRow = null!, userRow = null!, authRow = null!;
+        var sshOnly = new List<UIElement>();
         void ShowAuth()
         {
-            passwordRow.Visibility = auth == AuthKinds.Password ? Visibility.Visible : Visibility.Collapsed;
-            keyRow.Visibility = passphraseRow.Visibility = auth == AuthKinds.Key ? Visibility.Visible : Visibility.Collapsed;
+            if (addressRow == null) return;
+            var ssh = protocol == Protocols.Ssh;
+            var serial = protocol == Protocols.Serial;
+            static Visibility V(bool on) => on ? Visibility.Visible : Visibility.Collapsed;
+            addressRow.Visibility = userRow.Visibility = V(!serial);
+            serialBox.Visibility = V(serial);
+            authRow.Visibility = V(ssh);
+            passwordRow.Visibility = V(ssh ? auth == AuthKinds.Password : !serial);
+            keyRow.Visibility = passphraseRow.Visibility = V(ssh && auth == AuthKinds.Key);
+            foreach (var e in sshOnly) e.Visibility = V(ssh);
         }
         var authCombo = ApiUi.Combo(200, new[] { (AuthKinds.Password, "密码"), (AuthKinds.Key, "私钥"), (AuthKinds.Interactive, "键盘交互（验证码 / 二次验证）") }, auth, v => { auth = v; ShowAuth(); });
         var proxyBox = new StackPanel();
@@ -94,9 +119,17 @@ static class TerminalDialogs
         var basic = new StackPanel { Margin = new Thickness(0, 8, 0, 0) };
         basic.Children.Add(Line("名称", name, "留空显示 用户@地址"));
         basic.Children.Add(Line("分组", group, "用 / 分隔多级，例如 公司/生产"));
-        basic.Children.Add(Line("地址", Row2(address, Ui.Label("端口", 6), port)));
-        basic.Children.Add(Line("用户名", user));
-        basic.Children.Add(Line("登录方式", authCombo));
+        basic.Children.Add(Line("协议", ApiUi.Combo(200, new[] { (Protocols.Ssh, "SSH"), (Protocols.Telnet, "Telnet"), (Protocols.Serial, "串口"), (Protocols.Ftp, "FTP"), (Protocols.Ftps, "FTPS（FTP over TLS）") }, protocol, v =>
+        {
+            static int Default(string p) => p switch { Protocols.Telnet => 23, Protocols.Ftp or Protocols.Ftps => 21, _ => 22 };
+            if (port.Text.Trim() == Default(protocol).ToString()) port.Text = Default(v).ToString();
+            protocol = v;
+            ShowAuth();
+        })));
+        basic.Children.Add(addressRow = Line("地址", Row2(address, Ui.Label("端口", 6), port)));
+        basic.Children.Add(serialBox);
+        basic.Children.Add(userRow = Line("用户名", user, "Telnet 填了用户名和密码会在出现登录提示时自动填入；FTP 留空为匿名登录"));
+        basic.Children.Add(authRow = Line("登录方式", authCombo));
         basic.Children.Add(passwordRow);
         basic.Children.Add(keyRow);
         basic.Children.Add(passphraseRow);
@@ -104,27 +137,44 @@ static class TerminalDialogs
         basic.Children.Add(Line("备注", notes));
 
         var advanced = new StackPanel { Margin = new Thickness(0, 8, 0, 0) };
-        advanced.Children.Add(Line("跳板机", ApiUi.Combo(300, jumpItems, jump, v => jump = v), "先连上跳板机，再从它连到这台"));
-        advanced.Children.Add(Line("代理", proxyCombo, "跳板机之后的主机不走代理"));
+        var jumpRow = Line("跳板机", ApiUi.Combo(300, jumpItems, jump, v => jump = v), "先连上跳板机，再从它连到这台");
+        var proxyRow = Line("代理", proxyCombo, "跳板机之后的主机不走代理");
+        advanced.Children.Add(jumpRow);
+        advanced.Children.Add(proxyRow);
         advanced.Children.Add(proxyBox);
+        sshOnly.Add(jumpRow);
+        sshOnly.Add(proxyRow);
         advanced.Children.Add(Line("字符编码", ApiUi.Combo(140, Encodings, encoding, v => encoding = v)));
         advanced.Children.Add(Line("登录后执行", startup, "例如 cd /var/www && ls"));
-        advanced.Children.Add(Line("保活间隔(秒)", keepAlive, "0 表示关闭"));
+        var keepAliveRow = Line("保活间隔(秒)", keepAlive, "0 表示关闭");
+        advanced.Children.Add(keepAliveRow);
         advanced.Children.Add(Line("", reconnect));
+        sshOnly.Add(keepAliveRow);
         ShowAuth();
         ShowProxy();
+        if (protocol != Protocols.Ssh) proxyBox.Visibility = Visibility.Collapsed;
 
         var tabs = new TabControl { Width = 540, Height = 470 };
         tabs.Items.Add(new TabItem { Header = "基本", Content = basic });
         tabs.Items.Add(new TabItem { Header = "高级", Content = advanced });
         var tunnels = new TunnelList(h.Tunnels, owner);
-        tabs.Items.Add(new TabItem { Header = "端口转发", Content = tunnels });
+        var tunnelTab = new TabItem { Header = "端口转发", Content = tunnels };
+        tabs.Items.Add(tunnelTab);
+        sshOnly.Add(tunnelTab);
+        ShowAuth();
 
         var ok = DialogWindow.OkButton("保存");
         var window = DialogWindow.Create(isNew ? "新建主机" : "编辑主机 " + original.Title, tabs, ok, DialogWindow.CancelButton());
         Place(window, owner);
         ok.Click += (_, _) =>
         {
+            if (protocol == Protocols.Serial)
+            {
+                if ((serialPort.Text ?? "").Trim().Length == 0) { MessageBox.Show(window, "请填写串口"); return; }
+                if (!int.TryParse((baud.Text ?? "").Trim(), out var br) || br <= 0) { MessageBox.Show(window, "波特率不对"); return; }
+                window.DialogResult = true;
+                return;
+            }
             if (address.Text.Trim().Length == 0) { MessageBox.Show(window, "请填写地址"); return; }
             if (!int.TryParse(port.Text.Trim(), out var p) || p <= 0 || p > 65535) { MessageBox.Show(window, "端口不对"); return; }
             window.DialogResult = true;
@@ -133,13 +183,20 @@ static class TerminalDialogs
         if (window.ShowDialog() != true) return null;
 
         h.Name = name.Text.Trim();
+        h.Protocol = protocol;
+        h.SerialPort = (serialPort.Text ?? "").Trim();
+        h.BaudRate = int.TryParse((baud.Text ?? "").Trim(), out var baudRate) ? baudRate : 115200;
+        h.DataBits = dataBits;
+        h.Parity = parity;
+        h.StopBits = stopBits;
+        h.FlowControl = flow;
         h.Group = string.Join("/", (group.Text ?? "").Split('/').Select(s => s.Trim()).Where(s => s.Length > 0));
         var hostText = address.Text.Trim();
         // "user@host:port" pasted into the address box is taken apart.
         if (hostText.Contains('@')) { var at = hostText.LastIndexOf('@'); user.Text = hostText.Substring(0, at); hostText = hostText.Substring(at + 1); }
         if (hostText.Count(c => c == ':') == 1 && int.TryParse(hostText.Split(':')[1], out var embedded)) { port.Text = embedded.ToString(); hostText = hostText.Split(':')[0]; }
         h.Host = hostText;
-        h.Port = int.Parse(port.Text.Trim());
+        h.Port = int.TryParse(port.Text.Trim(), out var portNumber) ? portNumber : h.Port;
         h.User = user.Text.Trim();
         h.Auth = auth;
         h.Password = password.Password.Length > 0 ? Secret.Protect(password.Password) : "";
