@@ -123,6 +123,9 @@ sealed class TerminalData
     public Dictionary<string, string> KnownHosts { get; set; } = new();
     public TerminalSettings Settings { get; set; } = new();
     public double SidebarWidth { get; set; } = 230;
+    /// <summary>Terminal window placement: left, top, width, height; empty until first closed.</summary>
+    public double[] WindowBounds { get; set; } = new double[0];
+    public bool WindowMaximized { get; set; }
     public double PanelWidth { get; set; } = 340;
 
     public HostEntry? Find(string id) => Hosts.FirstOrDefault(h => h.Id == id);

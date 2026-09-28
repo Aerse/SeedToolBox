@@ -122,8 +122,25 @@ sealed partial class TerminalPage : DockPanel, IConnectPrompts
         _broadcast.Checked += (_, _) => { if (_current != null) { _current.Broadcast = true; UpdateFrames(_current); } };
         _broadcast.Unchecked += (_, _) => { if (_current != null) { _current.Broadcast = false; UpdateFrames(_current); } };
         RefreshTree();
-        Application.Current.Exit += (_, _) => { foreach (var t in _tabs.ToList()) foreach (var p in t.Panes.ToList()) DisposePane(p); SaveNow(); };
+        Application.Current.Exit += OnAppExit;
         UpdateStatus();
+    }
+
+    /// <summary>Open SSH connections, for asking before the window closes.</summary>
+    public int ConnectedCount => _tabs.SelectMany(t => t.Panes).Count(p => p.Connection is { IsConnected: true });
+
+    /// <summary>Closes every session and saves; the page is not used again afterwards.</summary>
+    public TerminalData Data => _data;
+
+    void OnAppExit(object? sender, ExitEventArgs e) => Shutdown();
+
+    public void Shutdown()
+    {
+        Application.Current.Exit -= OnAppExit;
+        foreach (var t in _tabs.ToList()) foreach (var p in t.Panes.ToList()) DisposePane(p);
+        _tabs.Clear();
+        _sftp?.CloseAll();
+        SaveNow();
     }
 
     // ---------- top bar ----------
