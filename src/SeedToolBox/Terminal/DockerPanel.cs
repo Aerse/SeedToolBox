@@ -156,7 +156,7 @@ sealed class DockerPanel : DockPanel
                 usage.TryGetValue(r[0], out var u);
                 return new Container
                 {
-                    Id = r[0].Length > 12 ? r[0].Substring(0, 12) : r[0], Name = r[1], Image = r[2], State = r[3], Status = r[4],
+                    Id = r[0].Length > 12 ? r[0].Substring(0, 12) : r[0], Name = r[1], Image = r[2].StartsWith("sha256:") && r[2].Length > 19 ? r[2].Substring(7, 12) : r[2], State = r[3], Status = r[4],
                     Ports = r.Length > 5 ? Ports(r[5]) : "", Cpu = u.Item1 ?? "", Memory = u.Item2 ?? "",
                 };
             }).OrderBy(x => x.Running ? 0 : 1).ThenBy(x => x.Name).ToList();
