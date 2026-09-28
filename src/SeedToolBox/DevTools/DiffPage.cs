@@ -99,6 +99,15 @@ sealed class DiffPage : DockPanel
 
     void AllowFileDrop(TextBox box) => Ui.FileDrop(box, files => Ui.LoadText(box, files[0], _status));
 
+    /// <summary>Fills both sides and compares them (used by the SFTP panel).</summary>
+    public void Load(string left, string right)
+    {
+        _left.Text = left;
+        _right.Text = right;
+        _sideBySide.IsChecked = true;
+        Compare();
+    }
+
     void Compare()
     {
         var a = Lines(_left.Text);

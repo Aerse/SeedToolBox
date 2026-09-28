@@ -459,6 +459,9 @@ sealed class SftpPanel : DockPanel
         Item(one?.IsDirectory == true ? "刷新这个文件夹" : "编辑（保存后自动上传）", () => { if (one?.IsDirectory == true) Refresh(one.FullName); else if (one != null) Activate(one); }, one != null);
         Item("下载…", Download, any);
         Item("上传文件到这里…", UploadPick);
+        var file = one is { IsDirectory: false };
+        Item("与本地文件比较…", () => _ = CompareLocal(one!), file);
+        Item(Marked == null ? "标记用于比较" : "与已标记的「" + Marked.Value.Title + "」比较", () => _ = CompareMarked(one!), file);
         menu.Items.Add(new Separator());
         Item("重命名…", Rename, any);
         Item("修改权限…", Chmod, any);
@@ -665,6 +668,70 @@ sealed class SftpPanel : DockPanel
     }
 
     // ---------- edit in place ----------
+
+    /// <summary>A remote file picked for comparison; may belong to another panel or server.</summary>
+    static (string Title, Func<Task<string>> Read)? Marked;
+
+    async Task<string> ReadText(IRemoteFiles client, string remote)
+    {
+        using var stream = new MemoryStream();
+        await client.DownloadAsync(remote, stream, null, CancellationToken.None);
+        return System.Text.Encoding.UTF8.GetString(stream.ToArray());
+    }
+
+    Func<Task<string>> Reader(Entry e)
+    {
+        var source = _source;
+        var remote = e.FullName;
+        return async () =>
+        {
+            if (source != _source) throw new InvalidOperationException("连接已经切换");
+            return await ReadText(await ClientAsync(), remote);
+        };
+    }
+
+    bool TooBig(Entry e) => e.Length > 5L * 1024 * 1024 && !ApiDialogs.Confirm(_owner(), $"「{e.Name}」有 {Ui.FormatSize(e.Length)}，确定要比较吗？");
+
+    async Task CompareLocal(Entry e)
+    {
+        if (TooBig(e)) return;
+        var dlg = new OpenFileDialog { Title = "选择要和「" + e.Name + "」比较的本地文件", FileName = e.Name };
+        if (dlg.ShowDialog(_owner()) != true) return;
+        await ShowDiff(e.FullName + "  ↔  " + dlg.FileName, Reader(e), () => Task.FromResult(File.ReadAllText(dlg.FileName)));
+    }
+
+    async Task CompareMarked(Entry e)
+    {
+        if (Marked is not { } marked)
+        {
+            if (TooBig(e)) return;
+            Marked = (e.Name, Reader(e));
+            Ui.SetStatus(_status, $"已标记「{e.Name}」，再右键另一个远程文件（可以在其他服务器上）选择比较");
+            return;
+        }
+        Marked = null;
+        await ShowDiff(marked.Title + "  ↔  " + e.FullName, marked.Read, Reader(e));
+    }
+
+    async Task ShowDiff(string title, Func<Task<string>> left, Func<Task<string>> right)
+    {
+        Ui.SetStatus(_status, "正在读取文件…");
+        string a, b;
+        try { a = await left(); b = await right(); }
+        catch (Exception ex) when (IsSftpError(ex) || ex is InvalidOperationException or UnauthorizedAccessException)
+        {
+            Ui.SetStatus(_status, "读取失败：" + ex.Message, true);
+            return;
+        }
+        Ui.SetStatus(_status, "");
+        var page = new DiffPage { Margin = new Thickness(12) };
+        var window = new Window { Title = "比较 " + title, Width = 1100, Height = 760, Content = page };
+        window.SetResourceReference(Window.BackgroundProperty, "WindowBrush");
+        window.SetResourceReference(Window.ForegroundProperty, "TextBrush");
+        TerminalDialogs.Place(window, _owner());
+        window.Show();
+        page.Load(a, b);
+    }
 
     async Task EditAsync(Entry e)
     {
