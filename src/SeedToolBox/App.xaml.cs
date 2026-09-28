@@ -135,7 +135,6 @@ public partial class App : Application
         main.AddQuickButton("\uE823", "提醒", () => toolbox.ShowAndActivate("reminders"));
         main.AddQuickButton("\uE9D2", "系统监控", () => toolbox.ShowAndActivate("monitor"));
         main.AddQuickButton("\uE767", "声音亮度", () => toolbox.ShowAndActivate("sound"));
-        main.AddQuickButton("\uE8FD", "全部工具", () => toolbox.ShowAndActivate());
         _tray.AddCommand("clipboardPause", "暂停记录剪贴板", () => clipboard.Recording = !clipboard.Recording);
         clipboard.RecordingChanged += () => _tray.SetChecked("clipboardPause", !clipboard.Recording);
         _tray.SetChecked("clipboardPause", !clipboard.Recording);
@@ -197,6 +196,8 @@ public partial class App : Application
         main.AskAi = ai.Ask;
         main.AutomateAi = task => ai.Automate(task);
         toolbox.AddPage("aiLog", "\uE81C", "AI 操作记录", () => new Ai.Automation.OperationLogPage(ai.Operations));
+        main.AddQuickButton("\uE99A", "AI 助手", () => ai.Open(), () => ai.Settings.OpenHotkey);
+        main.AddQuickButton("\uE8FD", "全部工具", () => toolbox.ShowAndActivate());
         toolbox.AddPage("aiPlugins", "\uEA86", "AI 插件和技能", () => new Ai.Automation.PluginsPage(ai));
         toolbox.AddTool("ai", "\uE99A", "AI 助手", () => ai.Open(), hide: false);
         toolbox.AddTool("aiScreenshot", "\uE722", "截图问 AI", () => { if (ai.Ready()) screen.AskAi(); });
@@ -219,6 +220,7 @@ public partial class App : Application
         _hotkeys.Add(new HotkeyBinding("ruler", "屏幕标尺", () => screen.Settings.RulerHotkey, v => screen.Settings.RulerHotkey = v, () => RunHidden(screen.Ruler)));
         _hotkeys.Add(new HotkeyBinding("ocr", "识别文字", () => screen.Settings.OcrHotkey, v => screen.Settings.OcrHotkey = v, () => RunHidden(screen.RecognizeText)));
         _hotkeys.Add(new HotkeyBinding("table", "识别表格", () => screen.Settings.TableHotkey, v => screen.Settings.TableHotkey = v, () => RunHidden(screen.RecognizeTable)));
+        _hotkeys.Add(new HotkeyBinding("aiOpen", "打开 AI 助手", () => ai.Settings.OpenHotkey, v => { ai.Settings.OpenHotkey = v; ai.Save(); }, () => ai.Open()));
         _hotkeys.Add(new HotkeyBinding("aiSelection", "AI 处理选中文字", () => ai.Settings.SelectionHotkey, v => { ai.Settings.SelectionHotkey = v; ai.Save(); }, ai.FromSelection));
         _hotkeys.Add(new HotkeyBinding("aiScreenshot", "截图问 AI", () => ai.Settings.ScreenshotHotkey, v => { ai.Settings.ScreenshotHotkey = v; ai.Save(); }, () => { if (ai.Ready()) RunHidden(screen.AskAi); }));
         _hotkeys.Add(new HotkeyBinding("qr", "识别二维码", () => screen.Settings.QrHotkey, v => screen.Settings.QrHotkey = v, () => RunHidden(screen.RecognizeQrCodes)));

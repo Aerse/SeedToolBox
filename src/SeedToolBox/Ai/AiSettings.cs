@@ -21,6 +21,7 @@ public sealed class AiSettings
     public string Thinking { get; set; } = "off";
     /// <summary>Copies the selection in the foreground window and opens the assistant with it.</summary>
     public string SelectionHotkey { get; set; } = "";
+    public string OpenHotkey { get; set; } = "";
     public string ScreenshotHotkey { get; set; } = "";
 
     /// <summary>Folders the automation mode may change files in; empty means Desktop, Documents and Downloads.</summary>
