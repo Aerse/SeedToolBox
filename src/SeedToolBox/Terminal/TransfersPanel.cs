@@ -24,6 +24,8 @@ sealed class Transfer : INotifyPropertyChanged
     public long Total;
     public DateTime Started = DateTime.Now;
     public CancellationTokenSource Cancel = new();
+    /// <summary>Starts the same transfer again (a new entry); null when it cannot be repeated.</summary>
+    public Action? Retry;
     readonly Stopwatch _clock = Stopwatch.StartNew();
     long _done, _lastDone;
     double _lastTime, _speed;
@@ -36,14 +38,21 @@ sealed class Transfer : INotifyPropertyChanged
         {
             _done = value;
             var now = _clock.Elapsed.TotalSeconds;
-            if (now - _lastTime >= 0.5) { _speed = (_done - _lastDone) / (now - _lastTime); _lastDone = _done; _lastTime = now; Changed(nameof(Speed)); }
+            if (now - _lastTime >= 0.5) { _speed = (_done - _lastDone) / (now - _lastTime); _lastDone = _done; _lastTime = now; Changed(nameof(Speed)); Changed(nameof(Detail)); }
             Changed(nameof(Percent));
             Changed(nameof(Size));
+            Changed(nameof(Detail));
         }
     }
 
     public double Percent => Total > 0 ? 100.0 * _done / Total : State == "完成" ? 100 : 0;
     public string Direction => Upload ? "↑" : "↓";
+    public string Title => Direction + " " + Name;
+    public string Detail => string.Join(" · ", new[] { Size, Speed, Server }.Where(x => x.Length > 0));
+    /// <summary>Red for failures, green when done, the dim text colour otherwise.</summary>
+    public object? StateBrush => _state.StartsWith("失败") ? System.Windows.Media.Brushes.IndianRed
+        : _state == "完成" ? new System.Windows.Media.SolidColorBrush(System.Windows.Media.Color.FromRgb(0x3C, 0xBF, 0x6E))
+        : Application.Current.TryFindResource("SecondaryTextBrush");
     public string Size => $"{Ui.FormatSize(_done)} / {Ui.FormatSize(Total)}";
     public bool Active => _state is "上传中" or "下载中" or "等待" or "压缩中" or "解压中";
     public string Speed => Active && _speed > 0 ? Ui.FormatSize((long)_speed) + "/s" : Active ? "" : Average;
@@ -56,7 +65,7 @@ sealed class Transfer : INotifyPropertyChanged
         {
             _state = value;
             if (!Active) _clock.Stop();
-            Changed(nameof(State)); Changed(nameof(Speed)); Changed(nameof(Percent));
+            Changed(nameof(State)); Changed(nameof(Speed)); Changed(nameof(Percent)); Changed(nameof(Detail)); Changed(nameof(StateBrush));
             Transfers.OnChanged();
         }
     }
@@ -135,7 +144,7 @@ static class Transfers
 /// <summary>The 传输 tab: every upload and download, with progress, speed and shortcuts to the files.</summary>
 sealed class TransfersPanel : DockPanel
 {
-    readonly ListView _list = new() { BorderThickness = new Thickness(0), ItemsSource = Transfers.All };
+    readonly ListBox _list = new() { BorderThickness = new Thickness(0), Background = System.Windows.Media.Brushes.Transparent, ItemsSource = Transfers.All, HorizontalContentAlignment = HorizontalAlignment.Stretch };
     readonly TextBlock _status = Ui.Status();
 
     public TransfersPanel()
@@ -151,15 +160,8 @@ sealed class TransfersPanel : DockPanel
         SetDock(_status, Dock.Bottom);
         Children.Add(_status);
 
-        var g = new GridView();
-        g.Columns.Add(Col("", nameof(Transfer.Direction), 22));
-        g.Columns.Add(Col("文件", nameof(Transfer.Name), 150));
-        g.Columns.Add(new GridViewColumn { Header = "进度", Width = 90, CellTemplate = ProgressTemplate() });
-        g.Columns.Add(Col("大小", nameof(Transfer.Size), 130));
-        g.Columns.Add(Col("速度", nameof(Transfer.Speed), 100));
-        g.Columns.Add(Col("状态", nameof(Transfer.State), 80));
-        g.Columns.Add(Col("服务器", nameof(Transfer.Server), 110));
-        _list.View = g;
+        _list.ItemTemplate = CardTemplate();
+        ScrollViewer.SetHorizontalScrollBarVisibility(_list, ScrollBarVisibility.Disabled);
         _list.MouseDoubleClick += (_, _) => { if (_list.SelectedItem is Transfer t) OpenItem(t); };
         _list.ContextMenuOpening += (_, e) => { if (_list.SelectedItem is Transfer t) _list.ContextMenu = Menu(t); else e.Handled = true; };
         _list.ContextMenu = new ContextMenu();
@@ -169,16 +171,37 @@ sealed class TransfersPanel : DockPanel
         Update();
     }
 
-    static GridViewColumn Col(string header, string path, double width) =>
-        new() { Header = header, Width = width, DisplayMemberBinding = new Binding(path) };
-
-    static DataTemplate ProgressTemplate()
+    /// <summary>Name and state, a full-width bar, then size · speed · server in small print; fits the narrow side panel.</summary>
+    static DataTemplate CardTemplate()
     {
+        FrameworkElementFactory Text(string path, double size, bool dim)
+        {
+            var t = new FrameworkElementFactory(typeof(TextBlock));
+            t.SetBinding(TextBlock.TextProperty, new Binding(path));
+            t.SetValue(TextBlock.FontSizeProperty, size);
+            t.SetValue(TextBlock.TextTrimmingProperty, TextTrimming.CharacterEllipsis);
+            if (dim) t.SetResourceReference(TextBlock.ForegroundProperty, "SecondaryTextBrush");
+            return t;
+        }
+        var root = new FrameworkElementFactory(typeof(StackPanel));
+        root.SetValue(FrameworkElement.MarginProperty, new Thickness(2, 5, 2, 6));
+        var top = new FrameworkElementFactory(typeof(DockPanel));
+        var state = Text(nameof(Transfer.State), 11.5, true);
+        state.SetValue(DockPanel.DockProperty, Dock.Right);
+        state.SetValue(FrameworkElement.MaxWidthProperty, 170.0);
+        state.SetValue(FrameworkElement.MarginProperty, new Thickness(8, 0, 0, 0));
+        state.SetBinding(TextBlock.ForegroundProperty, new Binding(nameof(Transfer.StateBrush)));
+        state.SetBinding(FrameworkElement.ToolTipProperty, new Binding(nameof(Transfer.State)));
+        top.AppendChild(state);
+        top.AppendChild(Text(nameof(Transfer.Title), 13, false));
+        root.AppendChild(top);
         var bar = new FrameworkElementFactory(typeof(ProgressBar));
         bar.SetBinding(RangeBase.ValueProperty, new Binding(nameof(Transfer.Percent)) { Mode = BindingMode.OneWay });
-        bar.SetValue(FrameworkElement.HeightProperty, 6.0);
-        bar.SetValue(FrameworkElement.WidthProperty, 76.0);
-        return new DataTemplate { VisualTree = bar };
+        bar.SetValue(FrameworkElement.HeightProperty, 4.0);
+        bar.SetValue(FrameworkElement.MarginProperty, new Thickness(0, 4, 0, 3));
+        root.AppendChild(bar);
+        root.AppendChild(Text(nameof(Transfer.Detail), 11, true));
+        return new DataTemplate { VisualTree = root };
     }
 
     void Update()
@@ -213,6 +236,7 @@ sealed class TransfersPanel : DockPanel
         Item("复制本地路径", () => Copy(t.Local), t.Local.Length > 0);
         Item("复制远程路径", () => Copy(t.Remote), t.Remote.Length > 0);
         menu.Items.Add(new Separator());
+        Item("重试", () => { Transfers.All.Remove(t); t.Retry!(); }, t.Retry != null && !t.Active && t.State != "完成");
         Item("取消", () => t.Cancel.Cancel(), t.Active);
         Item("从列表中移除", () => { t.Cancel.Cancel(); Transfers.All.Remove(t); Transfers.OnChanged(); });
         Item("清除已结束的", ClearFinished);

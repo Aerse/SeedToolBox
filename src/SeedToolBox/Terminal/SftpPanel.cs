@@ -45,6 +45,12 @@ sealed class SftpPanel : DockPanel
     readonly ToggleButton _hidden = new() { ToolTip = "显示隐藏文件" };
     /// <summary>Transfers started here, cancelled when the panel closes; the list itself lives in <see cref="Transfers"/>.</summary>
     readonly List<Transfer> _mine = new();
+    readonly Button _openFolder = new() { Content = "打开文件夹", Padding = new Thickness(8, 2, 8, 2), Margin = new Thickness(6, 2, 0, 2), Visibility = Visibility.Collapsed, FontSize = 12 };
+    /// <summary>How to treat files that already exist, for the rest of the current batch.</summary>
+    Conflict _conflict;
+    /// <summary>Batches in progress; the finished summary waits until they are all done.</summary>
+    int _batches;
+    enum Conflict { Ask, Overwrite, Skip, Stop }
     readonly Dictionary<object, IRemoteFiles> _clients = new();
     readonly List<FileSystemWatcher> _watchers = new();
     readonly Func<Window?> _owner;
@@ -103,8 +109,14 @@ sealed class SftpPanel : DockPanel
         _follow.Checked += (_, _) => FollowEnabled?.Invoke();
 
         _status.Margin = new Thickness(0, 4, 0, 4);
-        DockPanel.SetDock(_status, Dock.Bottom);
-        Children.Add(_status);
+        var statusRow = new DockPanel();
+        _openFolder.Click += (_, _) => { if (_openFolder.Tag is string f) Transfers.Reveal(f); };
+        DockPanel.SetDock(_openFolder, Dock.Right);
+        statusRow.Children.Add(_openFolder);
+        statusRow.Children.Add(_status);
+        DockPanel.SetDock(statusRow, Dock.Bottom);
+        Children.Add(statusRow);
+        Transfers.Changed += () => Dispatcher.BeginInvoke(TransfersChanged);
 
         _tree.SelectedItemChanged += (_, _) =>
         {
@@ -506,11 +518,20 @@ sealed class SftpPanel : DockPanel
     async Task UploadAsync(string[] paths, string remoteDir)
     {
         if (_source == null) return;
+        _batches++;
+        try { await UploadBatch(paths, remoteDir); }
+        finally { _batches--; TransfersChanged(); }
+    }
+
+    async Task UploadBatch(string[] paths, string remoteDir)
+    {
+        _conflict = Conflict.Ask;
         IRemoteFiles client;
         try { client = await ClientAsync(); }
         catch (Exception ex) when (IsSftpError(ex)) { Ui.SetStatus(_status, "上传失败：" + ex.Message, true); return; }
         foreach (var path in paths)
         {
+            if (_conflict == Conflict.Stop) break;
             if (Directory.Exists(path) && client.Shell != null && Packer.LocalTar != null && await PackedUpload(client, path, remoteDir)) continue;
             if (Directory.Exists(path))
             {
@@ -528,9 +549,12 @@ sealed class SftpPanel : DockPanel
         Refresh(remoteDir);
     }
 
-    async Task<bool> UploadOne(IRemoteFiles client, string local, string remote)
+    async Task<bool> UploadOne(IRemoteFiles client, string local, string remote, bool force = false)
     {
+        if (!force && _conflict == Conflict.Stop) return false;
+        if (!force && await Exists(client, remote) && !AllowOverwrite(remote)) return false;
         var t = Start(new Transfer { Name = Path.GetFileName(local), Upload = true, Local = local, Remote = remote, Total = new FileInfo(local).Length, State = "上传中" });
+        t.Retry = Retrier(async c => await UploadOne(c, local, remote, true));
         try
         {
             using var stream = File.OpenRead(local);
@@ -553,7 +577,7 @@ sealed class SftpPanel : DockPanel
         {
             var dlg = new SaveFileDialog { FileName = items[0].Name, Title = "下载 " + items[0].Name, InitialDirectory = Transfers.LastFolder };
             if (dlg.ShowDialog(_owner()) != true) return;
-            _ = DownloadOne(items[0].FullName, dlg.FileName, items[0].Length);
+            _ = DownloadOne(items[0].FullName, dlg.FileName, items[0].Length, true);
             return;
         }
         var pick = new System.Windows.Forms.FolderBrowserDialog { Description = "下载到哪个文件夹？", SelectedPath = Transfers.LastFolder };
@@ -564,11 +588,20 @@ sealed class SftpPanel : DockPanel
 
     async Task DownloadMany(List<Entry> items, string folder)
     {
+        _batches++;
+        try { await DownloadBatch(items, folder); }
+        finally { _batches--; TransfersChanged(); }
+    }
+
+    async Task DownloadBatch(List<Entry> items, string folder)
+    {
+        _conflict = Conflict.Ask;
         IRemoteFiles client;
         try { client = await ClientAsync(); }
         catch (Exception ex) when (IsSftpError(ex)) { Ui.SetStatus(_status, "下载失败：" + ex.Message, true); return; }
         foreach (var e in items)
         {
+            if (_conflict == Conflict.Stop) break;
             if (!e.IsDirectory) { await DownloadOne(e.FullName, Path.Combine(folder, e.Name), e.Length); continue; }
             if (client.Shell != null && Packer.LocalTar != null && await PackedDownload(client, e.FullName, folder)) continue;
             List<(string Remote, string Local, long Length)> files;
@@ -597,10 +630,62 @@ sealed class SftpPanel : DockPanel
     /// <summary>Server name shown in the 传输 tab.</summary>
     public string ServerName { get; set; } = "";
 
+    static async Task<bool> Exists(IRemoteFiles client, string remote)
+    {
+        try { return await Task.Run(() => client.Exists(remote)); }
+        catch (Exception ex) when (IsSftpError(ex)) { return false; }
+    }
+
+    /// <summary>Asks once per existing file unless the user picked "same for the rest".</summary>
+    bool AllowOverwrite(string path)
+    {
+        if (_conflict == Conflict.Overwrite) return true;
+        if (_conflict is Conflict.Skip or Conflict.Stop) return false;
+        var all = new CheckBox { Content = "后面的冲突都这样处理", Margin = new Thickness(0, 12, 0, 0) };
+        var body = new StackPanel { Margin = new Thickness(16), Children = { new TextBlock { Text = "已经存在：\n" + path + "\n\n要覆盖它吗？", TextWrapping = TextWrapping.Wrap, MaxWidth = 440 }, all } };
+        var overwrite = Views.DialogWindow.OkButton("覆盖");
+        var skip = Views.DialogWindow.CancelButton("跳过");
+        skip.IsCancel = false;
+        var stop = Views.DialogWindow.CancelButton("全部取消");
+        var window = Views.DialogWindow.Create("文件已存在", body, overwrite, skip, stop);
+        TerminalDialogs.Place(window, _owner());
+        var choice = Conflict.Stop;
+        overwrite.Click += (_, _) => { choice = Conflict.Overwrite; window.Close(); };
+        skip.Click += (_, _) => { choice = Conflict.Skip; window.Close(); };
+        window.ShowDialog();
+        if (choice == Conflict.Stop || all.IsChecked == true) _conflict = choice;
+        return choice == Conflict.Overwrite;
+    }
+
+    /// <summary>Retry from the 传输 tab, as long as this panel still shows the same server.</summary>
+    Action Retrier(Func<IRemoteFiles, Task> again)
+    {
+        var source = _source;
+        return async () =>
+        {
+            if (source != _source || source == null) { Ui.SetStatus(_status, "连接已经切换，没法重试", true); return; }
+            try { await again(await ClientAsync()); }
+            catch (Exception ex) when (IsSftpError(ex) || ex is InvalidOperationException) { Ui.SetStatus(_status, "重试失败：" + ex.Message, true); }
+        };
+    }
+
+    void TransfersChanged()
+    {
+        if (_batches > 0 || _mine.Count == 0 || _mine.Any(t => t.Active)) return;
+        var downloads = _mine.Where(t => !t.Upload && t.State == "完成" && !t.Local.StartsWith(Path.GetTempPath(), StringComparison.OrdinalIgnoreCase)).ToList();
+        var failed = _mine.Count(t => t.State.StartsWith("失败"));
+        var done = _mine.Count(t => t.State == "完成");
+        _mine.Clear();
+        Ui.SetStatus(_status, $"传输结束：{done} 个完成" + (failed > 0 ? $"，{failed} 个失败（在「传输」页签里可以重试）" : ""), failed > 0);
+        if (downloads.Count == 0) return;
+        _openFolder.Tag = downloads.Count == 1 ? downloads[0].Local : Path.GetDirectoryName(downloads[0].Local) is { } dir && downloads.All(d => d.Local.StartsWith(dir)) ? downloads[0].Local : Transfers.LastFolder;
+        _openFolder.Visibility = Visibility.Visible;
+    }
+
     Transfer Start(Transfer t)
     {
+        _openFolder.Visibility = Visibility.Collapsed;
         t.Server = ServerName;
-        _mine.RemoveAll(x => !x.Active);
         _mine.Add(t);
         Transfers.Add(t);
         Ui.SetStatus(_status, $"{(t.Upload ? "上传" : "下载")}「{t.Name}」… 进度和历史在「传输」页签");
@@ -615,6 +700,7 @@ sealed class SftpPanel : DockPanel
         var name = Path.GetFileName(folder.TrimEnd('\\'));
         var archive = Packer.TempArchive();
         var remoteArchive = Join(remoteDir, ".stb-upload-" + Path.GetFileName(archive));
+        if (await Exists(client, Join(remoteDir, name)) && !AllowOverwrite(Join(remoteDir, name) + "（文件夹，同名文件会被覆盖）")) return true;
         var t = Start(new Transfer { Name = name + "（打包）", Upload = true, Local = folder, Remote = Join(remoteDir, name), State = "压缩中" });
         try
         {
@@ -642,6 +728,7 @@ sealed class SftpPanel : DockPanel
         var name = ParentOf(remoteFolder) == remoteFolder ? "root" : remoteFolder.TrimEnd('/').Substring(ParentOf(remoteFolder).TrimEnd('/').Length + 1);
         var archive = Packer.TempArchive();
         var remoteArchive = "/tmp/.stb-download-" + Path.GetFileName(archive);
+        if (Directory.Exists(Path.Combine(localFolder, name)) && !AllowOverwrite(Path.Combine(localFolder, name) + "（文件夹，同名文件会被覆盖）")) return true;
         var t = Start(new Transfer { Name = name + "（打包）", Local = Path.Combine(localFolder, name), Remote = remoteFolder, State = "压缩中" });
         try
         {
@@ -668,9 +755,12 @@ sealed class SftpPanel : DockPanel
     static void Cleanup(IRemoteFiles client, string remoteArchive) =>
         _ = Task.Run(() => { try { client.Shell?.Invoke("rm -f " + Packer.Quote(remoteArchive), 30); } catch (Exception ex) when (IsSftpError(ex) || ex is InvalidOperationException or ObjectDisposedException) { } });
 
-    async Task<bool> DownloadOne(string remote, string local, long length)
+    async Task<bool> DownloadOne(string remote, string local, long length, bool force = false)
     {
+        if (!force && _conflict == Conflict.Stop) return false;
+        if (!force && File.Exists(local) && !AllowOverwrite(local)) return false;
         var t = Start(new Transfer { Name = Path.GetFileName(local), Local = local, Remote = remote, Total = length, State = "下载中" });
+        t.Retry = Retrier(async _ => await DownloadOne(remote, local, length, true));
         try
         {
             var client = await ClientAsync();
@@ -765,7 +855,7 @@ sealed class SftpPanel : DockPanel
         var folder = Path.Combine(Path.GetTempPath(), "SeedToolBox", "sftp-edit", Guid.NewGuid().ToString("N").Substring(0, 8));
         Directory.CreateDirectory(folder);
         var local = Path.Combine(folder, e.Name);
-        if (!await DownloadOne(e.FullName, local, e.Length)) return;
+        if (!await DownloadOne(e.FullName, local, e.Length, true)) return;
         var source = _source;
         var remote = e.FullName;
         var watcher = new FileSystemWatcher(folder, e.Name) { NotifyFilter = NotifyFilters.LastWrite | NotifyFilters.Size | NotifyFilters.FileName, EnableRaisingEvents = true };

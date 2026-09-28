@@ -43,6 +43,26 @@ sealed partial class TerminalPage
         return b;
     }
 
+    /// <summary>Number of running transfers on the rail button.</summary>
+    static FrameworkElement TransferBadge()
+    {
+        var text = new TextBlock { FontSize = 9, Foreground = System.Windows.Media.Brushes.White, HorizontalAlignment = HorizontalAlignment.Center };
+        var badge = new Border
+        {
+            Background = Brand, CornerRadius = new CornerRadius(7), MinWidth = 14, Height = 14, Padding = new Thickness(3, 0, 3, 0),
+            HorizontalAlignment = HorizontalAlignment.Right, VerticalAlignment = VerticalAlignment.Top, Margin = new Thickness(0, 4, 5, 0),
+            IsHitTestVisible = false, Visibility = Visibility.Collapsed, Child = text,
+        };
+        void Update()
+        {
+            var n = Transfers.ActiveCount;
+            text.Text = n > 99 ? "99+" : n.ToString();
+            badge.Visibility = n > 0 ? Visibility.Visible : Visibility.Collapsed;
+        }
+        Transfers.Changed += () => badge.Dispatcher.BeginInvoke(Update);
+        return badge;
+    }
+
     FrameworkElement BuildRail()
     {
         var rail = new StackPanel { Margin = new Thickness(0, 6, 0, 0) };
@@ -56,6 +76,7 @@ sealed partial class TerminalPage
             cell.Children.Add(mark);
             rail.Children.Add(cell);
             _railButtons.Add((index, b, mark));
+            if (index == SideTransfers) cell.Children.Add(TransferBadge());
         }
         Add(SideHosts, "\uE7F4");
         Add(SideSftp, "\uE8B7");
