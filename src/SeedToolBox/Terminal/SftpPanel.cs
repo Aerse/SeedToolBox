@@ -57,99 +57,171 @@ sealed class SftpPanel : DockPanel
     }
 
     readonly TextBox _path = Ui.Field();
-    readonly ListView _list = new() { BorderThickness = new Thickness(0) };
+    readonly TreeView _tree = new() { BorderThickness = new Thickness(0), Background = Brushes.Transparent };
     readonly TextBlock _status = Ui.Status();
-    readonly ToggleButton _follow = new() { Content = "跟随", IsChecked = true, Padding = new Thickness(6, 2, 6, 2), ToolTip = "终端切换目录时跟着切换（需要 shell 报告目录，bash/zsh 可自动开启）" };
-    readonly ToggleButton _hidden = new() { Content = ".*", Padding = new Thickness(6, 2, 6, 2), ToolTip = "显示隐藏文件" };
+    readonly ToggleButton _follow = new() { IsChecked = true, ToolTip = "定位：终端切换目录时跟着展开（需要 shell 报告目录，bash/zsh 可自动开启）" };
+    readonly ToggleButton _hidden = new() { ToolTip = "显示隐藏文件" };
+    readonly ListBox _queue = new() { MaxHeight = 140, BorderThickness = new Thickness(0), Visibility = Visibility.Collapsed };
     readonly ObservableCollection<Transfer> _transfers = new();
     readonly Dictionary<SshConnection, SftpClient> _clients = new();
     readonly List<FileSystemWatcher> _watchers = new();
     readonly Func<Window?> _owner;
     readonly Action<string> _cdInTerminal;
     SshConnection? _connection;
+    TreeViewItem? _root;
+    string _home = "/";
     string _current = "";
     int _version;
+    bool _showQueue;
 
     /// <summary>The user turned on follow; the page can ask the shell to report its directory.</summary>
     public event Action? FollowEnabled;
+
+    /// <summary>Favourite folders of the bound host; changes are saved through <see cref="FavoritesChanged"/>.</summary>
+    public List<string>? Favorites { get; set; }
+    public event Action? FavoritesChanged;
+
+    static readonly SolidColorBrush FolderBrush = ApiUi.Frozen(0xE8, 0xB3, 0x39);
+    static readonly SolidColorBrush Green = ApiUi.Frozen(0x3C, 0xBF, 0x6E);
+    static readonly FontFamily Icons = new("Segoe Fluent Icons, Segoe MDL2 Assets");
 
     public SftpPanel(Func<Window?> owner, Action<string> cdInTerminal)
     {
         _owner = owner;
         _cdInTerminal = cdInTerminal;
-        var bar = new DockPanel { Margin = new Thickness(0, 0, 0, 6) };
+        _path.Margin = new Thickness(0, 0, 0, 6);
+        _path.ToolTip = "输入路径后按回车跳转";
+        DockPanel.SetDock(_path, Dock.Top);
+        Children.Add(_path);
+        _path.KeyDown += (_, e) => { if (e.Key == Key.Enter) { Go(_path.Text.Trim()); e.Handled = true; } };
+
+        var bar = new DockPanel { Margin = new Thickness(-4, 0, 0, 4) };
+        var upload = ApiUi.Icon("", "上传文件到选中的文件夹…", UploadPick);
+        DockPanel.SetDock(upload, Dock.Right);
+        bar.Children.Add(upload);
         var buttons = new StackPanel { Orientation = Orientation.Horizontal };
-        buttons.Children.Add(ApiUi.Icon("\uE74A", "上级目录", () => Go(ParentOf(_current))));
-        buttons.Children.Add(ApiUi.Icon("\uE80F", "主目录", () => Go("~")));
-        buttons.Children.Add(ApiUi.Icon("\uE72C", "刷新", () => Go(_current)));
-        buttons.Children.Add(ApiUi.Icon("\uE8F4", "新建文件夹", NewFolder));
-        buttons.Children.Add(ApiUi.Icon("\uE898", "上传文件…", UploadPick));
-        buttons.Children.Add(_hidden);
+        buttons.Children.Add(ApiUi.Icon("", "主目录", () => Go("~")));
+        Style(_follow, "");
         buttons.Children.Add(_follow);
-        DockPanel.SetDock(buttons, Dock.Right);
+        buttons.Children.Add(ApiUi.Icon("", "全部折叠", CollapseAll));
+        Style(_hidden, "");
+        buttons.Children.Add(_hidden);
+        buttons.Children.Add(ApiUi.Icon("", "刷新（F5）", () => Refresh(_current)));
+        Button fav = null!;
+        fav = ApiUi.Icon("", "收藏的文件夹", () => Open(FavoritesMenu(), fav));
+        buttons.Children.Add(fav);
+        Button more = null!;
+        more = ApiUi.Icon("", "更多", () => Open(MoreMenu(), more));
+        buttons.Children.Add(more);
         bar.Children.Add(buttons);
-        bar.Children.Add(_path);
         DockPanel.SetDock(bar, Dock.Top);
         Children.Add(bar);
-        _path.KeyDown += (_, e) => { if (e.Key == Key.Enter) { Go(_path.Text.Trim()); e.Handled = true; } };
-        _hidden.Click += (_, _) => Go(_current);
+        _hidden.Click += (_, _) => Reload();
         _follow.Checked += (_, _) => FollowEnabled?.Invoke();
 
-        var queue = new ListBox { MaxHeight = 140, BorderThickness = new Thickness(0), ItemsSource = _transfers, Visibility = Visibility.Collapsed };
-        queue.ItemTemplate = TransferTemplate();
-        _transfers.CollectionChanged += (_, _) => queue.Visibility = _transfers.Count > 0 ? Visibility.Visible : Visibility.Collapsed;
+        _queue.ItemsSource = _transfers;
+        _queue.ItemTemplate = TransferTemplate();
+        _transfers.CollectionChanged += (_, _) => UpdateQueue();
         var queueMenu = new ContextMenu();
         var cancel = new MenuItem { Header = "取消传输" };
-        cancel.Click += (_, _) => { if (queue.SelectedItem is Transfer t) t.Cancel.Cancel(); };
+        cancel.Click += (_, _) => { if (_queue.SelectedItem is Transfer t) t.Cancel.Cancel(); };
         var clear = new MenuItem { Header = "清除已完成" };
-        clear.Click += (_, _) => { foreach (var t in _transfers.Where(t => t.Cancel.IsCancellationRequested || t.State is "完成" or "失败" or "已取消").ToList()) _transfers.Remove(t); };
+        clear.Click += (_, _) => { foreach (var t in _transfers.Where(t => t.Cancel.IsCancellationRequested || t.State is "完成" or "已取消" || t.State.StartsWith("失败")).ToList()) _transfers.Remove(t); };
         queueMenu.Items.Add(cancel);
         queueMenu.Items.Add(clear);
-        queue.ContextMenu = queueMenu;
-        DockPanel.SetDock(queue, Dock.Bottom);
-        Children.Add(queue);
+        _queue.ContextMenu = queueMenu;
+        DockPanel.SetDock(_queue, Dock.Bottom);
+        Children.Add(_queue);
         _status.Margin = new Thickness(0, 4, 0, 4);
         DockPanel.SetDock(_status, Dock.Bottom);
         Children.Add(_status);
 
-        var grid = new GridView();
-        grid.Columns.Add(new GridViewColumn { Header = "名称", Width = 170, CellTemplate = NameTemplate() });
-        grid.Columns.Add(new GridViewColumn { Header = "大小", Width = 70, DisplayMemberBinding = new System.Windows.Data.Binding(nameof(Entry.Size)) });
-        grid.Columns.Add(new GridViewColumn { Header = "修改时间", Width = 118, DisplayMemberBinding = new System.Windows.Data.Binding(nameof(Entry.Modified)) });
-        grid.Columns.Add(new GridViewColumn { Header = "权限", Width = 86, DisplayMemberBinding = new System.Windows.Data.Binding(nameof(Entry.Permissions)) });
-        grid.Columns.Add(new GridViewColumn { Header = "所有者", Width = 60, DisplayMemberBinding = new System.Windows.Data.Binding(nameof(Entry.Owner)) });
-        _list.View = grid;
-        _list.SelectionMode = SelectionMode.Extended;
-        _list.MouseDoubleClick += (_, _) => { if (_list.SelectedItem is Entry e) Activate(e); };
-        _list.KeyDown += (_, e) =>
+        _tree.SelectedItemChanged += (_, _) =>
         {
-            if (e.Key == Key.Enter && _list.SelectedItem is Entry en) { Activate(en); e.Handled = true; }
-            else if (e.Key == Key.Back) { Go(ParentOf(_current)); e.Handled = true; }
+            if (Selected.FirstOrDefault() is not { } e) return;
+            _current = e.IsDirectory ? e.FullName : ParentOf(e.FullName);
+            _path.Text = e.FullName;
+        };
+        _tree.MouseDoubleClick += (_, e) =>
+        {
+            if (Selected.FirstOrDefault() is { IsDirectory: false } en && Up(e.OriginalSource as DependencyObject)?.Tag == en) { Activate(en); e.Handled = true; }
+        };
+        _tree.KeyDown += (_, e) =>
+        {
+            if (e.Key == Key.Enter && Selected.FirstOrDefault() is { } en) { Activate(en); e.Handled = true; }
             else if (e.Key == Key.Delete) { Delete(); e.Handled = true; }
             else if (e.Key == Key.F2) { Rename(); e.Handled = true; }
-            else if (e.Key == Key.F5) { Go(_current); e.Handled = true; }
+            else if (e.Key == Key.F5) { Refresh(_current); e.Handled = true; }
         };
-        _list.ContextMenuOpening += (_, _) => _list.ContextMenu = ItemMenu();
-        _list.ContextMenu = new ContextMenu();
-        Ui.FileDrop(_list, files => _ = UploadAsync(files, _current));
-        Children.Add(_list);
-        Show("没有连接。选中一个 SSH 标签页后这里会显示服务器上的文件。");
+        _tree.PreviewMouseRightButtonDown += (_, e) => { if (Up(e.OriginalSource as DependencyObject) is { } item) item.IsSelected = true; };
+        _tree.ContextMenuOpening += (_, _) => _tree.ContextMenu = ItemMenu();
+        _tree.ContextMenu = new ContextMenu();
+        Ui.FileDrop(_tree, files => _ = UploadAsync(files, _current));
+        Children.Add(_tree);
+        Show("没有连接。选中一个 SSH 会话后这里会显示服务器上的文件。");
     }
 
-    static DataTemplate NameTemplate()
+    static void Style(ToggleButton b, string glyph)
     {
-        var f = new FrameworkElementFactory(typeof(StackPanel));
-        f.SetValue(StackPanel.OrientationProperty, Orientation.Horizontal);
-        var icon = new FrameworkElementFactory(typeof(TextBlock));
-        icon.SetBinding(TextBlock.TextProperty, new System.Windows.Data.Binding(nameof(Entry.Glyph)));
-        icon.SetValue(TextBlock.FontFamilyProperty, new FontFamily("Segoe Fluent Icons, Segoe MDL2 Assets"));
-        icon.SetValue(TextBlock.MarginProperty, new Thickness(0, 1, 6, 0));
-        icon.SetValue(TextBlock.ForegroundProperty, ApiUi.Frozen(0xD4, 0xA0, 0x17));
-        f.AppendChild(icon);
-        var name = new FrameworkElementFactory(typeof(TextBlock));
-        name.SetBinding(TextBlock.TextProperty, new System.Windows.Data.Binding(nameof(Entry.Name)));
-        f.AppendChild(name);
-        return new DataTemplate { VisualTree = f };
+        b.Content = new TextBlock { Text = glyph, FontFamily = Icons, FontSize = 12 };
+        b.Padding = new Thickness(6, 4, 6, 4);
+        b.Margin = new Thickness(1, 0, 1, 0);
+        b.BorderThickness = new Thickness(0);
+        b.Background = Brushes.Transparent;
+        b.Checked += (_, _) => b.Foreground = Green;
+        b.Unchecked += (_, _) => b.SetResourceReference(Control.ForegroundProperty, "TextBrush");
+        if (b.IsChecked == true) b.Foreground = Green;
+    }
+
+    static void Open(ContextMenu menu, UIElement target)
+    {
+        menu.PlacementTarget = target;
+        menu.Placement = PlacementMode.Bottom;
+        menu.IsOpen = true;
+    }
+
+    void UpdateQueue() => _queue.Visibility = _showQueue || _transfers.Any(t => t.State is "上传中" or "下载中" or "等待") ? Visibility.Visible : Visibility.Collapsed;
+
+    ContextMenu FavoritesMenu()
+    {
+        var menu = new ContextMenu();
+        var list = Favorites;
+        var add = new MenuItem { Header = list?.Contains(_current) == true ? "取消收藏当前文件夹" : "收藏当前文件夹", IsEnabled = list != null && _current.Length > 0 };
+        add.Click += (_, _) =>
+        {
+            if (list == null) return;
+            if (!list.Remove(_current)) list.Add(_current);
+            FavoritesChanged?.Invoke();
+        };
+        menu.Items.Add(add);
+        if (list is { Count: > 0 })
+        {
+            menu.Items.Add(new Separator());
+            foreach (var path in list)
+            {
+                var mi = new MenuItem { Header = path };
+                mi.Click += (_, _) => Go(path);
+                menu.Items.Add(mi);
+            }
+        }
+        return menu;
+    }
+
+    ContextMenu MoreMenu()
+    {
+        var menu = new ContextMenu();
+        void Item(string header, Action a, bool enabled = true) { var mi = new MenuItem { Header = header, IsEnabled = enabled && _connection != null }; mi.Click += (_, _) => a(); menu.Items.Add(mi); }
+        Item("新建文件夹…", NewFolder);
+        Item("新建文件…", NewFile);
+        Item("上级目录", () => Go(ParentOf(_current)), _current.Length > 1);
+        menu.Items.Add(new Separator());
+        Item("在终端中进入当前文件夹", () => _cdInTerminal(_current), _current.Length > 0);
+        Item("复制路径", () => Clipboard.SetText(_current), _current.Length > 0);
+        menu.Items.Add(new Separator());
+        var queue = new MenuItem { Header = "显示传输队列", IsCheckable = true, IsChecked = _showQueue };
+        queue.Click += (_, _) => { _showQueue = !_showQueue; UpdateQueue(); };
+        menu.Items.Add(queue);
+        return menu;
     }
 
     static DataTemplate TransferTemplate()
@@ -162,7 +234,7 @@ sealed class SftpPanel : DockPanel
         var bar = new FrameworkElementFactory(typeof(ProgressBar));
         bar.SetBinding(RangeBase.ValueProperty, new System.Windows.Data.Binding(nameof(Transfer.Percent)) { Mode = System.Windows.Data.BindingMode.OneWay });
         bar.SetValue(FrameworkElement.HeightProperty, 4.0);
-        bar.SetValue(FrameworkElement.WidthProperty, 280.0);
+        bar.SetValue(FrameworkElement.WidthProperty, 240.0);
         bar.SetValue(FrameworkElement.HorizontalAlignmentProperty, HorizontalAlignment.Left);
         f.AppendChild(bar);
         return new DataTemplate { VisualTree = f };
@@ -170,7 +242,8 @@ sealed class SftpPanel : DockPanel
 
     void Show(string message)
     {
-        _list.ItemsSource = null;
+        _tree.Items.Clear();
+        _root = null;
         Ui.SetStatus(_status, message);
     }
 
@@ -183,7 +256,8 @@ sealed class SftpPanel : DockPanel
         _current = "";
         _path.Text = "";
         foreach (var dead in _clients.Keys.Where(c => !c.IsConnected).ToList()) { Dispose(_clients[dead]); _clients.Remove(dead); }
-        if (connection == null) { Show("没有连接。选中一个 SSH 标签页后这里会显示服务器上的文件。"); return; }
+        if (connection == null) { Show("没有连接。选中一个 SSH 会话后这里会显示服务器上的文件。"); return; }
+        Show("");
         Go(directory ?? "~");
     }
 
@@ -209,7 +283,7 @@ sealed class SftpPanel : DockPanel
         try { c.Dispose(); } catch (Exception ex) when (ex is SshException or ObjectDisposedException) { }
     }
 
-    // ---------- listing ----------
+    // ---------- tree ----------
 
     static string ParentOf(string path)
     {
@@ -220,42 +294,136 @@ sealed class SftpPanel : DockPanel
 
     static string Join(string dir, string name) => dir.EndsWith("/") ? dir + name : dir + "/" + name;
 
-    async void Go(string path)
+    /// <summary>Placeholder child so unloaded folders show an expander.</summary>
+    const string NotLoaded = "…";
+
+    TreeViewItem MakeItem(Entry e)
     {
-        if (_connection == null) return;
-        var version = ++_version;
+        var row = new StackPanel { Orientation = Orientation.Horizontal };
+        row.Children.Add(new TextBlock { Text = e.Glyph, FontFamily = Icons, Margin = new Thickness(0, 1, 6, 0), Foreground = e.IsDirectory ? FolderBrush : ApiUi.Res("SecondaryTextBrush") });
+        row.Children.Add(new TextBlock { Text = e.Name });
+        if (!e.IsDirectory && e.Size.Length > 0) row.Children.Add(new TextBlock { Text = e.Size, Margin = new Thickness(8, 0, 0, 0), Foreground = ApiUi.Res("HintTextBrush"), FontSize = 11, VerticalAlignment = VerticalAlignment.Center });
+        var item = new TreeViewItem { Header = row, Tag = e, Padding = new Thickness(1, 2, 4, 2), ToolTip = $"{e.Permissions}  {e.Modified}" + (e.IsDirectory ? "" : "  " + e.Size) };
+        if (e.IsDirectory)
+        {
+            item.Items.Add(NotLoaded);
+            item.Expanded += async (_, args) =>
+            {
+                if (args.OriginalSource != item) return;
+                if (item.Items.Count == 1 && item.Items[0] is string) await LoadAsync(item);
+            };
+        }
+        return item;
+    }
+
+    async Task<bool> LoadAsync(TreeViewItem item)
+    {
+        var dir = ((Entry)item.Tag).FullName;
         var hidden = _hidden.IsChecked == true;
-        Ui.SetStatus(_status, "正在读取 " + path + " …");
+        var version = _version;
         try
         {
             var client = await ClientAsync();
-            var (full, entries) = await Task.Run(() =>
+            var files = await Task.Run(() => client.ListDirectory(dir).Where(f => f.Name != "." && f.Name != "..").ToList());
+            if (version != _version) return false;
+            var expanded = new HashSet<string>(item.Items.OfType<TreeViewItem>().Where(i => i.IsExpanded).Select(i => ((Entry)i.Tag).FullName));
+            item.Items.Clear();
+            var shown = files.Where(f => hidden || !f.Name.StartsWith(".")).ToList();
+            foreach (var f in shown.OrderByDescending(f => f.IsDirectory).ThenBy(f => f.Name, StringComparer.OrdinalIgnoreCase))
             {
-                var target = path == "~" || path.Length == 0 ? client.WorkingDirectory : path.StartsWith("~/") ? Join(client.WorkingDirectory, path.Substring(2)) : path;
-                var files = client.ListDirectory(target).Where(f => f.Name != "." && f.Name != "..").ToList();
-                return (target, files);
-            });
-            if (version != _version) return;
-            _current = full;
-            _path.Text = full;
-            var items = entries.Where(f => hidden || !f.Name.StartsWith("."))
-                .OrderByDescending(f => f.IsDirectory).ThenBy(f => f.Name, StringComparer.OrdinalIgnoreCase)
-                .Select(f => new Entry
+                var child = MakeItem(new Entry
                 {
                     Name = f.Name, FullName = f.FullName, IsDirectory = f.IsDirectory, IsLink = f.IsSymbolicLink, Length = f.Length,
                     Size = f.IsDirectory ? "" : Ui.FormatSize(f.Length),
                     Modified = f.LastWriteTime.ToString("yyyy-MM-dd HH:mm"),
                     Permissions = Mode(f),
                     Owner = f.UserId.ToString(),
-                    Glyph = f.IsDirectory ? "\uE8B7" : f.IsSymbolicLink ? "\uE71B" : "\uE8A5",
-                }).ToList();
-            _list.ItemsSource = items;
-            Ui.SetStatus(_status, $"{items.Count(i => i.IsDirectory)} 个文件夹，{items.Count(i => !i.IsDirectory)} 个文件" + (hidden ? "" : $"（隐藏了 {entries.Count - items.Count} 个）"));
+                    Glyph = f.IsDirectory ? "" : f.IsSymbolicLink ? "" : "",
+                });
+                item.Items.Add(child);
+                if (expanded.Contains(f.FullName)) child.IsExpanded = true;
+            }
+            Ui.SetStatus(_status, $"{dir}：{shown.Count(f => f.IsDirectory)} 个文件夹，{shown.Count(f => !f.IsDirectory)} 个文件" + (hidden || files.Count == shown.Count ? "" : $"（隐藏了 {files.Count - shown.Count} 个）"));
+            return true;
+        }
+        catch (Exception ex) when (IsSftpError(ex))
+        {
+            if (version == _version) Ui.SetStatus(_status, "读取 " + dir + " 失败：" + ex.Message, true);
+            return false;
+        }
+    }
+
+    /// <summary>Expands the tree down to <paramref name="path"/> and selects it.</summary>
+    async void Go(string path)
+    {
+        if (_connection == null) return;
+        var version = ++_version;
+        try
+        {
+            var client = await ClientAsync();
+            if (version != _version) return;
+            _home = client.WorkingDirectory;
+            var target = path == "~" || path.Length == 0 ? _home : path.StartsWith("~/") ? Join(_home, path.Substring(2)) : path;
+            if (!target.StartsWith("/")) target = Join(_current.Length > 0 ? _current : _home, target);
+            if (_root == null)
+            {
+                _root = MakeItem(new Entry { Name = "/", FullName = "/", IsDirectory = true, Glyph = "" });
+                _tree.Items.Add(_root);
+            }
+            var item = _root;
+            if (item.Items.Count == 1 && item.Items[0] is string && !await LoadAsync(item)) return;
+            item.IsExpanded = true;
+            foreach (var part in target.Split(new[] { '/' }, StringSplitOptions.RemoveEmptyEntries))
+            {
+                if (version != _version) return;
+                var next = item.Items.OfType<TreeViewItem>().FirstOrDefault(i => ((Entry)i.Tag).Name == part);
+                if (next == null) break;
+                item = next;
+                if (!((Entry)item.Tag).IsDirectory) break;
+                if (item.Items.Count == 1 && item.Items[0] is string && !await LoadAsync(item)) break;
+                item.IsExpanded = true;
+            }
+            if (version != _version) return;
+            item.IsSelected = true;
+            _current = ((Entry)item.Tag).IsDirectory ? ((Entry)item.Tag).FullName : ParentOf(((Entry)item.Tag).FullName);
+            _path.Text = ((Entry)item.Tag).FullName;
+            await Dispatcher.InvokeAsync(() => item.BringIntoView(), DispatcherPriority.Background);
         }
         catch (Exception ex) when (IsSftpError(ex))
         {
             if (version == _version) Ui.SetStatus(_status, "读取失败：" + ex.Message, true);
         }
+    }
+
+    TreeViewItem? Find(string dir)
+    {
+        var item = _root;
+        foreach (var part in dir.Split(new[] { '/' }, StringSplitOptions.RemoveEmptyEntries))
+        {
+            item = item?.Items.OfType<TreeViewItem>().FirstOrDefault(i => ((Entry)i.Tag).Name == part);
+            if (item == null) return null;
+        }
+        return item;
+    }
+
+    /// <summary>Re-reads one loaded folder, keeping what is expanded under it.</summary>
+    void Refresh(string dir)
+    {
+        if (Find(dir) is { } item && !(item.Items.Count == 1 && item.Items[0] is string)) _ = LoadAsync(item);
+        else if (_connection != null && _root == null) Go(dir);
+    }
+
+    void Reload()
+    {
+        var current = _current;
+        Show("");
+        Go(current.Length > 0 ? current : "~");
+    }
+
+    void CollapseAll()
+    {
+        void Walk(ItemsControl c) { foreach (var i in c.Items.OfType<TreeViewItem>()) { Walk(i); if (i != _root) i.IsExpanded = false; } }
+        if (_root != null) Walk(_root);
     }
 
     static bool IsSftpError(Exception ex) => ex is SshException or IOException or InvalidOperationException or ObjectDisposedException or System.Net.Sockets.SocketException or UnauthorizedAccessException;
@@ -281,28 +449,35 @@ sealed class SftpPanel : DockPanel
         else _ = EditAsync(e);
     }
 
-    IEnumerable<Entry> Selected => _list.SelectedItems.OfType<Entry>().ToList();
+    IEnumerable<Entry> Selected => (_tree.SelectedItem as TreeViewItem)?.Tag is Entry e ? new[] { e } : Array.Empty<Entry>();
 
     ContextMenu ItemMenu()
     {
         var menu = new ContextMenu();
         void Item(string header, Action a, bool enabled = true) { var mi = new MenuItem { Header = header, IsEnabled = enabled && _connection != null }; mi.Click += (_, _) => a(); menu.Items.Add(mi); }
-        var one = _list.SelectedItem as Entry;
-        var any = _list.SelectedItems.Count > 0;
-        Item(one?.IsDirectory == true ? "打开" : "编辑（保存后自动上传）", () => { if (one != null) Activate(one); }, one != null);
+        var one = Selected.FirstOrDefault();
+        var any = one != null && one.FullName != "/";
+        Item(one?.IsDirectory == true ? "刷新这个文件夹" : "编辑（保存后自动上传）", () => { if (one?.IsDirectory == true) Refresh(one.FullName); else if (one != null) Activate(one); }, one != null);
         Item("下载…", Download, any);
-        Item("上传文件…", UploadPick);
+        Item("上传文件到这里…", UploadPick);
         menu.Items.Add(new Separator());
-        Item("重命名…", Rename, one != null);
+        Item("重命名…", Rename, any);
         Item("修改权限…", Chmod, any);
         Item("删除", Delete, any);
         Item("新建文件夹…", NewFolder);
         Item("新建文件…", NewFile);
         menu.Items.Add(new Separator());
         Item("复制路径", () => Clipboard.SetText(one?.FullName ?? _current));
-        Item("在终端中进入" + (one?.IsDirectory == true ? "这个文件夹" : "当前目录"), () => _cdInTerminal(one?.IsDirectory == true ? one.FullName : _current));
-        Item("刷新", () => Go(_current));
+        Item("在终端中进入" + (one?.IsDirectory == true ? "这个文件夹" : "所在文件夹"), () => _cdInTerminal(_current));
+        if (Favorites != null && one?.IsDirectory == true)
+            Item(Favorites.Contains(one.FullName) ? "取消收藏" : "收藏这个文件夹", () => { if (!Favorites.Remove(one.FullName)) Favorites.Add(one.FullName); FavoritesChanged?.Invoke(); });
         return menu;
+    }
+
+    static TreeViewItem? Up(DependencyObject? d)
+    {
+        while (d != null && d is not TreeViewItem) d = d is Visual or System.Windows.Media.Media3D.Visual3D ? VisualTreeHelper.GetParent(d) : LogicalTreeHelper.GetParent(d);
+        return d as TreeViewItem;
     }
 
     // ---------- operations ----------
@@ -315,7 +490,7 @@ sealed class SftpPanel : DockPanel
             Ui.SetStatus(_status, doing + "…");
             await Task.Run(() => action(client));
             Ui.SetStatus(_status, doing + "完成");
-            if (refresh) Go(_current);
+            if (refresh) { Refresh(_current); Refresh(ParentOf(_current)); }
         }
         catch (Exception ex) when (IsSftpError(ex)) { Ui.SetStatus(_status, doing + "失败：" + ex.Message, true); }
     }
@@ -334,7 +509,7 @@ sealed class SftpPanel : DockPanel
 
     void Rename()
     {
-        if (_list.SelectedItem is not Entry e) return;
+        if (Selected.FirstOrDefault() is not { } e) return;
         var name = TerminalDialogs.Ask(_owner(), "重命名", "新名称：", false, e.Name)?.Trim();
         if (!string.IsNullOrEmpty(name) && name != e.Name) _ = Run("重命名", c => c.RenameFile(e.FullName, Join(_current, name!)));
     }
@@ -395,7 +570,7 @@ sealed class SftpPanel : DockPanel
             }
             else if (File.Exists(path)) await UploadOne(client, path, Join(remoteDir, Path.GetFileName(path)));
         }
-        if (remoteDir == _current) Go(_current);
+        Refresh(remoteDir);
     }
 
     async Task<bool> UploadOne(SftpClient client, string local, string remote)
@@ -523,7 +698,7 @@ sealed class SftpPanel : DockPanel
                 using var stream = new MemoryStream(bytes);
                 await client.UploadFileAsync(stream, remote, true, null, CancellationToken.None);
                 Ui.SetStatus(_status, $"已上传「{e.Name}」 {DateTime.Now:HH:mm:ss}");
-                if (ParentOf(remote) == _current) Go(_current);
+                Refresh(ParentOf(remote));
             }
             catch (Exception ex) when (IsSftpError(ex)) { Ui.SetStatus(_status, $"上传「{e.Name}」失败：" + ex.Message, true); }
         };

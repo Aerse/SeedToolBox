@@ -18,7 +18,7 @@ using SeedToolBox.DevTools.Api;
 
 namespace SeedToolBox.Terminal;
 
-/// <summary>An xTerminal-style terminal: local shells and SSH hosts in tabs and split panes, with SFTP, monitoring, snippets, tunnels and AI.</summary>
+/// <summary>An xTerminal-style terminal: sessions in a green top bar, each with several terminals sharing one SSH connection, and a side panel for hosts, SFTP, monitoring, snippets and history.</summary>
 sealed partial class TerminalPage : DockPanel, IConnectPrompts
 {
     sealed class Pane
@@ -38,33 +38,61 @@ sealed partial class TerminalPage : DockPanel, IConnectPrompts
         public string Title => Host != null ? Host.Title : Shell?.Name ?? "终端";
     }
 
+    /// <summary>One terminal of a session (a sub-tab), possibly split into panes.</summary>
     sealed class Tab
     {
+        public Session Session = null!;
+        public int Number;
         public readonly List<Pane> Panes = new();
         public readonly Grid Root = new();
         public bool Vertical;
         public bool Broadcast;
         public Pane? Active;
         public Border Chip = null!;
-        public TextBlock Caption = null!, Dot = null!;
+        public TextBlock Caption = null!, Close = null!;
         public string? CustomTitle;
     }
+
+    /// <summary>A host or local shell in the top bar; its terminals share one SSH connection.</summary>
+    sealed class Session
+    {
+        public HostEntry? Host;
+        public ShellProfile? Shell;
+        public readonly List<Tab> Tabs = new();
+        public Tab? Current;
+        public readonly DockPanel Root = new();
+        public readonly Grid Body = new();
+        public readonly StackPanel Strip = new() { Orientation = Orientation.Horizontal, VerticalAlignment = VerticalAlignment.Center };
+        public Border Chip = null!;
+        public TextBlock Caption = null!, Dot = null!, Grip = null!, Close = null!;
+        public string? CustomTitle;
+        public SshConnection? Connection;
+        public Task<SshConnection>? Pending;
+        public int Counter;
+        public string Title => CustomTitle ?? Host?.Title ?? Shell?.Name ?? "终端";
+    }
+
+    static readonly SolidColorBrush Brand = ApiUi.Frozen(0x3C, 0xBF, 0x6E);
+    static readonly SolidColorBrush BrandText = ApiUi.Frozen(0x22, 0x9A, 0x50);
+    static readonly FontFamily IconFont = new("Segoe Fluent Icons, Segoe MDL2 Assets");
 
     readonly Func<string, Task<string>>? _ai;
     readonly TerminalData _data;
     readonly List<ShellProfile> _shells;
-    readonly List<Tab> _tabs = new();
-    Tab? _current;
+    readonly List<Session> _sessions = new();
+    Session? _session;
     double _zoom;
     readonly DispatcherTimer _saveTimer;
-    readonly WrapPanel _tabStrip = new() { VerticalAlignment = VerticalAlignment.Center };
+    readonly StackPanel _sessionStrip = new() { Orientation = Orientation.Horizontal, VerticalAlignment = VerticalAlignment.Bottom };
     readonly Grid _content = new();
     readonly TextBlock _status = Ui.Status();
-    readonly ToggleButton _broadcast = new() { Content = "广播输入", Padding = new Thickness(8, 3, 8, 3), Margin = new Thickness(4, 0, 0, 0), ToolTip = "在一个分屏里输入，同时发到这个标签页的所有分屏" };
     readonly Border _welcome = null!;
+    Point _chipDragStart;
+    Session? _chipDrag;
 
     Window? Owner => Window.GetWindow(this);
-    Pane? ActivePane => _current?.Active;
+    IEnumerable<Tab> AllTabs => _sessions.SelectMany(s => s.Tabs);
+    Pane? ActivePane => _session?.Current?.Active;
 
     public TerminalPage(Func<string, Task<string>>? ai)
     {
@@ -84,61 +112,56 @@ sealed partial class TerminalPage : DockPanel, IConnectPrompts
             return;
         }
 
+        Children.Add(BuildTopBar());
+
+        // rail | panel | splitter | terminals
         var root = new Grid();
-        root.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(Math.Max(170, _data.SidebarWidth)), MinWidth = 150 });
-        root.ColumnDefinitions.Add(new ColumnDefinition { Width = GridLength.Auto });
-        root.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(1, GridUnitType.Star), MinWidth = 360 });
         root.ColumnDefinitions.Add(new ColumnDefinition { Width = GridLength.Auto });
         root.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(0) });
-        var sidebar = BuildSidebar();
-        root.Children.Add(sidebar);
-        var splitter = new GridSplitter { Width = 5, HorizontalAlignment = HorizontalAlignment.Stretch, Background = Brushes.Transparent, ResizeBehavior = GridResizeBehavior.PreviousAndNext };
-        splitter.DragCompleted += (_, _) => { _data.SidebarWidth = root.ColumnDefinitions[0].ActualWidth; ScheduleSave(); };
-        Grid.SetColumn(splitter, 1);
-        root.Children.Add(splitter);
+        root.ColumnDefinitions.Add(new ColumnDefinition { Width = GridLength.Auto });
+        root.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(1, GridUnitType.Star), MinWidth = 360 });
+        _sideColumn = root.ColumnDefinitions[1];
+        root.Children.Add(BuildRail());
+        var side = BuildSidePanel();
+        Grid.SetColumn(side, 1);
+        root.Children.Add(side);
+        _sideSplitter = new GridSplitter { Width = 1, HorizontalAlignment = HorizontalAlignment.Stretch, ResizeBehavior = GridResizeBehavior.PreviousAndNext, Visibility = Visibility.Collapsed };
+        _sideSplitter.SetResourceReference(BackgroundProperty, "CardBorderBrush");
+        _sideSplitter.DragCompleted += (_, _) => { _data.PanelWidth = _sideColumn.ActualWidth; ScheduleSave(); };
+        Grid.SetColumn(_sideSplitter, 2);
+        root.Children.Add(_sideSplitter);
 
-        var main = new DockPanel { Margin = new Thickness(6, 0, 0, 0) };
-        main.Children.Add(BuildTopBar());
+        var main = new DockPanel();
         main.Children.Add(BuildFindBar());
-        _status.Margin = new Thickness(0, 4, 0, 0);
+        _status.Margin = new Thickness(8, 2, 8, 3);
         DockPanel.SetDock(_status, Dock.Bottom);
         main.Children.Add(_status);
         _welcome = BuildWelcome();
         _content.Children.Add(_welcome);
-        main.Children.Add(new Border { CornerRadius = new CornerRadius(6), ClipToBounds = true, Child = _content });
-        Grid.SetColumn(main, 2);
+        main.Children.Add(_content);
+        Grid.SetColumn(main, 3);
         root.Children.Add(main);
-
-        _sideSplitter = new GridSplitter { Width = 5, HorizontalAlignment = HorizontalAlignment.Stretch, Background = Brushes.Transparent, ResizeBehavior = GridResizeBehavior.PreviousAndNext, Visibility = Visibility.Collapsed };
-        _sideSplitter.DragCompleted += (_, _) => { _data.PanelWidth = _sideColumn.ActualWidth; ScheduleSave(); };
-        Grid.SetColumn(_sideSplitter, 3);
-        root.Children.Add(_sideSplitter);
-        _sideColumn = root.ColumnDefinitions[4];
-        var side = BuildSidePanel();
-        Grid.SetColumn(side, 4);
-        root.Children.Add(side);
         Children.Add(root);
 
-        _broadcast.Checked += (_, _) => { if (_current != null) { _current.Broadcast = true; UpdateFrames(_current); } };
-        _broadcast.Unchecked += (_, _) => { if (_current != null) { _current.Broadcast = false; UpdateFrames(_current); } };
         RefreshTree();
+        ShowSide(SideHosts);
         Application.Current.Exit += OnAppExit;
         UpdateStatus();
     }
 
     /// <summary>Open SSH connections, for asking before the window closes.</summary>
-    public int ConnectedCount => _tabs.SelectMany(t => t.Panes).Count(p => p.Connection is { IsConnected: true });
+    public int ConnectedCount => _sessions.Count(s => s.Connection is { IsConnected: true });
 
-    /// <summary>Closes every session and saves; the page is not used again afterwards.</summary>
     public TerminalData Data => _data;
 
     void OnAppExit(object? sender, ExitEventArgs e) => Shutdown();
 
+    /// <summary>Closes every session and saves; the page is not used again afterwards.</summary>
     public void Shutdown()
     {
         Application.Current.Exit -= OnAppExit;
-        foreach (var t in _tabs.ToList()) foreach (var p in t.Panes.ToList()) DisposePane(p);
-        _tabs.Clear();
+        foreach (var s in _sessions.ToList()) DisposeSession(s);
+        _sessions.Clear();
         _sftp?.CloseAll();
         SaveNow();
     }
@@ -147,36 +170,130 @@ sealed partial class TerminalPage : DockPanel, IConnectPrompts
 
     FrameworkElement BuildTopBar()
     {
-        var bar = new DockPanel { Margin = new Thickness(0, 0, 0, 6) };
-        var tools = new StackPanel { Orientation = Orientation.Horizontal, VerticalAlignment = VerticalAlignment.Top };
-        var newLocal = ApiUi.Icon("\uE710", "新建本地终端（点右键选择 Shell）", () => OpenLocal(DefaultShell()));
-        newLocal.ContextMenu = ShellMenu(s => OpenLocal(s));
-        newLocal.PreviewMouseRightButtonUp += (_, e) => { newLocal.ContextMenu.PlacementTarget = newLocal; newLocal.ContextMenu.IsOpen = true; e.Handled = true; };
-        tools.Children.Add(newLocal);
-        tools.Children.Add(TextIcon("◫", "左右分屏", () => Split(false)));
-        tools.Children.Add(TextIcon("⊟", "上下分屏", () => Split(true)));
-        tools.Children.Add(_broadcast);
-        tools.Children.Add(ApiUi.Icon("\uE721", "查找（Ctrl+Shift+F）", ShowFind));
-        tools.Children.Add(ApiUi.Icon("\uE894", "清屏", () => ActivePane?.View.Clear()));
-        tools.Children.Add(ApiUi.Icon("\uE8B7", "SFTP 文件", () => ToggleSide(0)));
-        tools.Children.Add(ApiUi.Icon("\uE9D9", "服务器监控", () => ToggleSide(1)));
-        tools.Children.Add(ApiUi.Icon("\uE943", "命令片段和历史", () => ToggleSide(2)));
-        tools.Children.Add(ApiUi.Icon("\uE71B", "端口转发", ShowTunnels));
-        tools.Children.Add(ApiUi.Icon("\uE99A", "AI 生成命令", () => AiGenerate()));
-        tools.Children.Add(ApiUi.Icon("\uE7C3", "开始 / 停止记录会话日志", ToggleLog));
-        tools.Children.Add(ApiUi.Icon("\uE713", "终端设置", EditSettings));
-        DockPanel.SetDock(tools, Dock.Right);
+        var bar = new DockPanel { Background = Brand, Height = 40 };
+        var tools = new StackPanel { Orientation = Orientation.Horizontal, Margin = new Thickness(6, 0, 10, 0), VerticalAlignment = VerticalAlignment.Center };
+        tools.Children.Add(BarIcon("", "主机管理", () => ToggleSide(SideHosts)));
+        var local = BarIcon("", "新建本地终端（右键选择 Shell）", () => OpenLocal(DefaultShell()));
+        local.ContextMenu = ShellMenu(s => OpenLocal(s));
+        local.PreviewMouseRightButtonUp += (_, e) => { local.ContextMenu.PlacementTarget = local; local.ContextMenu.IsOpen = true; e.Handled = true; };
+        tools.Children.Add(local);
+        tools.Children.Add(BarIcon("", "命令片段", () => ToggleSide(SideSnippets)));
+        Button more = null!;
+        more = BarIcon("", "工具", () => ShowMenu(ToolsMenu(), more));
+        tools.Children.Add(more);
+        DockPanel.SetDock(tools, Dock.Left);
         bar.Children.Add(tools);
-        bar.Children.Add(_tabStrip);
+
+        Button list = null!;
+        list = BarIcon("", "所有会话", () => ShowMenu(SessionListMenu(), list));
+        list.VerticalAlignment = VerticalAlignment.Center;
+        var strip = new StackPanel { Orientation = Orientation.Horizontal };
+        strip.Children.Add(_sessionStrip);
+        strip.Children.Add(list);
+        bar.Children.Add(strip);
         DockPanel.SetDock(bar, Dock.Top);
         return bar;
     }
 
-    static Button TextIcon(string text, string tip, Action click)
+    static void ShowMenu(ContextMenu menu, UIElement target)
     {
-        var b = ApiUi.Icon("", tip, click);
-        b.Content = new TextBlock { Text = text, FontSize = 14, Margin = new Thickness(0, -3, 0, -1) };
+        menu.PlacementTarget = target;
+        menu.Placement = PlacementMode.Bottom;
+        menu.IsOpen = true;
+    }
+
+    static Button BarIcon(string glyph, string tip, Action click)
+    {
+        var b = new Button
+        {
+            Content = new TextBlock { Text = glyph, FontFamily = IconFont, FontSize = 15 },
+            ToolTip = tip, Foreground = Brushes.White, Padding = new Thickness(9, 6, 9, 6), Style = FlatButton,
+        };
+        b.Click += (_, _) => click();
         return b;
+    }
+
+    /// <summary>A button with only a faint hover shade, for the coloured bar and the rail.</summary>
+    static readonly Style FlatButton = CreateFlatButton();
+
+    static Style CreateFlatButton()
+    {
+        var border = new FrameworkElementFactory(typeof(Border), "bd");
+        border.SetValue(Border.CornerRadiusProperty, new CornerRadius(4));
+        border.SetValue(Border.BackgroundProperty, Brushes.Transparent);
+        border.SetBinding(Border.PaddingProperty, new System.Windows.Data.Binding("Padding") { RelativeSource = System.Windows.Data.RelativeSource.TemplatedParent });
+        var content = new FrameworkElementFactory(typeof(ContentPresenter));
+        content.SetValue(HorizontalAlignmentProperty, HorizontalAlignment.Center);
+        content.SetValue(VerticalAlignmentProperty, VerticalAlignment.Center);
+        border.AppendChild(content);
+        var template = new ControlTemplate(typeof(Button)) { VisualTree = border };
+        var hover = new Trigger { Property = IsMouseOverProperty, Value = true };
+        hover.Setters.Add(new Setter(Border.BackgroundProperty, new SolidColorBrush(Color.FromArgb(0x28, 0x80, 0x80, 0x80)), "bd"));
+        template.Triggers.Add(hover);
+        var style = new Style(typeof(Button));
+        style.Setters.Add(new Setter(Control.TemplateProperty, template));
+        style.Setters.Add(new Setter(CursorProperty, Cursors.Hand));
+        style.Seal();
+        return style;
+    }
+
+    ContextMenu ToolsMenu()
+    {
+        var menu = new ContextMenu();
+        var pane = ActivePane;
+        void Item(string header, Action a, bool enabled = true, bool check = false)
+        {
+            var mi = new MenuItem { Header = header, IsEnabled = enabled, IsChecked = check };
+            mi.Click += (_, _) => a();
+            menu.Items.Add(mi);
+        }
+        Item("新建终端", () => NewTerminal(_session), _session != null);
+        Item("左右分屏", () => Split(false), pane != null);
+        Item("上下分屏", () => Split(true), pane != null);
+        Item("广播输入到所有分屏", ToggleBroadcast, pane?.Tab.Panes.Count > 1, pane?.Tab.Broadcast == true);
+        menu.Items.Add(new Separator());
+        Item("查找…（Ctrl+Shift+F）", ShowFind, pane != null);
+        Item("清屏", () => pane?.View.Clear(), pane != null);
+        Item(pane?.View.IsLogging == true ? "停止记录会话日志" : "开始记录会话日志", ToggleLog, pane != null);
+        menu.Items.Add(new Separator());
+        Item("端口转发…", ShowTunnels, pane?.Host != null);
+        Item("AI 生成命令…", () => AiGenerate());
+        menu.Items.Add(new Separator());
+        var import = new MenuItem { Header = "导入主机" };
+        var source = ImportMenu();
+        var items = source.Items.Cast<object>().ToList();
+        source.Items.Clear();
+        foreach (var i in items) import.Items.Add(i);
+        menu.Items.Add(import);
+        Item("终端设置…", EditSettings);
+        return menu;
+    }
+
+    void ToggleBroadcast()
+    {
+        if (_session?.Current is not { } tab) return;
+        tab.Broadcast = !tab.Broadcast;
+        UpdateFrames(tab);
+        UpdateStatus();
+    }
+
+    ContextMenu SessionListMenu()
+    {
+        var menu = new ContextMenu();
+        foreach (var s in _sessions)
+        {
+            var mi = new MenuItem { Header = s.Title + (s.Tabs.Count > 1 ? $"（{s.Tabs.Count} 个终端）" : ""), IsChecked = s == _session };
+            mi.Click += (_, _) => SelectSession(s);
+            menu.Items.Add(mi);
+        }
+        if (_sessions.Count > 0) menu.Items.Add(new Separator());
+        foreach (var s in _shells)
+        {
+            var mi = new MenuItem { Header = "新建 " + s.Name };
+            mi.Click += (_, _) => OpenLocal(s);
+            menu.Items.Add(mi);
+        }
+        return menu;
     }
 
     ContextMenu ShellMenu(Action<ShellProfile> open)
@@ -193,11 +310,11 @@ sealed partial class TerminalPage : DockPanel, IConnectPrompts
 
     Border BuildWelcome()
     {
-        var stack = new StackPanel { HorizontalAlignment = HorizontalAlignment.Center, VerticalAlignment = VerticalAlignment.Center, MaxWidth = 420 };
+        var stack = new StackPanel { HorizontalAlignment = HorizontalAlignment.Center, VerticalAlignment = VerticalAlignment.Center, MaxWidth = 440 };
         stack.Children.Add(new TextBlock { Text = "终端 / SSH", FontSize = 22, FontWeight = FontWeights.SemiBold, Margin = new Thickness(0, 0, 0, 8) });
         stack.Children.Add(new TextBlock
         {
-            Text = "双击左侧的主机连接服务器，或者打开一个本地终端。\n\n快捷键：Ctrl+Shift+C / V 复制粘贴，Ctrl+Shift+F 查找，Ctrl+加减号 缩放。\n输入时会根据历史命令和片段提示补全，按 → 或 Tab 采用。",
+            Text = "双击左侧的主机连接服务器，或者打开一个本地终端。\n在一个会话里点终端标签后面的 + 可以再开终端，它们共用同一条 SSH 连接。\n\n快捷键：Ctrl+Shift+C / V 复制粘贴，Ctrl+Shift+F 查找，Ctrl+加减号 缩放。\n输入时会根据历史命令和片段提示补全，按 → 或 Tab 采用。",
             TextWrapping = TextWrapping.Wrap, Foreground = ApiUi.Res("HintTextBrush"), Margin = new Thickness(0, 0, 0, 14),
         });
         var buttons = new WrapPanel();
@@ -216,82 +333,246 @@ sealed partial class TerminalPage : DockPanel, IConnectPrompts
 
     ShellProfile DefaultShell() => _shells.FirstOrDefault(s => s.Id == _data.Settings.DefaultShell) ?? _shells[0];
 
-    // ---------- tabs ----------
+    // ---------- sessions ----------
 
-    Tab NewTab()
+    static TextBlock Glyph(string glyph, double size) => new() { Text = glyph, FontFamily = IconFont, FontSize = size, VerticalAlignment = VerticalAlignment.Center };
+
+    Session NewSession(HostEntry? host, ShellProfile? shell)
     {
-        var tab = new Tab();
-        tab.Dot = new TextBlock { Text = "●", FontSize = 9, VerticalAlignment = VerticalAlignment.Center, Margin = new Thickness(0, 0, 6, 0) };
-        tab.Caption = new TextBlock { VerticalAlignment = VerticalAlignment.Center, MaxWidth = 160, TextTrimming = TextTrimming.CharacterEllipsis };
-        var close = new TextBlock { Text = "\uE711", FontFamily = new FontFamily("Segoe Fluent Icons, Segoe MDL2 Assets"), FontSize = 9, Margin = new Thickness(8, 0, 0, 0), VerticalAlignment = VerticalAlignment.Center, Cursor = Cursors.Hand, ToolTip = "关闭" };
-        close.MouseLeftButtonUp += (_, e) => { e.Handled = true; CloseTab(tab); };
+        var s = new Session { Host = host, Shell = shell };
+        s.Grip = Glyph("", 11);
+        s.Grip.Margin = new Thickness(0, 0, 8, 0);
+        s.Grip.Opacity = 0.7;
+        s.Dot = new TextBlock { Text = "●", FontSize = 8, VerticalAlignment = VerticalAlignment.Center, Margin = new Thickness(0, 0, 6, 0) };
+        s.Caption = new TextBlock { VerticalAlignment = VerticalAlignment.Center, MaxWidth = 170, TextTrimming = TextTrimming.CharacterEllipsis };
+        s.Close = Glyph("", 9);
+        s.Close.Margin = new Thickness(16, 0, 0, 0);
+        s.Close.Cursor = Cursors.Hand;
+        s.Close.ToolTip = "关闭会话";
+        s.Close.MouseLeftButtonDown += (_, e) => e.Handled = true;
+        s.Close.MouseLeftButtonUp += (_, e) => { e.Handled = true; CloseSession(s); };
+        var row = new DockPanel();
+        row.Children.Add(s.Grip);
+        row.Children.Add(s.Dot);
+        DockPanel.SetDock(s.Close, Dock.Right);
+        row.Children.Add(s.Close);
+        row.Children.Add(s.Caption);
+        s.Chip = new Border
+        {
+            Child = row, Padding = new Thickness(10, 0, 10, 0), Height = 32, MinWidth = 140, Margin = new Thickness(0, 0, 2, 0),
+            CornerRadius = new CornerRadius(6, 6, 0, 0), Cursor = Cursors.Hand, VerticalAlignment = VerticalAlignment.Bottom, AllowDrop = true, Background = Brushes.Transparent,
+        };
+        s.Chip.MouseLeftButtonDown += (_, e) => { SelectSession(s); _chipDragStart = e.GetPosition(this); _chipDrag = s; };
+        s.Chip.MouseMove += (_, e) =>
+        {
+            if (e.LeftButton != MouseButtonState.Pressed || _chipDrag != s) return;
+            if (Math.Abs((e.GetPosition(this) - _chipDragStart).X) < SystemParameters.MinimumHorizontalDragDistance * 2) return;
+            _chipDrag = null;
+            DragDrop.DoDragDrop(s.Chip, new DataObject(typeof(Session), s), DragDropEffects.Move);
+        };
+        s.Chip.Drop += (_, e) =>
+        {
+            if (e.Data.GetData(typeof(Session)) is not Session moved || moved == s) return;
+            _sessions.Remove(moved);
+            _sessions.Insert(_sessions.IndexOf(s) + (e.GetPosition(s.Chip).X > s.Chip.ActualWidth / 2 ? 1 : 0), moved);
+            _sessionStrip.Children.Clear();
+            foreach (var x in _sessions) _sessionStrip.Children.Add(x.Chip);
+        };
+        s.Chip.MouseUp += (_, e) => { if (e.ChangedButton == MouseButton.Middle) CloseSession(s); };
+        var menu = new ContextMenu();
+        void Item(string header, Action a) { var mi = new MenuItem { Header = header }; mi.Click += (_, _) => a(); menu.Items.Add(mi); }
+        Item("新建终端", () => NewTerminal(s));
+        Item("复制会话", () => { if (s.Host != null) OpenHost(s.Host); else OpenLocal(s.Shell!); });
+        Item("重命名…", () =>
+        {
+            var name = TerminalDialogs.Ask(Owner, "重命名会话", "名称（留空恢复默认）", false, s.Title);
+            if (name != null) { s.CustomTitle = name.Trim().Length > 0 ? name.Trim() : null; UpdateSession(s); }
+        });
+        Item("重新连接", () => ReconnectSession(s));
+        menu.Items.Add(new Separator());
+        Item("关闭", () => CloseSession(s));
+        Item("关闭其他会话", () => { foreach (var x in _sessions.Where(x => x != s).ToList()) CloseSession(x); });
+        Item("关闭右侧会话", () => { foreach (var x in _sessions.Skip(_sessions.IndexOf(s) + 1).ToList()) CloseSession(x); });
+        s.Chip.ContextMenu = menu;
+
+        // The session's own strip: its terminals, +, and a close button at the far right.
+        var head = new DockPanel { Height = 32 };
+        var closeAll = ApiUi.Icon("", "关闭会话", () => CloseSession(s));
+        closeAll.Margin = new Thickness(0, 0, 6, 0);
+        DockPanel.SetDock(closeAll, Dock.Right);
+        head.Children.Add(closeAll);
+        var line = new StackPanel { Orientation = Orientation.Horizontal, Margin = new Thickness(8, 0, 0, 0) };
+        line.Children.Add(s.Strip);
+        line.Children.Add(ApiUi.Icon("", "新建终端（共用这条连接）", () => NewTerminal(s)));
+        head.Children.Add(line);
+        var headBorder = new Border { Child = head, BorderThickness = new Thickness(0, 0, 0, 1) };
+        headBorder.SetResourceReference(Border.BackgroundProperty, "CardBrush");
+        headBorder.SetResourceReference(Border.BorderBrushProperty, "CardBorderBrush");
+        DockPanel.SetDock(headBorder, Dock.Top);
+        s.Root.Children.Add(headBorder);
+        s.Body.Background = Brushes.Black;
+        s.Root.Children.Add(s.Body);
+        s.Root.Visibility = Visibility.Collapsed;
+
+        _sessions.Add(s);
+        _sessionStrip.Children.Add(s.Chip);
+        _content.Children.Add(s.Root);
+        return s;
+    }
+
+    void SelectSession(Session? s)
+    {
+        _session = s;
+        foreach (var x in _sessions)
+        {
+            var on = x == s;
+            x.Root.Visibility = on ? Visibility.Visible : Visibility.Collapsed;
+            if (on)
+            {
+                x.Chip.SetResourceReference(Border.BackgroundProperty, "CardBrush");
+                foreach (var t in new[] { x.Caption, x.Grip, x.Close }) t.SetResourceReference(TextBlock.ForegroundProperty, "TextBrush");
+            }
+            else
+            {
+                x.Chip.Background = Brushes.Transparent;
+                foreach (var t in new[] { x.Caption, x.Grip, x.Close }) t.Foreground = Brushes.White;
+            }
+        }
+        _welcome.Visibility = s == null ? Visibility.Visible : Visibility.Collapsed;
+        if (s?.Current != null) SelectTab(s.Current);
+        else OnActivePaneChanged();
+    }
+
+    void UpdateSession(Session s)
+    {
+        s.Caption.Text = s.Title;
+        s.Chip.ToolTip = s.Host != null ? s.Host.Address : s.Shell?.Name;
+        var color = s.Host?.Color ?? "";
+        s.Dot.Foreground = !s.Tabs.SelectMany(t => t.Panes).Any(x => x.Open) ? Brushes.Gray
+            : color.Length > 0 ? new SolidColorBrush((Color)ColorConverter.ConvertFromString(color))
+            : ApiUi.Frozen(0x2E, 0xCC, 0x71);
+    }
+
+    void DisposeSession(Session s)
+    {
+        foreach (var p in s.Tabs.SelectMany(t => t.Panes).ToList()) DisposePane(p);
+        DropConnection(s);
+    }
+
+    /// <summary>Stops the session's tunnels and closes its shared connection.</summary>
+    void DropConnection(Session s)
+    {
+        StopTunnels(s);
+        if (s.Connection != null) _systemInfo.Remove(s.Connection);
+        s.Connection?.Dispose();
+        s.Connection = null;
+        s.Pending = null;
+    }
+
+    void CloseSession(Session s)
+    {
+        if (s.Connection is { IsConnected: true } && !ApiDialogs.Confirm(Owner, $"关闭「{s.Title}」会断开连接，确定吗？")) return;
+        DisposeSession(s);
+        var index = _sessions.IndexOf(s);
+        _sessions.Remove(s);
+        _sessionStrip.Children.Remove(s.Chip);
+        _content.Children.Remove(s.Root);
+        if (_session == s) SelectSession(_sessions.Count == 0 ? null : _sessions[Math.Min(index, _sessions.Count - 1)]);
+        RefreshTree();
+    }
+
+    void ReconnectSession(Session s)
+    {
+        foreach (var p in s.Tabs.SelectMany(t => t.Panes)) { p.Cancel?.Cancel(); p.View.Detach()?.Dispose(); p.Connection = null; }
+        DropConnection(s);
+        foreach (var p in s.Tabs.SelectMany(t => t.Panes)) Reconnect(p);
+    }
+
+    // ---------- terminals of a session ----------
+
+    Tab NewTab(Session s)
+    {
+        var tab = new Tab { Session = s, Number = s.Counter++ };
+        tab.Caption = new TextBlock { VerticalAlignment = VerticalAlignment.Center, MaxWidth = 150, TextTrimming = TextTrimming.CharacterEllipsis };
+        tab.Close = Glyph("", 8);
+        tab.Close.Margin = new Thickness(8, 1, 0, 0);
+        tab.Close.Cursor = Cursors.Hand;
+        tab.Close.ToolTip = "关闭";
+        tab.Close.MouseLeftButtonDown += (_, e) => e.Handled = true;
+        tab.Close.MouseLeftButtonUp += (_, e) => { e.Handled = true; CloseTab(tab); };
         var row = new StackPanel { Orientation = Orientation.Horizontal };
-        row.Children.Add(tab.Dot);
         row.Children.Add(tab.Caption);
-        row.Children.Add(close);
-        tab.Chip = new Border { Child = row, Padding = new Thickness(10, 5, 8, 5), Margin = new Thickness(0, 0, 4, 4), CornerRadius = new CornerRadius(6), Cursor = Cursors.Hand, BorderThickness = new Thickness(1) };
+        row.Children.Add(tab.Close);
+        tab.Chip = new Border { Child = row, Padding = new Thickness(8, 2, 7, 2), Margin = new Thickness(0, 0, 4, 0), CornerRadius = new CornerRadius(3), Cursor = Cursors.Hand, BorderThickness = new Thickness(1), Background = Brushes.Transparent };
         tab.Chip.MouseLeftButtonDown += (_, _) => SelectTab(tab);
         tab.Chip.MouseUp += (_, e) => { if (e.ChangedButton == MouseButton.Middle) CloseTab(tab); };
         var menu = new ContextMenu();
         void Item(string header, Action a) { var mi = new MenuItem { Header = header }; mi.Click += (_, _) => a(); menu.Items.Add(mi); }
-        Item("复制标签页", () => { if (tab.Active is { } p) Duplicate(p, null); });
+        Item("新建终端", () => NewTerminal(s));
         Item("重命名…", () =>
         {
-            var name = TerminalDialogs.Ask(Owner, "重命名标签页", "标签页名称（留空恢复默认）", false, tab.Caption.Text);
+            var name = TerminalDialogs.Ask(Owner, "重命名终端", "名称（留空恢复默认）", false, tab.Caption.Text);
             if (name != null) { tab.CustomTitle = name.Trim().Length > 0 ? name.Trim() : null; UpdateTab(tab); }
         });
         Item("重新连接", () => { foreach (var p in tab.Panes) Reconnect(p); });
         menu.Items.Add(new Separator());
         Item("关闭", () => CloseTab(tab));
-        Item("关闭其他标签页", () => { foreach (var t in _tabs.Where(t => t != tab).ToList()) CloseTab(t); });
-        Item("关闭右侧标签页", () => { foreach (var t in _tabs.Skip(_tabs.IndexOf(tab) + 1).ToList()) CloseTab(t); });
+        Item("关闭其他终端", () => { foreach (var t in s.Tabs.Where(t => t != tab).ToList()) CloseTab(t); });
         tab.Chip.ContextMenu = menu;
         tab.Root.Visibility = Visibility.Collapsed;
-        _tabs.Add(tab);
-        _tabStrip.Children.Add(tab.Chip);
-        _content.Children.Add(tab.Root);
+        s.Tabs.Add(tab);
+        s.Strip.Children.Add(tab.Chip);
+        s.Body.Children.Add(tab.Root);
         return tab;
     }
 
-    void SelectTab(Tab? tab)
+    /// <summary>Another terminal in the session; for SSH it opens a new shell on the same connection.</summary>
+    void NewTerminal(Session? s)
     {
-        _current = tab;
-        foreach (var t in _tabs)
+        if (s == null) { OpenLocal(DefaultShell()); return; }
+        var tab = NewTab(s);
+        AddPane(tab, s.Host, s.Shell, s.Host == null ? s.Current?.Active?.View.Directory : null);
+        SelectSession(s);
+        SelectTab(tab);
+    }
+
+    void SelectTab(Tab tab)
+    {
+        var s = tab.Session;
+        s.Current = tab;
+        foreach (var t in s.Tabs)
         {
             var on = t == tab;
             t.Root.Visibility = on ? Visibility.Visible : Visibility.Collapsed;
-            t.Chip.Background = on ? ApiUi.Res("CardBrush") : Brushes.Transparent;
-            t.Chip.BorderBrush = on ? ApiUi.Res("CardBorderBrush") : Brushes.Transparent;
+            t.Chip.BorderBrush = on ? Brand : Brushes.Transparent;
+            foreach (var x in new[] { t.Caption, t.Close })
+                if (on) x.Foreground = BrandText;
+                else x.SetResourceReference(TextBlock.ForegroundProperty, "SecondaryTextBrush");
         }
-        _welcome.Visibility = tab == null ? Visibility.Visible : Visibility.Collapsed;
-        _broadcast.IsChecked = tab?.Broadcast == true;
-        if (tab?.Active != null) tab.Active.View.FocusTerminal();
+        tab.Active?.View.FocusTerminal();
         OnActivePaneChanged();
     }
 
     void UpdateTab(Tab tab)
     {
-        var p = tab.Active ?? tab.Panes.FirstOrDefault();
-        var title = tab.CustomTitle ?? (p == null ? "终端" : p.Host != null ? p.Host.Title : p.View.Title.Length > 0 ? p.View.Title : p.Title);
+        var title = tab.CustomTitle ?? (tab.Number == 0 ? "终端" : "终端 " + tab.Number);
         if (tab.Panes.Count > 1 && tab.CustomTitle == null) title += $" (+{tab.Panes.Count - 1})";
         tab.Caption.Text = title;
-        tab.Chip.ToolTip = p?.Host != null ? p.Host.Address : p?.View.Title;
-        var color = p?.Host?.Color ?? "";
-        tab.Dot.Foreground = !tab.Panes.Any(x => x.Open) ? Brushes.Gray
-            : color.Length > 0 ? new SolidColorBrush((Color)ColorConverter.ConvertFromString(color))
-            : ApiUi.Frozen(0x2E, 0xCC, 0x71);
+        tab.Chip.ToolTip = tab.Active?.View.Title is { Length: > 0 } t ? t : null;
+        UpdateSession(tab.Session);
     }
 
     void CloseTab(Tab tab)
     {
-        if (tab.Panes.Any(p => p.Connection != null && p.Open) && !ApiDialogs.Confirm(Owner, $"关闭「{tab.Caption.Text}」会断开连接，确定吗？"))
-            return;
+        var s = tab.Session;
+        if (s.Tabs.Count == 1) { CloseSession(s); return; }
         foreach (var p in tab.Panes.ToList()) DisposePane(p);
-        var index = _tabs.IndexOf(tab);
-        _tabs.Remove(tab);
-        _tabStrip.Children.Remove(tab.Chip);
-        _content.Children.Remove(tab.Root);
-        if (_current == tab) SelectTab(_tabs.Count == 0 ? null : _tabs[Math.Min(index, _tabs.Count - 1)]);
+        var index = s.Tabs.IndexOf(tab);
+        s.Tabs.Remove(tab);
+        s.Strip.Children.Remove(tab.Chip);
+        s.Body.Children.Remove(tab.Root);
+        if (s.Current == tab) SelectTab(s.Tabs[Math.Min(index, s.Tabs.Count - 1)]);
+        UpdateSession(s);
     }
 
     // ---------- panes ----------
@@ -368,15 +649,31 @@ sealed partial class TerminalPage : DockPanel, IConnectPrompts
         UpdateStatus();
         try
         {
-            var connection = await SshConnection.OpenAsync(host, _data, this, pane.Cancel.Token);
-            if (!pane.Tab.Panes.Contains(pane)) { connection.Dispose(); return; }
+            var owner = pane.Tab.Session;
+            var fresh = false;
+            if (owner.Connection is not { IsConnected: true })
+            {
+                if (owner.Connection != null) DropConnection(owner);
+                if (owner.Pending == null) { owner.Pending = SshConnection.OpenAsync(host, _data, this, pane.Cancel.Token); fresh = true; }
+                var pending = owner.Pending;
+                SshConnection opened;
+                try { opened = await pending; }
+                finally { if (owner.Pending == pending) owner.Pending = null; }
+                if (fresh)
+                {
+                    if (!_sessions.Contains(owner)) { opened.Dispose(); return; }
+                    owner.Connection = opened;
+                }
+            }
+            var connection = owner.Connection!;
+            if (!pane.Tab.Panes.Contains(pane)) return;
             pane.Connection = connection;
             pane.Retries = 0;
-            var session = new SshSession(connection, pane.View.Cols, pane.View.Rows, ownsConnection: true);
+            var session = new SshSession(connection, pane.View.Cols, pane.View.Rows, ownsConnection: false);
             pane.View.Attach(session);
             session.Start();
             host.LastConnected = DateTime.Now;
-            StartAutoTunnels(pane);
+            if (fresh) StartAutoTunnels(owner, pane);
             ScheduleSave();
             if (pane == ActivePane) OnActivePaneChanged();
         }
@@ -401,9 +698,9 @@ sealed partial class TerminalPage : DockPanel, IConnectPrompts
     void OnSessionClosed(Pane pane)
     {
         var connection = pane.Connection;
-        StopTunnels(pane);
         pane.View.Detach()?.Dispose();
         pane.Connection = null;
+        if (connection != null && !connection.IsConnected && pane.Tab.Session.Connection == connection) DropConnection(pane.Tab.Session);
         UpdateTab(pane.Tab);
         UpdateStatus();
         if (pane == ActivePane) OnActivePaneChanged();
@@ -423,7 +720,6 @@ sealed partial class TerminalPage : DockPanel, IConnectPrompts
     void Reconnect(Pane pane)
     {
         pane.Cancel?.Cancel();
-        StopTunnels(pane);
         pane.View.Detach()?.Dispose();
         pane.Connection = null;
         pane.View.WriteText("\r\n");
@@ -447,7 +743,6 @@ sealed partial class TerminalPage : DockPanel, IConnectPrompts
     void DisposePane(Pane pane)
     {
         pane.Cancel?.Cancel();
-        StopTunnels(pane);
         pane.View.Close();
         pane.Connection = null;
     }
@@ -498,30 +793,30 @@ sealed partial class TerminalPage : DockPanel, IConnectPrompts
 
     public void OpenLocal(ShellProfile shell, string? directory = null)
     {
-        var tab = NewTab();
-        AddPane(tab, null, shell, directory);
-        SelectTab(tab);
+        var s = NewSession(null, shell);
+        AddPane(NewTab(s), null, shell, directory);
+        SelectSession(s);
     }
 
     void OpenHost(HostEntry host)
     {
-        var tab = NewTab();
-        AddPane(tab, host, null);
-        SelectTab(tab);
+        var s = NewSession(host, null);
+        AddPane(NewTab(s), host, null);
+        SelectSession(s);
+        if (_side == SideHosts || _side < 0) ShowSide(SideSftp);
     }
 
-    void Duplicate(Pane source, Tab? into)
+    void Duplicate(Pane source, Tab into)
     {
-        var tab = into ?? NewTab();
-        AddPane(tab, source.Host, source.Shell, source.Host == null ? source.View.Directory : null);
-        SelectTab(tab);
+        AddPane(into, source.Host, source.Shell, source.Host == null ? source.View.Directory : null);
+        SelectTab(into);
     }
 
     void Split(bool vertical)
     {
         var pane = ActivePane;
         if (pane == null) { OpenLocal(DefaultShell()); return; }
-        if (pane.Tab.Panes.Count >= 4) { Ui.SetStatus(_status, "一个标签页最多分 4 屏", true); return; }
+        if (pane.Tab.Panes.Count >= 4) { Ui.SetStatus(_status, "一个终端最多分 4 屏", true); return; }
         if (pane.Tab.Panes.Count == 1) pane.Tab.Vertical = vertical;
         Duplicate(pane, pane.Tab);
     }
@@ -566,7 +861,7 @@ sealed partial class TerminalPage : DockPanel, IConnectPrompts
     void Zoom(int delta)
     {
         _zoom = Math.Max(-8, Math.Min(24, _zoom + delta));
-        foreach (var t in _tabs) foreach (var p in t.Panes) p.View.Apply(_data.Settings, _zoom);
+        foreach (var p in AllTabs.SelectMany(t => t.Panes)) p.View.Apply(_data.Settings, _zoom);
         Ui.SetStatus(_status, $"字号 {_data.Settings.FontSize + _zoom}");
     }
 
@@ -585,6 +880,7 @@ sealed partial class TerminalPage : DockPanel, IConnectPrompts
         Item("AI 生成命令…", () => AiGenerate());
         Item("存为命令片段…", () => SaveSnippet(selection), selection.Length > 0);
         menu.Items.Add(new Separator());
+        Item("新建终端", () => NewTerminal(pane.Tab.Session));
         Item("左右分屏", () => Split(false), pane.Tab.Panes.Count < 4);
         Item("上下分屏", () => Split(true), pane.Tab.Panes.Count < 4);
         Item("关闭这个分屏", () => ClosePane(pane), pane.Tab.Panes.Count > 1);
@@ -593,7 +889,7 @@ sealed partial class TerminalPage : DockPanel, IConnectPrompts
         if (pane.Host != null)
         {
             menu.Items.Add(new Separator());
-            Item("在 SFTP 中打开当前目录", () => ToggleSide(0, true));
+            Item("在 SFTP 中打开当前目录", () => ShowSide(SideSftp));
             Item("端口转发…", ShowTunnels);
         }
         menu.PlacementTarget = pane.View;
@@ -722,7 +1018,7 @@ sealed partial class TerminalPage : DockPanel, IConnectPrompts
     void EditSettings()
     {
         if (!TerminalDialogs.EditSettings(Owner, _data.Settings, _shells)) return;
-        foreach (var t in _tabs) foreach (var p in t.Panes) p.View.Apply(_data.Settings, _zoom);
+        foreach (var p in AllTabs.SelectMany(t => t.Panes)) p.View.Apply(_data.Settings, _zoom);
         ScheduleSave();
     }
 
@@ -736,7 +1032,7 @@ sealed partial class TerminalPage : DockPanel, IConnectPrompts
             parts.Add(p.Host.Address);
             parts.Add(p.Connecting ? "连接中…" : p.Open ? "已连接" : "未连接");
             parts.Add(p.Host.Encoding.ToUpperInvariant());
-            var tunnels = ActiveTunnelCount(p);
+            var tunnels = ActiveTunnelCount(p.Tab.Session);
             if (tunnels > 0) parts.Add($"{tunnels} 个端口转发");
         }
         else parts.Add(p.Shell?.Name + (p.Open ? "" : " · 已退出"));

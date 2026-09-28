@@ -39,6 +39,7 @@ sealed class TunnelSpec
 
 sealed class HostEntry
 {
+    public List<string> Favorites { get; set; } = new();
     public string Id { get; set; } = Guid.NewGuid().ToString("N");
     public string Name { get; set; } = "";
     /// <summary>Folder path, "a/b"; empty for the top level.</summary>

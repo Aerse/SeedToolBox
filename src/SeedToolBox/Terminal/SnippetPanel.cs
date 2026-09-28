@@ -27,6 +27,11 @@ sealed class SnippetPanel : DockPanel
     string _historyKey = "local";
 
     /// <param name="send">(text, press Enter, to every pane of the tab)</param>
+    readonly TabControl _tabs = new() { BorderThickness = new Thickness(0) };
+
+    /// <summary>Shows the snippets or the history tab.</summary>
+    public void ShowTab(bool history) => _tabs.SelectedIndex = history ? 1 : 0;
+
     public SnippetPanel(TerminalData data, Func<Window?> owner, Action<string, bool, bool> send, Action save)
     {
         _data = data;
@@ -47,7 +52,7 @@ sealed class SnippetPanel : DockPanel
         DockPanel.SetDock(_all, Dock.Top);
         Children.Add(_all);
 
-        var tabs = new TabControl { BorderThickness = new Thickness(0) };
+        var tabs = _tabs;
         tabs.Items.Add(new TabItem { Header = "命令片段", Content = _snippets });
         var historyDock = new DockPanel();
         var clear = Ui.Button("清空这台主机的历史", () =>

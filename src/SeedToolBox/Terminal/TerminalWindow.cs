@@ -43,7 +43,7 @@ sealed class TerminalWindow : Window
         Title = "终端 / SSH";
         MinWidth = 720;
         MinHeight = 420;
-        _page = new TerminalPage(ai) { Margin = new Thickness(10) };
+        _page = new TerminalPage(ai);
         Content = _page;
         DialogWindow.ApplyTheme(this);
 

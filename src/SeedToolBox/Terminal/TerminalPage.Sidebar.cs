@@ -116,11 +116,11 @@ sealed partial class TerminalPage
 
     void RefreshTree()
     {
-        if (!_tree.IsLoaded && _tree.Items.Count == 0 && _tabs.Count > 0) { }
+        if (!_tree.IsLoaded && _tree.Items.Count == 0 && _sessions.Count > 0) { }
         var selected = (_tree.SelectedItem as TreeViewItem)?.Tag;
         _tree.Items.Clear();
         var query = _search.Text.Trim();
-        var online = new HashSet<string>(_tabs.SelectMany(t => t.Panes).Where(p => p.Host != null && p.Open).Select(p => p.Host!.Id));
+        var online = new HashSet<string>(AllTabs.SelectMany(t => t.Panes).Where(p => p.Host != null && p.Open).Select(p => p.Host!.Id));
 
         if (query.Length > 0)
         {
@@ -212,8 +212,8 @@ sealed partial class TerminalPage
         {
             case HostEntry h:
                 Item("连接", () => OpenHost(h));
-                Item("连接并打开 SFTP", () => { OpenHost(h); ToggleSide(0, true); });
-                Item("连接并打开监控", () => { OpenHost(h); ToggleSide(1, true); });
+                Item("连接并打开 SFTP", () => { OpenHost(h); ShowSide(SideSftp); });
+                Item("连接并打开监控", () => { OpenHost(h); ShowSide(SideMonitor); });
                 menu.Items.Add(new Separator());
                 Item("编辑…", () => EditHost(h));
                 Item("复制一份", () =>
@@ -265,9 +265,10 @@ sealed partial class TerminalPage
     void OpenLocalSsh(HostEntry h)
     {
         var shell = _shells.FirstOrDefault(s => s.Id is "pwsh" or "powershell") ?? DefaultShell();
-        var tab = NewTab();
-        var pane = AddPane(tab, null, shell);
-        SelectTab(tab);
+        var session = NewSession(null, shell);
+        session.CustomTitle = h.Title;
+        var pane = AddPane(NewTab(session), null, shell);
+        SelectSession(session);
         void Send(TerminalView _) { pane.View.Ready -= Send; Dispatcher.BeginInvoke(new Action(() => pane.View.Send(SshCommand(h) + "\r")), System.Windows.Threading.DispatcherPriority.Background); }
         if (pane.View.IsReady) Send(pane.View); else pane.View.Ready += Send;
     }
@@ -290,8 +291,8 @@ sealed partial class TerminalPage
         if (edited == null) return;
         _data.Hosts[_data.Hosts.IndexOf(h)] = edited;
         // Open panes keep their HostEntry; point them at the new one so reconnects use the new settings.
-        foreach (var p in _tabs.SelectMany(t => t.Panes).Where(p => p.Host == h)) p.Host = edited;
-        foreach (var t in _tabs) UpdateTab(t);
+        foreach (var p in AllTabs.SelectMany(t => t.Panes).Where(p => p.Host == h)) p.Host = edited;
+        foreach (var t in AllTabs) UpdateTab(t);
         ScheduleSave();
         RefreshTree();
     }

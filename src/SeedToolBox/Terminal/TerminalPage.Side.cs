@@ -17,46 +17,80 @@ sealed partial class TerminalPage
 {
     GridSplitter _sideSplitter = null!;
     ColumnDefinition _sideColumn = null!;
+    FrameworkElement _hosts = null!;
     SftpPanel _sftp = null!;
     MonitorPanel _monitor = null!;
     SnippetPanel _snippets = null!;
     readonly ContentControl _sideHost = new();
-    readonly ToggleButton[] _sideTabs = new ToggleButton[3];
+    readonly TextBlock _sideTitle = new() { FontWeight = FontWeights.SemiBold, VerticalAlignment = VerticalAlignment.Center };
+    readonly List<(int Index, Button Button, Border Mark)> _railButtons = new();
     int _side = -1;
+
+    const int SideHosts = 0, SideSftp = 1, SideMonitor = 2, SideSnippets = 3, SideHistory = 4;
+    static readonly string[] SideNames = { "主机", "文件", "服务器监控", "命令片段", "历史命令" };
 
     /// <summary>Makes bash and zsh report their directory (OSC 7) so SFTP can follow cd.</summary>
     const string ShellIntegration =
         " if [ -n \"$ZSH_VERSION\" ]; then __stb_cwd(){ printf '\\033]7;file://%s%s\\007' \"$HOST\" \"$PWD\"; }; precmd_functions+=(__stb_cwd);" +
         " else PROMPT_COMMAND='printf \"\\033]7;file://%s%s\\007\" \"$HOSTNAME\" \"$PWD\"'\"${PROMPT_COMMAND:+;$PROMPT_COMMAND}\"; fi\r";
 
+    Button RailButton(string glyph, string tip)
+    {
+        var b = new Button { Content = Glyph(glyph, 17), ToolTip = tip, Padding = new Thickness(0, 10, 0, 10), Width = 44, Style = FlatButton };
+        b.SetResourceReference(Control.ForegroundProperty, "SecondaryTextBrush");
+        return b;
+    }
+
+    FrameworkElement BuildRail()
+    {
+        var rail = new StackPanel { Margin = new Thickness(0, 6, 0, 0) };
+        void Add(int index, string glyph)
+        {
+            var b = RailButton(glyph, SideNames[index]);
+            b.Click += (_, _) => ToggleSide(index);
+            var mark = new Border { Width = 3, HorizontalAlignment = HorizontalAlignment.Left, Background = Brand, Visibility = Visibility.Hidden, Margin = new Thickness(0, 6, 0, 6) };
+            var cell = new Grid();
+            cell.Children.Add(b);
+            cell.Children.Add(mark);
+            rail.Children.Add(cell);
+            _railButtons.Add((index, b, mark));
+        }
+        Add(SideHosts, "\uE7F4");
+        Add(SideSftp, "\uE8B7");
+        Add(SideMonitor, "\uE9D9");
+        Add(SideSnippets, "\uE943");
+        Add(SideHistory, "\uE81C");
+        var more = RailButton("\uE712", "更多");
+        more.Click += (_, _) => ShowMenu(ToolsMenu(), more);
+        rail.Children.Add(more);
+        var border = new Border { Child = rail, BorderThickness = new Thickness(0, 0, 1, 0) };
+        border.SetResourceReference(Border.BackgroundProperty, "CardBrush");
+        border.SetResourceReference(Border.BorderBrushProperty, "CardBorderBrush");
+        return border;
+    }
+
     FrameworkElement BuildSidePanel()
     {
+        _hosts = BuildSidebar();
         _sftp = new SftpPanel(() => Owner, dir => ActivePane?.View.Send(" cd " + Quote(dir) + "\r"));
         _sftp.FollowEnabled += () =>
         {
             if (ActivePane is { Connection: not null, Open: true } p && p.View.Directory == null) p.View.Send(ShellIntegration);
         };
+        _sftp.FavoritesChanged += ScheduleSave;
         _monitor = new MonitorPanel(() => Owner);
         _snippets = new SnippetPanel(_data, () => Owner, SendToTerminal, ScheduleSave);
 
-        var panel = new DockPanel { Margin = new Thickness(6, 0, 0, 0) };
+        var panel = new DockPanel { Margin = new Thickness(10, 8, 8, 6) };
         var head = new DockPanel { Margin = new Thickness(0, 0, 0, 6) };
-        head.Children.Add(Docked(ApiUi.Icon("\uE711", "关闭侧栏", () => ShowSide(-1)), Dock.Right));
-        var tabs = new StackPanel { Orientation = Orientation.Horizontal };
-        var names = new[] { "SFTP", "监控", "片段" };
-        for (var i = 0; i < names.Length; i++)
-        {
-            var index = i;
-            var b = new ToggleButton { Content = names[i], Padding = new Thickness(10, 3, 10, 3), Margin = new Thickness(0, 0, 4, 0) };
-            b.Click += (_, _) => ShowSide(index);
-            _sideTabs[i] = b;
-            tabs.Children.Add(b);
-        }
-        head.Children.Add(tabs);
+        head.Children.Add(Docked(ApiUi.Icon("\uE711", "收起", () => ShowSide(-1)), Dock.Right));
+        head.Children.Add(_sideTitle);
         DockPanel.SetDock(head, Dock.Top);
         panel.Children.Add(head);
         panel.Children.Add(_sideHost);
-        return panel;
+        var border = new Border { Child = panel };
+        border.SetResourceReference(Border.BackgroundProperty, "WindowBrush");
+        return border;
     }
 
     static T Docked<T>(T element, Dock dock) where T : UIElement
@@ -67,26 +101,33 @@ sealed partial class TerminalPage
 
     static string Quote(string path) => "'" + path.Replace("'", "'\\''") + "'";
 
-    void ToggleSide(int index, bool force = false) => ShowSide(_side == index && !force ? -1 : index);
+    void ToggleSide(int index) => ShowSide(_side == index ? -1 : index);
 
     void ShowSide(int index)
     {
+        if (_side >= 0 && _sideColumn.ActualWidth > 0) _data.PanelWidth = _sideColumn.ActualWidth;
         _side = index;
-        for (var i = 0; i < _sideTabs.Length; i++) _sideTabs[i].IsChecked = i == index;
+        foreach (var (i, button, mark) in _railButtons)
+        {
+            mark.Visibility = i == index ? Visibility.Visible : Visibility.Hidden;
+            if (i == index) button.Foreground = Brand;
+            else button.SetResourceReference(Control.ForegroundProperty, "SecondaryTextBrush");
+        }
         if (index < 0)
         {
-            _data.PanelWidth = _sideColumn.ActualWidth > 0 ? _sideColumn.ActualWidth : _data.PanelWidth;
-            _sideColumn.Width = new GridLength(0);
             _sideColumn.MinWidth = 0;
+            _sideColumn.Width = new GridLength(0);
             _sideSplitter.Visibility = Visibility.Collapsed;
             _sideHost.Content = null;
         }
         else
         {
-            _sideColumn.MinWidth = 260;
+            _sideColumn.MinWidth = 220;
             _sideColumn.Width = new GridLength(Math.Max(260, _data.PanelWidth));
             _sideSplitter.Visibility = Visibility.Visible;
-            _sideHost.Content = index switch { 0 => _sftp, 1 => _monitor, _ => _snippets };
+            _sideTitle.Text = SideNames[index];
+            if (index is SideSnippets or SideHistory) _snippets.ShowTab(index == SideHistory);
+            _sideHost.Content = index switch { SideHosts => _hosts, SideSftp => _sftp, SideMonitor => _monitor, _ => _snippets };
         }
         BindSidePanel();
     }
@@ -96,19 +137,20 @@ sealed partial class TerminalPage
         var pane = ActivePane;
         var connection = pane?.Connection is { IsConnected: true } c ? c : null;
         _snippets.SetHistoryKey(pane?.HistoryKey ?? "local");
-        _monitor.Bind(_side == 1 ? connection : null);
-        if (_side == 0) _sftp.Bind(connection, pane?.View.Directory);
+        _monitor.Bind(_side == SideMonitor ? connection : null);
+        _sftp.Favorites = pane?.Host?.Favorites;
+        if (_side == SideSftp) _sftp.Bind(connection, pane?.View.Directory);
     }
 
     void OnDirectoryChanged(Pane pane, string dir)
     {
         pane.Directory = dir;
-        if (_side == 0 && pane.Connection != null) _sftp.Follow(dir);
+        if (_side == SideSftp && pane.Connection != null) _sftp.Follow(dir);
     }
 
     void OnHistoryChanged()
     {
-        if (_side == 2) _snippets.Refresh();
+        if (_side is SideSnippets or SideHistory) _snippets.Refresh();
     }
 
     void SaveSnippet(string text) => _snippets.Edit(null, text.Trim());
@@ -133,25 +175,25 @@ sealed partial class TerminalPage
         public string? Error;
     }
 
-    readonly Dictionary<Pane, List<ActiveTunnel>> _tunnels = new();
+    readonly Dictionary<Session, List<ActiveTunnel>> _tunnels = new();
 
-    int ActiveTunnelCount(Pane pane) => _tunnels.TryGetValue(pane, out var l) ? l.Count(t => t.Port.IsStarted) : 0;
+    int ActiveTunnelCount(Session s) => _tunnels.TryGetValue(s, out var l) ? l.Count(t => t.Port.IsStarted) : 0;
 
-    void StartAutoTunnels(Pane pane)
+    void StartAutoTunnels(Session s, Pane pane)
     {
-        if (pane.Host == null) return;
-        foreach (var spec in pane.Host.Tunnels.Where(t => t.AutoStart))
+        if (s.Host == null) return;
+        foreach (var spec in s.Host.Tunnels.Where(t => t.AutoStart))
         {
-            var error = StartTunnel(pane, spec);
+            var error = StartTunnel(s, spec);
             if (error != null) pane.View.WriteText($"\x1b[33m端口转发 {spec.Describe} 启动失败：{error}\x1b[0m\r\n");
         }
     }
 
     /// <summary>Returns an error message, or null when the tunnel is running.</summary>
-    string? StartTunnel(Pane pane, TunnelSpec spec)
+    string? StartTunnel(Session s, TunnelSpec spec)
     {
-        if (pane.Connection is not { IsConnected: true } connection) return "没有连接";
-        if (!_tunnels.TryGetValue(pane, out var list)) _tunnels[pane] = list = new List<ActiveTunnel>();
+        if (s.Connection is not { IsConnected: true } connection) return "没有连接";
+        if (!_tunnels.TryGetValue(s, out var list)) _tunnels[s] = list = new List<ActiveTunnel>();
         if (list.Any(t => t.Spec.Id == spec.Id && t.Port.IsStarted)) return null;
         list.RemoveAll(t => t.Spec.Id == spec.Id);
         ForwardedPort port = spec.Kind switch
@@ -178,31 +220,32 @@ sealed partial class TerminalPage
         }
     }
 
-    void StopTunnel(Pane pane, ActiveTunnel t)
+    void StopTunnel(Session s, ActiveTunnel t)
     {
         try
         {
             if (t.Port.IsStarted) t.Port.Stop();
-            pane.Connection?.Client.RemoveForwardedPort(t.Port);
+            s.Connection?.Client.RemoveForwardedPort(t.Port);
         }
         catch (Exception ex) when (ex is InvalidOperationException or Renci.SshNet.Common.SshException or ObjectDisposedException or System.Net.Sockets.SocketException) { }
         t.Port.Dispose();
-        if (_tunnels.TryGetValue(pane, out var list)) list.Remove(t);
+        if (_tunnels.TryGetValue(s, out var list)) list.Remove(t);
         UpdateStatus();
     }
 
-    void StopTunnels(Pane pane)
+    void StopTunnels(Session s)
     {
-        if (!_tunnels.TryGetValue(pane, out var list)) return;
-        foreach (var t in list.ToList()) StopTunnel(pane, t);
-        _tunnels.Remove(pane);
+        if (!_tunnels.TryGetValue(s, out var list)) return;
+        foreach (var t in list.ToList()) StopTunnel(s, t);
+        _tunnels.Remove(s);
     }
 
     void ShowTunnels()
     {
         var pane = ActivePane;
-        if (pane?.Host == null) { Ui.SetStatus(_status, "端口转发需要先选中一个 SSH 标签页", true); return; }
+        if (pane?.Host == null) { Ui.SetStatus(_status, "端口转发需要先选中一个 SSH 会话", true); return; }
         var host = pane.Host;
+        var session = pane.Tab.Session;
         var list = new ListView { BorderThickness = new Thickness(0) };
         var grid = new GridView();
         grid.Columns.Add(new GridViewColumn { Header = "状态", Width = 70, DisplayMemberBinding = new System.Windows.Data.Binding("Item1") });
@@ -211,7 +254,7 @@ sealed partial class TerminalPage
         list.View = grid;
         var status = Ui.Status();
         TunnelSpec? Selected() => list.SelectedItem is ValueTuple<string, string, string, TunnelSpec> row ? row.Item4 : null;
-        ActiveTunnel? Running(TunnelSpec s) => _tunnels.TryGetValue(pane, out var l) ? l.FirstOrDefault(t => t.Spec.Id == s.Id && t.Port.IsStarted) : null;
+        ActiveTunnel? Running(TunnelSpec s) => _tunnels.TryGetValue(session, out var l) ? l.FirstOrDefault(t => t.Spec.Id == s.Id && t.Port.IsStarted) : null;
         void Refresh()
         {
             var selected = Selected();
@@ -223,10 +266,10 @@ sealed partial class TerminalPage
         void Toggle()
         {
             if (Selected() is not { } s) return;
-            if (Running(s) is { } t) { StopTunnel(pane, t); Ui.SetStatus(status, "已停止 " + s.Describe); }
+            if (Running(s) is { } t) { StopTunnel(session, t); Ui.SetStatus(status, "已停止 " + s.Describe); }
             else
             {
-                var error = StartTunnel(pane, s);
+                var error = StartTunnel(session, s);
                 Ui.SetStatus(status, error == null ? "已启动 " + s.Describe : "启动失败：" + error, error != null);
             }
             Refresh();
@@ -244,7 +287,7 @@ sealed partial class TerminalPage
             Ui.Button("编辑…", () =>
             {
                 if (Selected() is not { } s || TunnelList.EditSpec(window, s) is not { } edited) return;
-                if (Running(s) is { } t) StopTunnel(pane, t);
+                if (Running(s) is { } t) StopTunnel(session, t);
                 host.Tunnels[host.Tunnels.IndexOf(s)] = edited;
                 ScheduleSave();
                 Refresh();
@@ -252,7 +295,7 @@ sealed partial class TerminalPage
             Ui.Button("删除", () =>
             {
                 if (Selected() is not { } s) return;
-                if (Running(s) is { } t) StopTunnel(pane, t);
+                if (Running(s) is { } t) StopTunnel(session, t);
                 host.Tunnels.Remove(s);
                 ScheduleSave();
                 Refresh();
