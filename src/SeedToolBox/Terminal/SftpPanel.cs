@@ -21,7 +21,7 @@ using SeedToolBox.DevTools.Api;
 
 namespace SeedToolBox.Terminal;
 
-/// <summary>Remote file browser beside the terminal: follows the shell's directory, transfers with a queue, edits files in place.</summary>
+/// <summary>Remote file browser beside the terminal: follows the shell's directory, transfers through the 传输 tab, edits files in place.</summary>
 sealed class SftpPanel : DockPanel
 {
     sealed class Entry
@@ -38,29 +38,13 @@ sealed class SftpPanel : DockPanel
         public string Owner { get; set; } = "";
     }
 
-    sealed class Transfer : INotifyPropertyChanged
-    {
-        public string Name { get; set; } = "";
-        public bool Upload;
-        public long Total;
-        long _done;
-        string _state = "等待";
-        public CancellationTokenSource Cancel = new();
-        public long Done { get => _done; set { _done = value; Changed(nameof(Percent)); Changed(nameof(Text)); } }
-        public double Percent => Total > 0 ? 100.0 * _done / Total : 0;
-        public string State { get => _state; set { _state = value; Changed(nameof(Text)); } }
-        public string Text => $"{(Upload ? "↑" : "↓")} {Name}  {Ui.FormatSize(_done)} / {Ui.FormatSize(Total)}  {_state}";
-        public event PropertyChangedEventHandler? PropertyChanged;
-        void Changed(string n) => PropertyChanged?.Invoke(this, new PropertyChangedEventArgs(n));
-    }
-
     readonly TextBox _path = Ui.Field();
     readonly TreeView _tree = new() { BorderThickness = new Thickness(0), Background = Brushes.Transparent };
     readonly TextBlock _status = Ui.Status();
     readonly ToggleButton _follow = new() { IsChecked = true, ToolTip = "定位：终端切换目录时跟着展开（需要 shell 报告目录，bash/zsh 可自动开启）" };
     readonly ToggleButton _hidden = new() { ToolTip = "显示隐藏文件" };
-    readonly ListBox _queue = new() { MaxHeight = 140, BorderThickness = new Thickness(0), Visibility = Visibility.Collapsed };
-    readonly ObservableCollection<Transfer> _transfers = new();
+    /// <summary>Transfers started here, cancelled when the panel closes; the list itself lives in <see cref="Transfers"/>.</summary>
+    readonly List<Transfer> _mine = new();
     readonly Dictionary<object, IRemoteFiles> _clients = new();
     readonly List<FileSystemWatcher> _watchers = new();
     readonly Func<Window?> _owner;
@@ -72,7 +56,6 @@ sealed class SftpPanel : DockPanel
     string _home = "/";
     string _current = "";
     int _version;
-    bool _showQueue;
 
     /// <summary>The user turned on follow; the page can ask the shell to report its directory.</summary>
     public event Action? FollowEnabled;
@@ -119,19 +102,6 @@ sealed class SftpPanel : DockPanel
         _hidden.Click += (_, _) => Reload();
         _follow.Checked += (_, _) => FollowEnabled?.Invoke();
 
-        _queue.ItemsSource = _transfers;
-        _queue.ItemTemplate = TransferTemplate();
-        _transfers.CollectionChanged += (_, _) => UpdateQueue();
-        var queueMenu = new ContextMenu();
-        var cancel = new MenuItem { Header = "取消传输" };
-        cancel.Click += (_, _) => { if (_queue.SelectedItem is Transfer t) t.Cancel.Cancel(); };
-        var clear = new MenuItem { Header = "清除已完成" };
-        clear.Click += (_, _) => { foreach (var t in _transfers.Where(t => t.Cancel.IsCancellationRequested || t.State is "完成" or "已取消" || t.State.StartsWith("失败")).ToList()) _transfers.Remove(t); };
-        queueMenu.Items.Add(cancel);
-        queueMenu.Items.Add(clear);
-        _queue.ContextMenu = queueMenu;
-        DockPanel.SetDock(_queue, Dock.Bottom);
-        Children.Add(_queue);
         _status.Margin = new Thickness(0, 4, 0, 4);
         DockPanel.SetDock(_status, Dock.Bottom);
         Children.Add(_status);
@@ -180,8 +150,6 @@ sealed class SftpPanel : DockPanel
         menu.IsOpen = true;
     }
 
-    void UpdateQueue() => _queue.Visibility = _showQueue || _transfers.Any(t => t.State is "上传中" or "下载中" or "等待") ? Visibility.Visible : Visibility.Collapsed;
-
     ContextMenu FavoritesMenu()
     {
         var menu = new ContextMenu();
@@ -218,26 +186,10 @@ sealed class SftpPanel : DockPanel
         if (_linked) Item("在终端中进入当前文件夹", () => _cdInTerminal(_current), _current.Length > 0);
         Item("复制路径", () => Clipboard.SetText(_current), _current.Length > 0);
         menu.Items.Add(new Separator());
-        var queue = new MenuItem { Header = "显示传输队列", IsCheckable = true, IsChecked = _showQueue };
-        queue.Click += (_, _) => { _showQueue = !_showQueue; UpdateQueue(); };
-        menu.Items.Add(queue);
+        var folder = new MenuItem { Header = "打开下载目录" };
+        folder.Click += (_, _) => Transfers.OpenFolder(Transfers.LastFolder);
+        menu.Items.Add(folder);
         return menu;
-    }
-
-    static DataTemplate TransferTemplate()
-    {
-        var f = new FrameworkElementFactory(typeof(StackPanel));
-        var text = new FrameworkElementFactory(typeof(TextBlock));
-        text.SetBinding(TextBlock.TextProperty, new System.Windows.Data.Binding(nameof(Transfer.Text)));
-        text.SetValue(TextBlock.FontSizeProperty, 11.0);
-        f.AppendChild(text);
-        var bar = new FrameworkElementFactory(typeof(ProgressBar));
-        bar.SetBinding(RangeBase.ValueProperty, new System.Windows.Data.Binding(nameof(Transfer.Percent)) { Mode = System.Windows.Data.BindingMode.OneWay });
-        bar.SetValue(FrameworkElement.HeightProperty, 4.0);
-        bar.SetValue(FrameworkElement.WidthProperty, 240.0);
-        bar.SetValue(FrameworkElement.HorizontalAlignmentProperty, HorizontalAlignment.Left);
-        f.AppendChild(bar);
-        return new DataTemplate { VisualTree = f };
     }
 
     void Show(string message)
@@ -577,8 +529,7 @@ sealed class SftpPanel : DockPanel
 
     async Task<bool> UploadOne(IRemoteFiles client, string local, string remote)
     {
-        var t = new Transfer { Name = Path.GetFileName(local), Upload = true, Total = new FileInfo(local).Length, State = "上传中" };
-        _transfers.Insert(0, t);
+        var t = Start(new Transfer { Name = Path.GetFileName(local), Upload = true, Local = local, Remote = remote, Total = new FileInfo(local).Length, State = "上传中" });
         try
         {
             using var stream = File.OpenRead(local);
@@ -599,12 +550,12 @@ sealed class SftpPanel : DockPanel
         string? folder;
         if (items.Count == 1 && !items[0].IsDirectory)
         {
-            var dlg = new SaveFileDialog { FileName = items[0].Name, Title = "下载 " + items[0].Name };
+            var dlg = new SaveFileDialog { FileName = items[0].Name, Title = "下载 " + items[0].Name, InitialDirectory = Transfers.LastFolder };
             if (dlg.ShowDialog(_owner()) != true) return;
             _ = DownloadOne(items[0].FullName, dlg.FileName, items[0].Length);
             return;
         }
-        var pick = new System.Windows.Forms.FolderBrowserDialog { Description = "下载到哪个文件夹？" };
+        var pick = new System.Windows.Forms.FolderBrowserDialog { Description = "下载到哪个文件夹？", SelectedPath = Transfers.LastFolder };
         if (pick.ShowDialog() != System.Windows.Forms.DialogResult.OK) return;
         folder = pick.SelectedPath;
         _ = DownloadMany(items, folder);
@@ -641,10 +592,22 @@ sealed class SftpPanel : DockPanel
         Ui.SetStatus(_status, "下载完成：" + folder);
     }
 
+    /// <summary>Server name shown in the 传输 tab.</summary>
+    public string ServerName { get; set; } = "";
+
+    Transfer Start(Transfer t)
+    {
+        t.Server = ServerName;
+        _mine.RemoveAll(x => !x.Active);
+        _mine.Add(t);
+        Transfers.Add(t);
+        Ui.SetStatus(_status, $"{(t.Upload ? "上传" : "下载")}「{t.Name}」… 进度和历史在「传输」页签");
+        return t;
+    }
+
     async Task<bool> DownloadOne(string remote, string local, long length)
     {
-        var t = new Transfer { Name = Path.GetFileName(local), Total = length, State = "下载中" };
-        _transfers.Insert(0, t);
+        var t = Start(new Transfer { Name = Path.GetFileName(local), Local = local, Remote = remote, Total = length, State = "下载中" });
         try
         {
             var client = await ClientAsync();
@@ -787,7 +750,7 @@ sealed class SftpPanel : DockPanel
     {
         foreach (var w in _watchers) w.Dispose();
         _watchers.Clear();
-        foreach (var t in _transfers) t.Cancel.Cancel();
+        foreach (var t in _mine) t.Cancel.Cancel();
         foreach (var c in _clients.Values) c.Dispose();
         _clients.Clear();
     }

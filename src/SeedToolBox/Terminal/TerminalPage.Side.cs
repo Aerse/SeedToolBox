@@ -21,14 +21,15 @@ sealed partial class TerminalPage
     SftpPanel _sftp = null!;
     MonitorPanel _monitor = null!;
     DockerPanel _docker = null!;
+    readonly TransfersPanel _transfersPanel = new();
     SnippetPanel _snippets = null!;
     readonly ContentControl _sideHost = new();
     readonly TextBlock _sideTitle = new() { FontWeight = FontWeights.SemiBold, VerticalAlignment = VerticalAlignment.Center };
     readonly List<(int Index, Button Button, Border Mark)> _railButtons = new();
     int _side = -1;
 
-    const int SideHosts = 0, SideSftp = 1, SideMonitor = 2, SideSnippets = 3, SideHistory = 4, SideDocker = 5;
-    static readonly string[] SideNames = { "主机", "文件", "服务器监控", "命令片段", "历史命令", "Docker" };
+    const int SideHosts = 0, SideSftp = 1, SideMonitor = 2, SideSnippets = 3, SideHistory = 4, SideDocker = 5, SideTransfers = 6;
+    static readonly string[] SideNames = { "主机", "文件", "服务器监控", "命令片段", "历史命令", "Docker", "传输" };
 
     /// <summary>Makes bash and zsh report their directory (OSC 7) so SFTP can follow cd.</summary>
     const string ShellIntegration =
@@ -60,6 +61,7 @@ sealed partial class TerminalPage
         Add(SideSftp, "\uE8B7");
         Add(SideMonitor, "\uE9D9");
         Add(SideDocker, "\uE7B8");
+        Add(SideTransfers, "\uE896");
         Add(SideSnippets, "\uE943");
         Add(SideHistory, "\uE81C");
         var more = RailButton("\uE712", "更多");
@@ -130,7 +132,7 @@ sealed partial class TerminalPage
             _sideSplitter.Visibility = Visibility.Visible;
             _sideTitle.Text = SideNames[index];
             if (index is SideSnippets or SideHistory) _snippets.ShowTab(index == SideHistory);
-            _sideHost.Content = index switch { SideHosts => _hosts, SideSftp => _sftp, SideMonitor => _monitor, SideDocker => _docker, _ => _snippets };
+            _sideHost.Content = index switch { SideHosts => _hosts, SideSftp => _sftp, SideMonitor => _monitor, SideDocker => _docker, SideTransfers => _transfersPanel, _ => _snippets };
         }
         BindSidePanel();
     }
@@ -143,7 +145,7 @@ sealed partial class TerminalPage
         _monitor.Bind(_side == SideMonitor ? connection : null);
         _docker.Bind(_side == SideDocker ? connection : null);
         _sftp.Favorites = pane?.Host?.Favorites;
-        if (_side == SideSftp) _sftp.Bind(connection, pane?.View.Directory);
+        if (_side == SideSftp) { _sftp.ServerName = pane?.Host.Title ?? ""; _sftp.Bind(connection, pane?.View.Directory); }
     }
 
     void OnDirectoryChanged(Pane pane, string dir)
