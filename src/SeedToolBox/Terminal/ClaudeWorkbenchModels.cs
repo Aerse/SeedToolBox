@@ -4,6 +4,7 @@ using SeedToolBox.Core.Services;
 using System.Collections.Generic;
 using System.IO;
 using System.Linq;
+using System.Runtime.InteropServices;
 using System.Text;
 using Newtonsoft.Json;
 using Newtonsoft.Json.Linq;
@@ -152,6 +153,56 @@ static class ClaudeWorkbenchStore
         try { return Directory.Exists(Projects) && Directory.EnumerateDirectories(Projects).Any(d => File.Exists(System.IO.Path.Combine(d, sessionId + ".jsonl"))); }
         catch (Exception ex) when (ex is IOException or UnauthorizedAccessException) { return false; }
     }
+
+    /// <summary>Running Claude Code processes and the conversation each is in now (it changes with /resume and /clear),
+    /// from the files Claude Code keeps in ~/.claude/sessions.</summary>
+    public static Dictionary<int, string> RunningConversations()
+    {
+        var result = new Dictionary<int, string>();
+        var dir = System.IO.Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.UserProfile), ".claude", "sessions");
+        try
+        {
+            if (!Directory.Exists(dir)) return result;
+            foreach (var file in Directory.EnumerateFiles(dir, "*.json"))
+                try
+                {
+                    var o = JObject.Parse(File.ReadAllText(file));
+                    if ((int?)o["pid"] is { } pid && (string?)o["sessionId"] is { Length: > 0 } id) result[pid] = id;
+                }
+                catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or JsonException) { }
+        }
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException) { }
+        return result;
+    }
+
+    /// <summary>Every process's parent.</summary>
+    public static Dictionary<int, int> ParentProcesses()
+    {
+        var map = new Dictionary<int, int>();
+        var snap = CreateToolhelp32Snapshot(2, 0);
+        if (snap == new IntPtr(-1)) return map;
+        try
+        {
+            var e = new ProcessEntry { Size = Marshal.SizeOf<ProcessEntry>() };
+            for (var ok = Process32First(snap, ref e); ok; ok = Process32Next(snap, ref e)) map[e.ProcessId] = e.ParentProcessId;
+        }
+        finally { CloseHandle(snap); }
+        return map;
+    }
+
+    [StructLayout(LayoutKind.Sequential, CharSet = CharSet.Unicode)]
+    struct ProcessEntry
+    {
+        public int Size, Usage, ProcessId;
+        public IntPtr DefaultHeapId;
+        public int ModuleId, Threads, ParentProcessId, PriClassBase, Flags;
+        [MarshalAs(UnmanagedType.ByValTStr, SizeConst = 260)] public string ExeFile;
+    }
+
+    [DllImport("kernel32.dll", SetLastError = true)] static extern IntPtr CreateToolhelp32Snapshot(int flags, int pid);
+    [DllImport("kernel32.dll", CharSet = CharSet.Unicode, EntryPoint = "Process32FirstW")] static extern bool Process32First(IntPtr snap, ref ProcessEntry e);
+    [DllImport("kernel32.dll", CharSet = CharSet.Unicode, EntryPoint = "Process32NextW")] static extern bool Process32Next(IntPtr snap, ref ProcessEntry e);
+    [DllImport("kernel32.dll")] static extern bool CloseHandle(IntPtr h);
 
     /// <summary>The folder's most recent conversation, for layouts saved before tabs kept their own.</summary>
     public static string? LatestConversation(string folder)

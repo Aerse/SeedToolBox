@@ -115,6 +115,15 @@ sealed partial class TerminalView : Border
         Loaded += async (_, _) => await InitAsync();
     }
 
+    /// <summary>Native (not composition) terminals are windows of their own, drawn over WPF: puts this one above the others.</summary>
+    public void BringToFront()
+    {
+        if (_webElement is System.Windows.Interop.HwndHost { Handle: var h } && h != IntPtr.Zero)
+            SetWindowPos(h, IntPtr.Zero, 0, 0, 0, 0, 0x0001 | 0x0002 | 0x0010);
+    }
+
+    [DllImport("user32.dll")] static extern bool SetWindowPos(IntPtr hwnd, IntPtr after, int x, int y, int cx, int cy, uint flags);
+
     public static bool RuntimeAvailable()
     {
         try { return CoreWebView2Environment.GetAvailableBrowserVersionString() != null; }

@@ -42,7 +42,8 @@ sealed class ClaudeWorkbench : Window
     readonly TextBlock _empty = new() { Text = "在左边点一个文件夹，就在那里启动 Claude Code", HorizontalAlignment = HorizontalAlignment.Center, VerticalAlignment = VerticalAlignment.Center, FontSize = 15 };
     readonly StackPanel _list = new();
     readonly ColumnDefinition _sideColumn;
-    readonly DispatcherTimer _saveTimer;
+    readonly DispatcherTimer _saveTimer, _sessionTimer;
+    bool _tracking;
     readonly CheckBox _autoBox = new() { Content = "自动整理", VerticalAlignment = VerticalAlignment.Center, Margin = new Thickness(8, 0, 0, 0), ToolTip = "打开、关闭或最小化窗口时自动平铺" };
     Pane? _active;
 
@@ -87,6 +88,9 @@ sealed class ClaudeWorkbench : Window
         _terminal = TerminalStore.Load().Settings;
         _saveTimer = new DispatcherTimer { Interval = TimeSpan.FromSeconds(1) };
         _saveTimer.Tick += (_, _) => { _saveTimer.Stop(); SaveNow(); };
+        _sessionTimer = new DispatcherTimer { Interval = TimeSpan.FromSeconds(5) };
+        _sessionTimer.Tick += async (_, _) => await TrackConversations();
+        _sessionTimer.Start();
 
         var root = new Grid();
         _sideColumn = new ColumnDefinition { Width = new GridLength(Math.Max(160, _data.SidebarWidth)), MinWidth = 140 };
@@ -171,11 +175,15 @@ sealed class ClaudeWorkbench : Window
         DockPanel.SetDock(top, Dock.Top);
         panel.Children.Add(top);
 
-        var hint = new TextBlock { Text = "单击：打开或切到它的窗口\n右键：新页签、编辑、删除", FontSize = 11, TextWrapping = TextWrapping.Wrap, Margin = new Thickness(2, 8, 0, 0) };
+        var hint = new TextBlock { Text = "单击：打开或切到它的窗口\n右键：新页签、编辑、删除\n也可以把文件夹直接拖进来", FontSize = 11, TextWrapping = TextWrapping.Wrap, Margin = new Thickness(2, 8, 0, 0) };
         hint.SetResourceReference(TextBlock.ForegroundProperty, "SecondaryTextBrush");
         DockPanel.SetDock(hint, Dock.Bottom);
         panel.Children.Add(hint);
         panel.Children.Add(new ScrollViewer { Content = _list, VerticalScrollBarVisibility = ScrollBarVisibility.Auto });
+        // Whole window, so folders can be dropped anywhere outside the terminals
+        AllowDrop = true;
+        DragOver += OnDragOver;
+        Drop += OnDrop;
         return panel;
     }
 
@@ -240,7 +248,29 @@ sealed class ClaudeWorkbench : Window
     {
         using var dialog = new System.Windows.Forms.FolderBrowserDialog { Description = "选择要启动 Claude Code 的文件夹" };
         if (dialog.ShowDialog() != System.Windows.Forms.DialogResult.OK) return;
-        var path = dialog.SelectedPath;
+        AddFolderPath(dialog.SelectedPath);
+    }
+
+    /// <summary>Folders dragged in from Explorer; for a file, the folder it is in.</summary>
+    static List<string> DroppedFolders(DragEventArgs e) =>
+        e.Data.GetData(DataFormats.FileDrop) is string[] paths
+            ? paths.Select(p => Directory.Exists(p) ? p : Path.GetDirectoryName(p)).Where(p => !string.IsNullOrEmpty(p) && Directory.Exists(p)).Distinct(StringComparer.OrdinalIgnoreCase).ToList()!
+            : new List<string>();
+
+    void OnDragOver(object sender, DragEventArgs e)
+    {
+        e.Effects = DroppedFolders(e).Count > 0 ? DragDropEffects.Link : DragDropEffects.None;
+        e.Handled = true;
+    }
+
+    void OnDrop(object sender, DragEventArgs e)
+    {
+        foreach (var path in DroppedFolders(e)) AddFolderPath(path);
+        e.Handled = true;
+    }
+
+    void AddFolderPath(string path)
+    {
         var existing = _data.Folders.FirstOrDefault(f => string.Equals(f.Path.TrimEnd('\\'), path.TrimEnd('\\'), StringComparison.OrdinalIgnoreCase));
         if (existing != null) { ShowFolder(existing); return; }
         var folder = new ClaudeFolder { Path = path };
@@ -385,8 +415,8 @@ sealed class ClaudeWorkbench : Window
 
     Pane StartPane(ClaudeTab tab, ClaudeFolder folder, FolderWindow window)
     {
-        // Composition: drawn by WPF, so the floating windows can overlap the terminal
-        var view = new TerminalView(composition: true);
+        // Native WebView2: composition copies every frame into WPF and gets slow with several terminals
+        var view = new TerminalView();
         view.Apply(_terminal);
         var pane = new Pane { Tab = tab, Folder = folder, View = view, Window = window };
         view.Focused += _ => { if (_active != pane) Activate(pane, focus: false); };
@@ -472,6 +502,8 @@ sealed class ClaudeWorkbench : Window
         _active = pane;
         pane.Unread = false;
         Panel.SetZIndex(pane.Window.Frame, ++_z);
+        // The terminals are native windows above WPF: their order follows the activation, not ZIndex
+        foreach (var p in pane.Window.Tabs) p.View.BringToFront();
         RefreshList();
         RefreshTabs();
         if (focus) pane.View.FocusTerminal();
@@ -885,6 +917,39 @@ sealed class ClaudeWorkbench : Window
         return b;
     }
 
+    /// <summary>Follows /resume and /clear: each Claude tab keeps the conversation its Claude is in now,
+    /// found by the Claude process under the tab's shell.</summary>
+    async System.Threading.Tasks.Task TrackConversations()
+    {
+        if (_tracking) return;
+        var shells = _panes.Values.Where(p => !p.Tab.Shell && p.Session is { IsOpen: true }).Select(p => (Pane: p, Shell: p.Session!.ProcessId)).ToList();
+        if (shells.Count == 0) return;
+        _tracking = true;
+        try
+        {
+            var found = await System.Threading.Tasks.Task.Run(() =>
+            {
+                var running = ClaudeWorkbenchStore.RunningConversations();
+                var parents = running.Count > 0 ? ClaudeWorkbenchStore.ParentProcesses() : new Dictionary<int, int>();
+                var result = new List<(Pane Pane, string Id)>();
+                foreach (var (pane, shell) in shells)
+                    foreach (var pair in running)
+                    {
+                        // Walk up from the Claude process to the tab's shell
+                        var x = pair.Key;
+                        for (var depth = 0; depth < 16 && x != shell && parents.TryGetValue(x, out var parent) && parent != x; depth++) x = parent;
+                        if (x == shell) { result.Add((pane, pair.Value)); break; }
+                    }
+                return result;
+            });
+            var changed = false;
+            foreach (var (pane, id) in found)
+                if (pane.Tab.SessionId != id) { pane.Tab.SessionId = id; changed = true; }
+            if (changed) { ScheduleSave(); RefreshTabs(); }
+        }
+        finally { _tracking = false; }
+    }
+
     // ---------- saving ----------
 
 
@@ -917,6 +982,7 @@ sealed class ClaudeWorkbench : Window
         _data.WindowBounds = new[] { r.Left, r.Top, r.Width, r.Height };
         _data.WindowMaximized = WindowState == WindowState.Maximized;
         _saveTimer.Stop();
+        _sessionTimer.Stop();
         SaveNow();
         base.OnClosing(e);
     }
