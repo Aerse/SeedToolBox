@@ -68,7 +68,8 @@ sealed partial class TerminalView : Border
     const string VirtualHost = "stb-terminal.example";
     static Task<CoreWebView2Environment>? _environment;
 
-    readonly WebView2 _web = new() { DefaultBackgroundColor = System.Drawing.Color.Transparent };
+    readonly IWebView2 _web;
+    readonly FrameworkElement _webElement;
     readonly List<byte[]> _pending = new();
     readonly DispatcherTimer _flush;
     readonly Dictionary<string, TaskCompletionSource<string>> _textRequests = new();
@@ -93,12 +94,24 @@ sealed partial class TerminalView : Border
     public event Action<TerminalView, string>? MenuRequested;
     public event Action<bool>? Found;
 
-    public TerminalView()
+    /// <param name="composition">Draws into WPF instead of a window of its own, so WPF content can overlap it
+    /// (floating windows); a little slower.</param>
+    public TerminalView(bool composition = false)
     {
-        Child = _web;
+        if (composition)
+        {
+            var c = new WebView2CompositionControl { DefaultBackgroundColor = System.Drawing.Color.Transparent };
+            _web = c; _webElement = c;
+        }
+        else
+        {
+            var w = new WebView2 { DefaultBackgroundColor = System.Drawing.Color.Transparent };
+            _web = w; _webElement = w;
+        }
+        Child = _webElement;
         _flush = new DispatcherTimer(DispatcherPriority.Background) { Interval = TimeSpan.FromMilliseconds(16) };
         _flush.Tick += (_, _) => Flush();
-        _web.GotFocus += (_, _) => Focused?.Invoke(this);
+        _webElement.GotFocus += (_, _) => Focused?.Invoke(this);
         Loaded += async (_, _) => await InitAsync();
     }
 
@@ -335,6 +348,6 @@ sealed partial class TerminalView : Border
         // A receive cut short: release the files and remove the partial ones.
         foreach (var id in _zwrites.Keys.ToList()) CloseWrite(id, false);
         Detach()?.Dispose();
-        _web.Dispose();
+        (_web as IDisposable)?.Dispose();
     }
 }

@@ -20,6 +20,7 @@
 <div id="suggest"></div>
 <script src="xterm.js"></script>
 <script src="addon-fit.js"></script>
+<script src="addon-webgl.js"></script>
 <script src="addon-search.js"></script>
 <script src="addon-web-links.js"></script>
 <script src="zmodem.js"></script>
@@ -34,6 +35,13 @@
   term.loadAddon(search);
   term.loadAddon(new WebLinksAddon.WebLinksAddon((e, uri) => post({ t: 'link', url: uri })));
   term.open(document.getElementById('term'));
+  // GPU rendering: the default DOM renderer redraws slowly when Claude Code repaints its screen.
+  // Falls back to the DOM renderer when WebGL is unavailable or its context is lost.
+  try {
+    const webgl = new WebglAddon.WebglAddon();
+    webgl.onContextLoss(() => webgl.dispose());
+    term.loadAddon(webgl);
+  } catch { }
 
   let copyOnSelect = false, rightClickPaste = true, suggestOn = true;
 
@@ -263,7 +271,10 @@
   });
 
   function doFit() { try { fit.fit(); } catch { } }
-  new ResizeObserver(doFit).observe(document.getElementById('term'));
+  // Debounced: while a splitter is dragged every intermediate size would make full-screen programs
+  // (Claude Code, vim) redraw, and each redraw leaves a copy behind in the scrollback
+  let fitTimer = 0;
+  new ResizeObserver(() => { clearTimeout(fitTimer); fitTimer = setTimeout(doFit, 120); }).observe(document.getElementById('term'));
   doFit();
   post({ t: 'ready', c: term.cols, r: term.rows });
 </script>

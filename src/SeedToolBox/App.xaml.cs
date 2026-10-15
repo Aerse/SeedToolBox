@@ -34,6 +34,11 @@ public partial class App : Application
     Action? _saveModuleHotkeys;
     readonly List<HotkeyBinding> _hotkeys = new();
     EventWaitHandle? _showEvent;
+    /// <summary>Show requests from a second instance that arrive before startup is done are held until then;
+    /// handled earlier they could re-enter the main window's first Show and attach its root visual twice.</summary>
+    bool _started, _showPending;
+    /// <summary>Set once the app is quitting, so windows close without asking.</summary>
+    public static bool Exiting { get; private set; }
     /// <summary>Set by <see cref="Restart"/>: the windows were already prepared, and after a restore nothing may be written.</summary>
     bool _restarting, _noSaveOnExit;
     /// <summary>Warnings collected during startup and shown in one balloon, since each balloon replaces the last.</summary>
@@ -249,6 +254,9 @@ public partial class App : Application
         toolbox.AddGroupPage("terminal", "开发调试", "", "终端 / SSH", () => Terminal.TerminalWindow.Launcher(OpenTerminal));
         main.AddQuickButton("", "终端 / SSH", OpenTerminal);
         _tray.AddCommand("terminal", "终端 / SSH", OpenTerminal);
+        toolbox.AddGroupPage("claude", "开发调试", "", "Claude 工作台", Terminal.ClaudeWorkbench.Launcher);
+        main.AddQuickButton("", "Claude 工作台", Terminal.ClaudeWorkbench.Open);
+        _tray.AddCommand("claude", "Claude 工作台", Terminal.ClaudeWorkbench.Open);
         toolbox.AddPage("aiPlugins", "\uEA86", "AI 插件和技能", () => new Ai.Automation.PluginsPage(ai));
         toolbox.AddTool("ai", "\uE99A", "AI 助手", () => ai.Open(), hide: false);
         toolbox.AddTool("aiScreenshot", "\uE722", "截图问 AI", () => { if (ai.Ready()) screen.AskAi(); });
@@ -336,8 +344,14 @@ public partial class App : Application
         if (!e.Args.Contains(AutoStart.BackgroundArg))
             _main.Show();
 
+        try { Terminal.ClaudeWorkbench.RestoreIfWanted(); }
+        catch (Exception ex) { Log.Error("Restoring the Claude workbench failed", ex); }
+
         if (_startupWarnings!.Count > 0) _tray.ShowMessage(string.Join("\n", _startupWarnings));
         _startupWarnings = null;
+
+        _started = true;
+        if (_showPending) _main.ShowAndActivate();
     }
 
     /// <summary>Shows a warning in the tray; during startup they are collected and shown together.</summary>
@@ -468,6 +482,7 @@ public partial class App : Application
     void Restart(string reason, bool save = true)
     {
         Log.Info(reason);
+        Exiting = true;
         _restarting = true;
         _noSaveOnExit = !save;
         if (save) { _notes?.Flush(); _main?.PrepareSave(); _toolbox?.PrepareExit(); }
@@ -501,7 +516,11 @@ public partial class App : Application
         new Thread(() =>
         {
             while (evt.WaitOne())
-                Dispatcher.BeginInvoke(new Action(() => _main?.ShowAndActivate()));
+                Dispatcher.BeginInvoke(new Action(() =>
+                {
+                    if (_started) _main?.ShowAndActivate();
+                    else _showPending = true;
+                }));
         }) { IsBackground = true }.Start();
     }
 
@@ -514,6 +533,7 @@ public partial class App : Application
 
     void ExitApp()
     {
+        Exiting = true;
         // Also done in OnExit, but by then the windows may be closed already
         _main?.PrepareExit();
         _toolbox?.PrepareExit();
@@ -525,6 +545,7 @@ public partial class App : Application
     {
         base.OnSessionEnding(e);
         if (e.Cancel || _noSaveOnExit) return;
+        Exiting = true;
         _main?.PrepareSave();
         _toolbox?.PrepareExit();
         _notes?.Flush();
