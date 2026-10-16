@@ -957,8 +957,12 @@ sealed class ClaudeWorkbench : Window
 
     void SaveNow()
     {
+        // Open Claude tabs are saved as parked too, so they come back even if the toolbox never closes cleanly (crash, power loss)
+        var open = _panes.Values.Where(p => !p.Tab.Shell && !_data.Parked.Contains(p.Tab)).Select(p => p.Tab).ToList();
+        _data.Parked.AddRange(open);
         try { ClaudeWorkbenchStore.Save(_data); }
         catch (Exception ex) when (ex is IOException or UnauthorizedAccessException) { Log.Error("Saving the Claude workbench failed", ex); }
+        finally { _data.Parked.RemoveAll(open.Contains); }
     }
 
     protected override void OnClosing(System.ComponentModel.CancelEventArgs e)
@@ -977,7 +981,7 @@ sealed class ClaudeWorkbench : Window
             }
         }
         // Claude tabs still open come back next time their folder is clicked
-        foreach (var p in _panes.Values) if (!p.Tab.Shell) _data.Parked.Add(p.Tab);
+        foreach (var p in _panes.Values) if (!p.Tab.Shell && !_data.Parked.Contains(p.Tab)) _data.Parked.Add(p.Tab);
         var r = WindowState == WindowState.Normal ? new Rect(Left, Top, Width, Height) : RestoreBounds;
         _data.WindowBounds = new[] { r.Left, r.Top, r.Width, r.Height };
         _data.WindowMaximized = WindowState == WindowState.Maximized;
