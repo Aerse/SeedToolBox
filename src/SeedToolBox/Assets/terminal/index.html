@@ -120,11 +120,11 @@
     if (e.ctrlKey && e.shiftKey) {
       const k = e.key.toLowerCase();
       if (k === 'c') { if (term.hasSelection()) post({ t: 'copy', s: term.getSelection() }); return false; }
-      if (k === 'v') { post({ t: 'paste' }); return false; }
+      if (k === 'v') { e.preventDefault(); post({ t: 'paste' }); return false; }
       if (k === 'f') { post({ t: 'hotkey', k: 'find' }); return false; }
     }
     if (e.ctrlKey && !e.shiftKey && e.key === 'c' && term.hasSelection()) { post({ t: 'copy', s: term.getSelection() }); term.clearSelection(); return false; }
-    if (e.ctrlKey && !e.shiftKey && e.key === 'v') { post({ t: 'paste' }); return false; }
+    if (e.ctrlKey && !e.shiftKey && e.key === 'v') { e.preventDefault(); post({ t: 'paste' }); return false; }
     if (e.ctrlKey && (e.key === '=' || e.key === '+' || e.key === '-' || e.key === '0')) { post({ t: 'hotkey', k: 'zoom' + (e.key === '-' ? '-' : e.key === '0' ? '0' : '+') }); return false; }
     return true;
   });
