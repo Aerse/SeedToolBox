@@ -135,7 +135,12 @@
     else post({ t: 'menu', s: term.getSelection() });
   });
   document.addEventListener('dragover', e => e.preventDefault());
-  document.addEventListener('drop', e => e.preventDefault());
+  // Files dragged in: the host gets their paths and types them, like a console window does
+  document.addEventListener('drop', e => {
+    e.preventDefault();
+    const files = e.dataTransfer && e.dataTransfer.files;
+    if (files && files.length && host.postMessageWithAdditionalObjects) host.postMessageWithAdditionalObjects({ t: 'drop' }, files);
+  });
 
   const b64 = s => Uint8Array.from(atob(s), c => c.charCodeAt(0));
   const tob64 = a => { let s = ''; for (let i = 0; i < a.length; i += 0x8000) s += String.fromCharCode.apply(null, a.subarray ? a.subarray(i, i + 0x8000) : a.slice(i, i + 0x8000)); return btoa(s); };

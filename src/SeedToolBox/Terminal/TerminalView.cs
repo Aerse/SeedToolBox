@@ -199,6 +199,12 @@ sealed partial class TerminalView : Border
             case "exec": CommandRun?.Invoke(this, (string?)m["s"] ?? ""); break;
             case "line": LineChanged?.Invoke(this, (string?)m["s"] ?? ""); break;
             case "found": Found?.Invoke((bool?)m["ok"] ?? false); break;
+            case "drop":
+                // Paths of the dropped files and folders, quoted when they have spaces, as a console window types them
+                var paths = e.AdditionalObjects?.OfType<CoreWebView2File>().Select(f => f.Path).Where(p => !string.IsNullOrEmpty(p))
+                    .Select(p => p.Contains(' ') ? "\"" + p + "\"" : p).ToList();
+                if (paths is { Count: > 0 }) { Paste(string.Join(" ", paths) + " "); FocusTerminal(); }
+                break;
             case "text":
                 var id = (string?)m["id"] ?? "";
                 if (_textRequests.TryGetValue(id, out var tcs)) { _textRequests.Remove(id); tcs.TrySetResult((string?)m["s"] ?? ""); }
